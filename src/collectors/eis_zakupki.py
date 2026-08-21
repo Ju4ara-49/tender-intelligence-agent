@@ -614,9 +614,14 @@ class EisZakupkiCollector(BaseCollector):
                 "Заказчик",
             )
 
-        customer = self._extract_customer_from_text(
-            text
+        customer = self._extract_customer_from_soup(
+            soup
         )
+
+        if not customer:
+            customer = self._extract_customer_from_text(
+                text
+            )
 
         price = self._extract_detail_price(
             text
@@ -638,9 +643,50 @@ class EisZakupkiCollector(BaseCollector):
             )
         )
 
-        region = self._extract_region_from_text(
-            text
+        region = ""
+
+        # ? ??????? ??? ?????? ????????? ?????:
+        # "??????" ? "?????????? ? ????????? ???????".
+        # ?????????? Unicode-escape, ????? ?? ???????? ?? ?????????
+        # ????????? ?????.
+
+        region_marker = "\u0420\u0435\u0433\u0438\u043e\u043d"
+        region_end_marker = (
+            "\u0418\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f "
+            "\u043e \u043f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0435 "
+            "\u0437\u0430\u043a\u0443\u043f\u043a\u0438"
         )
+
+        region_start = text.find(region_marker)
+
+        if region_start >= 0:
+            value_start = (
+                region_start
+                + len(region_marker)
+            )
+
+            region_end = text.find(
+                region_end_marker,
+                value_start,
+            )
+
+            if region_end >= 0:
+                region = self._clean_text(
+                    text[value_start:region_end]
+                )
+
+            if len(region) > 100:
+                region = ""
+
+        if not region:
+            region = self._extract_region_from_soup(
+                soup
+            )
+
+        if not region:
+            region = self._extract_region_from_text(
+                text
+            )
 
         procurement_method = (
             self._extract_procurement_method(
@@ -1059,9 +1105,237 @@ class EisZakupkiCollector(BaseCollector):
         return ""
 
     # ==================================================================
+    # CUSTOMER / REGION FROM DETAILS HTML
+    # ==================================================================
+
+    @staticmethod
+    def _extract_customer_from_soup(
+        soup: BeautifulSoup,
+    ) -> str:
+
+        # В карточке ЕИС фактический заказчик находится
+        # в td.tableBlock__col_header.
+        #
+        # Пример:
+        # ГОСУДАРСТВЕННОЕ БЮДЖЕТНОЕ УЧРЕЖДЕНИЕ РЕСПУБЛИКИ МАРИЙ ЭЛ
+        # "РЕСПУБЛИКАНСКАЯ КЛИНИЧЕСКАЯ БОЛЬНИЦА"
+        #
+        # Не используем regex по всей странице:
+        # в шапке ЕИС встречается много служебных организаций.
+
+        legal_prefixes = (
+            "ГОСУДАРСТВЕННОЕ ",
+            "МУНИЦИПАЛЬНОЕ ",
+            "ФЕДЕРАЛЬНОЕ ",
+            "БЮДЖЕТНОЕ ",
+            "КАЗЕННОЕ ",
+            "АВТОНОМНОЕ ",
+            "ОБЛАСТНОЕ ",
+            "КРАЕВОЕ ",
+            "РЕСПУБЛИКАНСКОЕ ",
+            "МУНИЦИПАЛЬНОЕ ",
+        )
+
+        seen = set()
+
+        selectors = [
+            "td.tableBlock__col_header",
+            ".tableBlock__col_header",
+        ]
+
+        for selector in selectors:
+            for element in soup.select(selector):
+                value = EisZakupkiCollector._clean_text(
+                    element.get_text(
+                        " ",
+                        strip=True,
+                    )
+                )
+
+                if not value:
+                    continue
+
+                if value in seen:
+                    continue
+
+                seen.add(value)
+
+                if len(value) < 10 or len(value) > 1000:
+                    continue
+
+                upper = value.upper()
+
+                if any(
+                    upper.startswith(prefix)
+                    for prefix in legal_prefixes
+                ):
+                    return value[:1000]
+
+        return ""
+    @staticmethod
+    def _extract_region_from_soup(
+        soup: BeautifulSoup,
+    ) -> str:
+
+        text = EisZakupkiCollector._clean_text(
+            soup.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        if not text:
+            return ""
+
+        # ? ?????????? ???????? ??? ???? ?????? ???????????:
+        #
+        # ?????? ????? ?? ???? ?????????? ? ????????? ???????
+        #
+        # ????? ???????? ?????? ????? ????? ????? ?????????.
+
+        marker_start = "??????"
+        marker_end = "?????????? ? ????????? ???????"
+
+        search_position = 0
+
+        while True:
+            start_position = text.find(
+                marker_start,
+                search_position,
+            )
+
+            if start_position < 0:
+                break
+
+            value_start = (
+                start_position
+                + len(marker_start)
+            )
+
+            end_position = text.find(
+                marker_end,
+                value_start,
+            )
+
+            if end_position < 0:
+                break
+
+            value = text[
+                value_start:end_position
+            ]
+
+            value = EisZakupkiCollector._clean_text(
+                value
+            )
+
+            # ?????? ?????? ???? ???????? ?????????,
+            # ? ?? ??????? ??? ?????? ?????? ????????.
+            if value:
+                if len(value) <= 100:
+                    if "????? ????????" not in value:
+                        if "???????????" not in value:
+                            return value[:200]
+
+            search_position = (
+                start_position
+                + len(marker_start)
+            )
+
+        return ""
+
+
+    # ==================================================================
     # CUSTOMER
     # ==================================================================
 
+    @staticmethod
+    def _extract_customer_from_soup(
+        soup: BeautifulSoup,
+    ) -> str:
+
+        # В актуальной карточке ЕИС заказчик присутствует
+        # в td.tableBlock__col_header.
+        #
+        # Пример:
+        # ГОСУДАРСТВЕННОЕ БЮДЖЕТНОЕ УЧРЕЖДЕНИЕ ...
+        #
+        # Берём только организации, а не служебные заголовки
+        # таблицы характеристик.
+
+        organization_prefixes = (
+            "ГОСУДАРСТВЕННОЕ ",
+            "МУНИЦИПАЛЬНОЕ ",
+            "ФЕДЕРАЛЬНОЕ ",
+            "БЮДЖЕТНОЕ ",
+            "АВТОНОМНОЕ ",
+            "КАЗЕННОЕ ",
+            "ОБЛАСТНОЕ ",
+            "КРАЕВОЕ ",
+            "РЕСПУБЛИКАНСКОЕ ",
+            "МУНИЦИПАЛЬНОЕ ",
+            "ООО ",
+            "АО ",
+            "ПАО ",
+            "ОАО ",
+            "ЗАО ",
+            "ИП ",
+        )
+
+        selectors = [
+            "td.tableBlock__col_header",
+            ".tableBlock__col_header",
+        ]
+
+        seen = set()
+
+        for selector in selectors:
+            for element in soup.select(selector):
+                value = EisZakupkiCollector._clean_text(
+                    element.get_text(
+                        " ",
+                        strip=True,
+                    )
+                )
+
+                if not value:
+                    continue
+
+                if value in seen:
+                    continue
+
+                seen.add(value)
+
+                if len(value) < 10 or len(value) > 1000:
+                    continue
+
+                upper_value = value.upper()
+
+                if any(
+                    upper_value.startswith(prefix)
+                    for prefix in organization_prefixes
+                ):
+                    # Исключаем очевидные заголовки таблиц.
+                    if (
+                        "НАИМЕНОВАНИЕ ХАРАКТЕРИСТИКИ"
+                        in upper_value
+                    ):
+                        continue
+
+                    if (
+                        "ЗНАЧЕНИЕ ХАРАКТЕРИСТИКИ"
+                        in upper_value
+                    ):
+                        continue
+
+                    if (
+                        "ЕДИНИЦА ИЗМЕРЕНИЯ"
+                        in upper_value
+                    ):
+                        continue
+
+                    return value[:1000]
+
+        return ""
     @staticmethod
     def _extract_customer(
         block: Any,
@@ -1910,4 +2184,7 @@ class EisZakupkiCollector(BaseCollector):
         )
 
         return value.strip()
+
+
+
 
