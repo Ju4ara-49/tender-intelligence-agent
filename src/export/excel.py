@@ -1,4 +1,4 @@
-﻿"""Экспорт результатов тендерного поиска в Excel."""
+"""Экспорт результатов тендерного поиска в Excel."""
 
 from __future__ import annotations
 
@@ -86,8 +86,8 @@ def export_tenders_to_excel(
         "НМЦК",
         "Валюта",
         "Дата публикации",
-        "Дедлайн подачи",
-        "Дней до дедлайна",
+        "Дата окончания подачи заявок",
+        "Осталось дней до подачи",
         "Закон",
         "Способ закупки",
         "Статус",
@@ -98,7 +98,7 @@ def export_tenders_to_excel(
         "Бюджет",
         "Комментарий по срокам",
         "Ссылка",
-        "Дата анализа",
+
     ]
 
     ws.append(headers)
@@ -131,6 +131,32 @@ def export_tenders_to_excel(
             "",
         )
 
+        platform = row["platform"] or ""
+
+        platform_names = {
+            "eis": "ЕИС",
+            "b2b_center": "B2B-Center",
+            "rts_tender": "РТС-тендер",
+            "unipro": "Unipro",
+            "tmk": "ТМК",
+        }
+
+        platform = platform_names.get(
+            platform,
+            platform,
+        )
+
+        recommendation_names = {
+            "participate": "Участвовать",
+            "review": "Рассмотреть",
+            "skip": "Не участвовать",
+        }
+
+        recommendation = recommendation_names.get(
+            row["recommendation"] or "",
+            row["recommendation"] or "",
+        )
+
         status = raw_data.get(
             "status",
             "",
@@ -138,13 +164,14 @@ def export_tenders_to_excel(
 
         deadline = _parse_datetime(row["deadline"])
         published_at = _parse_datetime(row["published_at"])
-        analyzed_at = _parse_datetime(row["analyzed_at"])
 
         days_left = ""
 
         if deadline is not None:
-            delta = deadline - now
-            days_left = max(0, delta.days)
+            days_left = max(
+                0,
+                (deadline.date() - now.date()).days,
+            )
 
         risks = ""
 
@@ -168,7 +195,7 @@ def export_tenders_to_excel(
             [
                 search_number if search_number is not None else "",
                 _excel_datetime(now),
-                row["platform"] or "",
+                platform,
                 row["external_id"] or "",
                 row["title"] or "",
                 row["customer"] or "",
@@ -182,13 +209,12 @@ def export_tenders_to_excel(
                 procurement_method,
                 status,
                 row["relevance_score"],
-                row["recommendation"] or "",
+                recommendation,
                 row["summary"] or "",
                 risks,
                 row["budget_note"] or "",
                 row["deadline_note"] or "",
                 row["url"] or "",
-                _excel_datetime(analyzed_at),
             ]
         )
 
@@ -198,27 +224,28 @@ def export_tenders_to_excel(
     ws.freeze_panes = "A2"
 
     widths = {
-        1: 14,
-        2: 24,
-        3: 55,
-        4: 35,
-        5: 25,
-        6: 16,
-        7: 10,
-        8: 18,
-        9: 18,
-        10: 16,
-        11: 12,
-        12: 30,
-        13: 20,
-        14: 10,
-        15: 16,
-        16: 60,
-        17: 45,
-        18: 35,
-        19: 35,
-        20: 55,
-        21: 18,
+        1: 6,    # № поиска
+        2: 12,   # Дата поиска
+        3: 11,   # Площадка
+        4: 22,   # Номер закупки
+        5: 55,   # Наименование
+        6: 32,   # Заказчик
+        7: 13,   # Регион
+        8: 18,   # НМЦК
+        9: 5,    # Валюта
+        10: 14,  # Дата публикации
+        11: 24,  # Дата окончания подачи заявок
+        12: 20,  # Осталось дней до подачи
+        13: 8,   # Закон
+        14: 30,  # Способ закупки
+        15: 18,  # Этап закупки
+        16: 10,  # AI score
+        17: 18,  # Рекомендация
+        18: 45,  # Краткое резюме
+        19: 35,  # Риски
+        20: 35,  # Бюджет
+        21: 35,  # Комментарий по срокам
+        22: 55,  # Ссылка
     }
 
     for column, width in widths.items():
@@ -232,7 +259,8 @@ def export_tenders_to_excel(
     ):
         for cell in row_cells:
             cell.alignment = Alignment(
-                vertical="top",
+                horizontal="center",
+                vertical="center",
                 wrap_text=True,
             )
 
@@ -240,14 +268,13 @@ def export_tenders_to_excel(
     # B  = дата поиска
     # H  = НМЦК (число)
     # J  = дата публикации
-    # K  = дедлайн подачи
-    # L  = дней до дедлайна
+    # K  = дата окончания подачи заявок
+    # L  = осталось дней до подачи
     # P  = AI score
-    # W  = дата анализа
 
-    for column in ("B", "J", "K", "W"):
+    for column in ("B", "J", "K"):
         for cell in ws[column][1:]:
-            cell.number_format = "dd.mm.yyyy hh:mm"
+            cell.number_format = "dd.mm.yyyy"
 
     for cell in ws["H"][1:]:
         cell.number_format = '#,##0.00 "₽"'
@@ -347,6 +374,7 @@ def _excel_datetime(value: datetime | None):
         return None
 
     return value.replace(tzinfo=None)
+
 
 
 
