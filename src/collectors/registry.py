@@ -1,0 +1,61 @@
+﻿"""Реестр сборщиков — точка регистрации новых площадок."""
+
+from __future__ import annotations
+
+from typing import Type
+
+from src.collectors.base import BaseCollector
+from src.collectors.b2b_center import B2BCenterCollector
+from src.collectors.eis_zakupki import EisZakupkiCollector
+
+
+# Чтобы добавить новую площадку —
+# импортируйте класс и добавьте его в ALL_COLLECTORS.
+ALL_COLLECTORS: list[Type[BaseCollector]] = [
+    EisZakupkiCollector,
+    B2BCenterCollector,
+]
+
+
+def get_enabled_collectors(
+    config: dict,
+    enabled_platforms: list[str] | None = None,
+) -> list[BaseCollector]:
+    """
+    Создать экземпляры включённых сборщиков.
+
+    enabled_platforms:
+        список площадок, выбранных пользователем в Telegram.
+
+        Если None — используются все площадки,
+        включённые в config.yaml.
+    """
+
+    enabled: list[BaseCollector] = []
+
+    selected = None
+
+    if enabled_platforms is not None:
+        selected = {
+            str(platform).strip()
+            for platform in enabled_platforms
+            if str(platform).strip()
+        }
+
+    for collector_cls in ALL_COLLECTORS:
+        instance = collector_cls()
+
+        if not instance.is_enabled(config):
+            continue
+
+        if selected is not None:
+            if instance.platform not in selected:
+                continue
+
+        platform_config = instance.get_platform_config(config)
+
+        enabled.append(
+            collector_cls(platform_config)
+        )
+
+    return enabled

@@ -1,0 +1,75 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Secrets and local config
+.env
+config/config.yaml
+config/keywords.yaml
+
+# Runtime data
+data/*.db
+data/*.sqlite
+data/*.db-*
+data/search_counter.txt
+logs/*.log
+output/*
+!output/.gitkeep
+
+# Debug / temporary HTML
+*.html
+!tests/fixtures/*.html
+
+# Backups / temporary files
+*.bak
+*.backup
+*.before_*
+*_backup*
+*.tmp
+tmp_*
+debug_*
+check_*
+analyzer.py
+run_error.txt
+run_once.log
+
+# Accidental temporary files
+/5
+/50
+/None
+/Tender
+/bool
+/datetime
+/float
+/str
+/type
+/src/50
+/src/TenderAnalysis
+/src/bool
+/src/dict
+/src/type
+/src/str
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Project backup files
+*.bak*
+*.backup*
+*.before_*
+*_before_*
+*_backup*
