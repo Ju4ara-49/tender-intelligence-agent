@@ -4,7 +4,6 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from src.ai.analyzer import TenderAnalyzer
 from src.collectors.registry import get_enabled_collectors
@@ -90,7 +89,8 @@ class Orchestrator:
         """
         if value is None or value.tzinfo is not None:
             return value
-        return value.replace(tzinfo=ZoneInfo("Europe/Moscow")).astimezone(timezone.utc)
+        moscow_offset = timezone(timedelta(hours=3), name="MSK")
+        return value.replace(tzinfo=moscow_offset).astimezone(timezone.utc)
 
     def _normalize_tender_datetimes(self, tender: Tender) -> Tender:
         tender.deadline = self._normalize_datetime(tender.deadline)
