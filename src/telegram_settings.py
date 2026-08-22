@@ -59,9 +59,7 @@ class CriteriaStore:
                 )
                 """
             )
-            old_exists = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tender_settings'"
-            ).fetchone()
+            old_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tender_settings'").fetchone()
             if old_exists:
                 old_row = conn.execute("SELECT * FROM tender_settings WHERE id = 1").fetchone()
                 if old_row is not None:
@@ -69,21 +67,17 @@ class CriteriaStore:
                         f"""
                         INSERT OR IGNORE INTO {self.USERS_TABLE} (
                             user_id, min_price, max_price, advance_required, min_advance_percent,
-                            max_postpayment_days, min_submission_days,
-                            min_application_security_percent, max_application_security_percent,
-                            min_contract_security_percent, max_contract_security_percent,
-                            min_ai_score, keywords, enabled_platforms, updated_at
+                            max_postpayment_days, min_submission_days, min_application_security_percent,
+                            max_application_security_percent, min_contract_security_percent,
+                            max_contract_security_percent, min_ai_score, keywords, enabled_platforms, updated_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            self.DEFAULT_USER_ID, old_row["min_price"], old_row["max_price"],
-                            old_row["advance_required"], old_row["min_advance_percent"],
-                            old_row["max_postpayment_days"], old_row["min_submission_days"],
-                            old_row["min_application_security_percent"],
-                            old_row["max_application_security_percent"],
-                            old_row["min_contract_security_percent"],
-                            old_row["max_contract_security_percent"], old_row["min_ai_score"],
-                            old_row["keywords"], json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
+                            self.DEFAULT_USER_ID, old_row["min_price"], old_row["max_price"], old_row["advance_required"],
+                            old_row["min_advance_percent"], old_row["max_postpayment_days"], old_row["min_submission_days"],
+                            old_row["min_application_security_percent"], old_row["max_application_security_percent"],
+                            old_row["min_contract_security_percent"], old_row["max_contract_security_percent"],
+                            old_row["min_ai_score"], old_row["keywords"], json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
                             old_row["updated_at"],
                         ),
                     )
@@ -111,12 +105,7 @@ class CriteriaStore:
             source = conn.execute(f"SELECT * FROM {self.USERS_TABLE} WHERE user_id = ?", (self.DEFAULT_USER_ID,)).fetchone()
             if source is None:
                 conn.execute(
-                    f"""
-                    INSERT INTO {self.USERS_TABLE} (
-                        user_id, min_submission_days, max_application_security_percent,
-                        min_ai_score, enabled_platforms, updated_at
-                    ) VALUES (?, 7, 5, 70, ?, ?)
-                    """,
+                    f"INSERT INTO {self.USERS_TABLE} (user_id, min_submission_days, max_application_security_percent, min_ai_score, enabled_platforms, updated_at) VALUES (?, 7, 5, 70, ?, ?)",
                     (user_id, json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
                 )
             else:
@@ -124,18 +113,17 @@ class CriteriaStore:
                     f"""
                     INSERT INTO {self.USERS_TABLE} (
                         user_id, min_price, max_price, advance_required, min_advance_percent,
-                        max_postpayment_days, min_submission_days,
-                        min_application_security_percent, max_application_security_percent,
-                        min_contract_security_percent, max_contract_security_percent,
-                        min_ai_score, keywords, enabled_platforms, updated_at
+                        max_postpayment_days, min_submission_days, min_application_security_percent,
+                        max_application_security_percent, min_contract_security_percent,
+                        max_contract_security_percent, min_ai_score, keywords, enabled_platforms, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        user_id, source["min_price"], source["max_price"], source["advance_required"],
-                        source["min_advance_percent"], source["max_postpayment_days"], source["min_submission_days"],
-                        source["min_application_security_percent"], source["max_application_security_percent"],
-                        source["min_contract_security_percent"], source["max_contract_security_percent"],
-                        source["min_ai_score"], source["keywords"], source["enabled_platforms"] or json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
+                        user_id, source["min_price"], source["max_price"], source["advance_required"], source["min_advance_percent"],
+                        source["max_postpayment_days"], source["min_submission_days"], source["min_application_security_percent"],
+                        source["max_application_security_percent"], source["min_contract_security_percent"],
+                        source["max_contract_security_percent"], source["min_ai_score"], source["keywords"],
+                        source["enabled_platforms"] if source["enabled_platforms"] is not None else json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
@@ -154,19 +142,13 @@ class CriteriaStore:
         return TenderCriteria(
             min_price=row["min_price"], max_price=row["max_price"], advance_required=bool(row["advance_required"]),
             min_advance_percent=float(row["min_advance_percent"]), max_postpayment_days=row["max_postpayment_days"],
-            min_submission_days=int(row["min_submission_days"]),
-            min_application_security_percent=float(row["min_application_security_percent"]),
-            max_application_security_percent=row["max_application_security_percent"],
-            min_contract_security_percent=float(row["min_contract_security_percent"]),
+            min_submission_days=int(row["min_submission_days"]), min_application_security_percent=float(row["min_application_security_percent"]),
+            max_application_security_percent=row["max_application_security_percent"], min_contract_security_percent=float(row["min_contract_security_percent"]),
             max_contract_security_percent=row["max_contract_security_percent"], min_ai_score=int(row["min_ai_score"]),
         )
 
     def update(self, **values) -> None:
-        allowed = {
-            "min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days",
-            "min_submission_days", "min_application_security_percent", "max_application_security_percent",
-            "min_contract_security_percent", "max_contract_security_percent", "min_ai_score",
-        }
+        allowed = {"min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days", "min_submission_days", "min_application_security_percent", "max_application_security_percent", "min_contract_security_percent", "max_contract_security_percent", "min_ai_score"}
         values = {key: value for key, value in values.items() if key in allowed}
         if not values:
             return
@@ -198,13 +180,9 @@ class CriteriaStore:
             if value and value.lower() not in seen:
                 clean.append(value); seen.add(value.lower())
         with self.db._connect() as conn:
-            conn.execute(
-                f"UPDATE {self.USERS_TABLE} SET keywords = ?, updated_at = ? WHERE user_id = ?",
-                (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
-            )
+            conn.execute(f"UPDATE {self.USERS_TABLE} SET keywords = ?, updated_at = ? WHERE user_id = ?", (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id))
 
     def get_enabled_platforms(self) -> list[str]:
-        """Вернуть ровно выбранный пользователем набор, включая пустой набор."""
         user_id = self._user_id_and_ensure()
         with self.db._connect() as conn:
             row = conn.execute(f"SELECT enabled_platforms FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)).fetchone()
@@ -213,7 +191,22 @@ class CriteriaStore:
         try:
             data = json.loads(row["enabled_platforms"])
             if isinstance(data, list):
-                return [str(x).strip() for x in data if str(x).strip() in SUPPORTED_PLATFORMS]
+                clean = []
+                changed = False
+                for item in data:
+                    value = str(item).strip()
+                    if value == "unipro":
+                        value = "fabrikant"
+                        changed = True
+                    if value in SUPPORTED_PLATFORMS and value not in clean:
+                        clean.append(value)
+                if changed:
+                    with self.db._connect() as write_conn:
+                        write_conn.execute(
+                            f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?",
+                            (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
+                        )
+                return clean
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
         return list(SUPPORTED_PLATFORMS)
@@ -222,7 +215,4 @@ class CriteriaStore:
         user_id = self._user_id_and_ensure()
         clean = [x for x in dict.fromkeys(str(x).strip() for x in platforms) if x in SUPPORTED_PLATFORMS]
         with self.db._connect() as conn:
-            conn.execute(
-                f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?",
-                (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
-            )
+            conn.execute(f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?", (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id))
