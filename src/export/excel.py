@@ -1,4 +1,4 @@
-"""Экспорт результатов тендерного поиска в Excel."""
+﻿"""Экспорт результатов тендерного поиска в Excel."""
 
 from __future__ import annotations
 
@@ -47,9 +47,7 @@ def export_tenders_to_excel(
                     a.relevance_score,
                     a.summary,
                     a.recommendation,
-                    a.risks,
-                    a.budget_note,
-                    a.deadline_note,
+                    a.risks,                    a.deadline_note,
                     a.is_stub,
                     a.analyzed_at
 
@@ -95,7 +93,7 @@ def export_tenders_to_excel(
         "Рекомендация",
         "Краткое резюме",
         "Риски",
-        "Бюджет",
+        "Цена контракта",
         "Комментарий по срокам",
         "Ссылка",
 
@@ -211,9 +209,7 @@ def export_tenders_to_excel(
                 row["relevance_score"],
                 recommendation,
                 row["summary"] or "",
-                risks,
-                row["budget_note"] or "",
-                row["deadline_note"] or "",
+                risks,                row["deadline_note"] or "",
                 row["url"] or "",
             ]
         )
@@ -243,7 +239,7 @@ def export_tenders_to_excel(
         17: 18,  # Рекомендация
         18: 45,  # Краткое резюме
         19: 35,  # Риски
-        20: 35,  # Бюджет
+        20: 35,  # Цена контракта
         21: 35,  # Комментарий по срокам
         22: 55,  # Ссылка
     }
@@ -374,6 +370,9 @@ def _excel_datetime(value: datetime | None):
         return None
 
     return value.replace(tzinfo=None)
+
+
+
 
 
 

@@ -53,6 +53,10 @@ class B2BCenterCollector(BaseCollector):
         # Ключ: external_id, значение: настоящий URL процедуры.
         self._tender_urls: dict[str, str] = {}
 
+        # Кэш названий процедур из результатов поиска.
+        # Нужен как fallback, если страница деталей недоступна.
+        self._tender_titles: dict[str, str] = {}
+
         self.session.headers.update(
             {
                 "User-Agent": (
@@ -109,10 +113,18 @@ class B2BCenterCollector(BaseCollector):
                     if tender.external_id:
                         # Сохраняем настоящий URL для последующей
                         # загрузки деталей по external_id.
+                        external_id = str(
+                            tender.external_id
+                        )
+
                         self._tender_urls[
-                            str(tender.external_id)
+                            external_id
                         ] = tender.url
 
+                        if tender.title:
+                            self._tender_titles[
+                                external_id
+                            ] = tender.title
                         results[tender.unique_key] = tender
 
             except Exception:
@@ -346,6 +358,14 @@ class B2BCenterCollector(BaseCollector):
                         strip=True,
                     )
                 )
+            # Регион сначала определяем из адреса поставки.
+            region = ""
+
+            if delivery_address:
+                region = self._extract_region(
+                    delivery_address
+                )
+
 
             # ==========================================================
             # FINAL FALLBACK FOR B2B-CENTER OLD /market/ TEMPLATE
@@ -401,7 +421,8 @@ class B2BCenterCollector(BaseCollector):
                 self._extract_procurement_method(text)
             )
 
-            region = self._extract_region(text)
+            if not region:
+                region = self._extract_region(text)
             commercial = self._extract_commercial_conditions(text)
             status = self._extract_status(text)
 
@@ -442,6 +463,45 @@ class B2BCenterCollector(BaseCollector):
                 "B2B-Center: ошибка получения деталей %s",
                 external_id,
             )
+
+            fallback_title = self._tender_titles.get(
+                str(external_id),
+                "",
+            )
+
+            if fallback_title:
+                logger.warning(
+                    "B2B-Center: используем название из поиска для %s: %s",
+                    external_id,
+                    fallback_title,
+                )
+
+                return Tender(
+                    platform=self.platform,
+                    external_id=external_id,
+                    title=fallback_title[:1000],
+                    url=url,
+                    description="",
+                    price=None,
+                    currency="RUB",
+                    published_at=None,
+                    deadline=None,
+                    end_date=None,
+                    customer="",
+                    region="",
+                    advance_required=False,
+                    advance_percent=None,
+                    postpayment_days=None,
+                    application_security_percent=None,
+                    contract_security_percent=None,
+                    raw_data={
+                        "details_loaded": False,
+                        "details_error": True,
+                        "source_url": url,
+                        "search_title": fallback_title,
+                    },
+                )
+
             return None
 
     # ==============================================================
@@ -1286,12 +1346,4 @@ class B2BCenterCollector(BaseCollector):
         )
 
         return value.strip()
-
-
-
-
-
-
-
-
 

@@ -195,3 +195,45 @@ PermissionError: [WinError 32] ??? ??????? logs/agent.log ?? ??????? ??????? Orc
 ## 2026-08-22 ? Decision: next verification is Orchestrator integration
 ????????? ???????? ?????? ??????????? ??????????? B2B-Center ?????? ??????? ????? Orchestrator ?? unified Tender, filtering, AI ? Excel.
 ?? ???? ???????? B2B-Center collector ?? ????????.
+
+---
+
+## 2026-08-22 — Decision: TB4 checkpoint
+
+Контрольная точка ТБ4 сохранена.
+
+### Excel decision
+
+Колонка коммерческой стоимости в итоговом Excel называется:
+
+`Цена контракта`
+
+Источник значения:
+
+`t.price` / `row["price"]`
+
+`budget_note` не используется как отдельная колонка Excel.
+
+### B2B-Center decision
+
+Текущая архитектура B2B-Center:
+
+Search -> external_id/title/url cache -> Detail -> fallback title/region -> unified Tender.
+
+Title из Search сохраняется в `_tender_titles` и может использоваться как fallback.
+
+Регион сначала извлекается из `delivery_address`, затем из общего текста страницы.
+
+### Orchestrator decision
+
+Не изменять установленную связку:
+
+Telegram -> CriteriaStore -> keywords/platforms/criteria -> collectors -> unified Tender -> filtering -> AI -> Excel/Telegram.
+
+### Checkpoint decision
+
+Текущие рабочие изменения сохранить в Git как отдельную контрольную точку ТБ4.
+
+Не добавлять `logs/agent.log.1`.
+
+Следующая задача — полный сквозной прогон после текущих изменений B2B-Center.

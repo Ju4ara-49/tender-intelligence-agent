@@ -323,3 +323,60 @@ details_failed=0.
 ew=0, ??????? ?? ????????? ???????:
 B2B-Center -> new -> AI -> Telegram/Excel.
 ?? ???? ???????? src/collectors/b2b_center.py ?? ????????.
+
+---
+
+## 2026-08-22 — TB4 checkpoint
+
+Зафиксирована контрольная точка после исправления Excel и текущей доработки B2B-Center.
+
+### Excel
+
+`src/export/excel.py` исправлен:
+
+- `Бюджет` -> `Цена контракта`;
+- значение берётся из `row["price"]`;
+- `budget_note` больше не выводится отдельной колонкой;
+- W/X/Y удалены;
+- текущий Excel создаётся на основании `current_run_tender_ids`.
+
+Создан:
+
+`output/search_025_2026-08-22_16-40-55.xlsx`
+
+### B2B-Center
+
+В `src/collectors/b2b_center.py` добавлены:
+
+- кэш title `_tender_titles`;
+- сохранение title из Search;
+- fallback title;
+- нормализация external_id;
+- определение региона из `delivery_address`;
+- fallback определения региона из общего текста.
+
+Текущий diff сохранён как рабочее изменение.
+
+Полный сквозной прогон после этой последней версии B2B-Center ещё не выполнен.
+
+### Orchestrator
+
+Сохранены:
+
+- постоянная нумерация поисков;
+- текущий номер Search №025;
+- Telegram CriteriaStore;
+- выбор ключевых слов из Telegram;
+- выбор площадок из Telegram;
+- применение критериев;
+- формирование Excel текущего прогона.
+
+### Следующая рабочая точка
+
+Полный прогон Tender Intelligence Agent с проверкой B2B-Center title/region и результирующего Excel.
+
+### Git
+
+В контрольную точку должны войти только рабочие изменения и PROJECT-файлы.
+
+`logs/agent.log.1` в Git не добавлять.
