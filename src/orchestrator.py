@@ -4,6 +4,7 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.ai.analyzer import TenderAnalyzer
 from src.collectors.registry import get_enabled_collectors
@@ -77,10 +78,29 @@ class Orchestrator:
     def clear_stop_request(self) -> None:
         self._stop_requested = False
 
+    @staticmethod
+    def _normalize_datetime(value: datetime | None) -> datetime | None:
+        """Normalize naive collector timestamps to UTC.
+
+        Public procurement portals commonly display dates in Moscow local
+        time but omit the timezone. The rest of the pipeline compares dates
+        with timezone-aware UTC values, so normalize such timestamps here at
+        the unified-Tender boundary instead of letting one collector break
+        the whole search cycle.
+        """
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=ZoneInfo("Europe/Moscow")).astimezone(timezone.utc)
+
+    def _normalize_tender_datetimes(self, tender: Tender) -> Tender:
+        tender.deadline = self._normalize_datetime(tender.deadline)
+        tender.published_at = self._normalize_datetime(tender.published_at)
+        return tender
+
     def _enrich_tender(self, collector, tender: Tender) -> Tender:
         get_details = getattr(collector, "get_details", None)
         if not callable(get_details) or not tender.external_id:
-            return tender
+            return self._normalize_tender_datetimes(tender)
         try:
             logger.info("%s: загружаем детали тендера %s", getattr(collector, "platform", "unknown"), tender.external_id)
             detailed = get_details(tender.external_id)
@@ -100,6 +120,7 @@ class Orchestrator:
                         if detailed.raw_data.get(key): tender.raw_data[key] = detailed.raw_data[key]
                     tender.raw_data["details"] = detailed.raw_data
                 tender.raw_data["details_loaded"] = True
+            tender = self._normalize_tender_datetimes(tender)
             logger.info("%s: детали загружены %s | price=%s | customer=%s | deadline=%s", getattr(collector, "platform", "unknown"), tender.external_id, tender.price, bool(tender.customer), tender.deadline)
         except Exception:
             logger.exception("%s: ошибка загрузки деталей %s", getattr(collector, "platform", "unknown"), tender.external_id)
