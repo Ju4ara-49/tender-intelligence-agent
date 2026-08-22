@@ -8,27 +8,21 @@ from datetime import datetime, timezone
 from src.storage.database import TenderDatabase
 
 
-SUPPORTED_PLATFORMS = ["eis", "b2b_center", "unipro", "rts_tender", "tmk", "rosatom"]
+SUPPORTED_PLATFORMS = ["eis", "b2b_center", "fabrikant", "rts_tender", "tmk", "rosatom"]
 
 
 @dataclass
 class TenderCriteria:
     min_price: float | None = None
     max_price: float | None = None
-
     advance_required: bool = False
     min_advance_percent: float = 0.0
-
     max_postpayment_days: int | None = None
-
     min_submission_days: int = 7
-
     min_application_security_percent: float = 0.0
     max_application_security_percent: float | None = 5.0
-
     min_contract_security_percent: float = 0.0
     max_contract_security_percent: float | None = None
-
     min_ai_score: int = 70
 
 
@@ -65,42 +59,31 @@ class CriteriaStore:
                 )
                 """
             )
-
             old_exists = conn.execute(
-                """
-                SELECT 1 FROM sqlite_master
-                WHERE type = 'table' AND name = 'tender_settings'
-                """
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tender_settings'"
             ).fetchone()
-
             if old_exists:
                 old_row = conn.execute("SELECT * FROM tender_settings WHERE id = 1").fetchone()
                 if old_row is not None:
                     conn.execute(
                         f"""
                         INSERT OR IGNORE INTO {self.USERS_TABLE} (
-                            user_id, min_price, max_price,
-                            advance_required, min_advance_percent,
+                            user_id, min_price, max_price, advance_required, min_advance_percent,
                             max_postpayment_days, min_submission_days,
-                            min_application_security_percent,
-                            max_application_security_percent,
-                            min_contract_security_percent,
-                            max_contract_security_percent,
-                            min_ai_score, keywords, enabled_platforms,
-                            updated_at
+                            min_application_security_percent, max_application_security_percent,
+                            min_contract_security_percent, max_contract_security_percent,
+                            min_ai_score, keywords, enabled_platforms, updated_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            self.DEFAULT_USER_ID,
-                            old_row["min_price"], old_row["max_price"],
+                            self.DEFAULT_USER_ID, old_row["min_price"], old_row["max_price"],
                             old_row["advance_required"], old_row["min_advance_percent"],
                             old_row["max_postpayment_days"], old_row["min_submission_days"],
                             old_row["min_application_security_percent"],
                             old_row["max_application_security_percent"],
                             old_row["min_contract_security_percent"],
-                            old_row["max_contract_security_percent"],
-                            old_row["min_ai_score"], old_row["keywords"],
-                            json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
+                            old_row["max_contract_security_percent"], old_row["min_ai_score"],
+                            old_row["keywords"], json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
                             old_row["updated_at"],
                         ),
                     )
@@ -122,22 +105,15 @@ class CriteriaStore:
 
     def _ensure_user(self, user_id: str) -> None:
         with self.db._connect() as conn:
-            row = conn.execute(
-                f"SELECT 1 FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)
-            ).fetchone()
+            row = conn.execute(f"SELECT 1 FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)).fetchone()
             if row is not None:
                 return
-
-            source = conn.execute(
-                f"SELECT * FROM {self.USERS_TABLE} WHERE user_id = ?", (self.DEFAULT_USER_ID,)
-            ).fetchone()
-
+            source = conn.execute(f"SELECT * FROM {self.USERS_TABLE} WHERE user_id = ?", (self.DEFAULT_USER_ID,)).fetchone()
             if source is None:
                 conn.execute(
                     f"""
                     INSERT INTO {self.USERS_TABLE} (
-                        user_id, min_submission_days,
-                        max_application_security_percent,
+                        user_id, min_submission_days, max_application_security_percent,
                         min_ai_score, enabled_platforms, updated_at
                     ) VALUES (?, 7, 5, 70, ?, ?)
                     """,
@@ -147,26 +123,19 @@ class CriteriaStore:
                 conn.execute(
                     f"""
                     INSERT INTO {self.USERS_TABLE} (
-                        user_id, min_price, max_price,
-                        advance_required, min_advance_percent,
+                        user_id, min_price, max_price, advance_required, min_advance_percent,
                         max_postpayment_days, min_submission_days,
-                        min_application_security_percent,
-                        max_application_security_percent,
-                        min_contract_security_percent,
-                        max_contract_security_percent,
-                        min_ai_score, keywords, enabled_platforms,
-                        updated_at
+                        min_application_security_percent, max_application_security_percent,
+                        min_contract_security_percent, max_contract_security_percent,
+                        min_ai_score, keywords, enabled_platforms, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        user_id, source["min_price"], source["max_price"],
-                        source["advance_required"], source["min_advance_percent"],
-                        source["max_postpayment_days"], source["min_submission_days"],
-                        source["min_application_security_percent"],
-                        source["max_application_security_percent"],
-                        source["min_contract_security_percent"],
-                        source["max_contract_security_percent"], source["min_ai_score"],
-                        source["keywords"], source["enabled_platforms"] or json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
+                        user_id, source["min_price"], source["max_price"], source["advance_required"],
+                        source["min_advance_percent"], source["max_postpayment_days"], source["min_submission_days"],
+                        source["min_application_security_percent"], source["max_application_security_percent"],
+                        source["min_contract_security_percent"], source["max_contract_security_percent"],
+                        source["min_ai_score"], source["keywords"], source["enabled_platforms"] or json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
@@ -183,23 +152,19 @@ class CriteriaStore:
         if row is None:
             return TenderCriteria()
         return TenderCriteria(
-            min_price=row["min_price"], max_price=row["max_price"],
-            advance_required=bool(row["advance_required"]),
-            min_advance_percent=float(row["min_advance_percent"]),
-            max_postpayment_days=row["max_postpayment_days"],
+            min_price=row["min_price"], max_price=row["max_price"], advance_required=bool(row["advance_required"]),
+            min_advance_percent=float(row["min_advance_percent"]), max_postpayment_days=row["max_postpayment_days"],
             min_submission_days=int(row["min_submission_days"]),
             min_application_security_percent=float(row["min_application_security_percent"]),
             max_application_security_percent=row["max_application_security_percent"],
             min_contract_security_percent=float(row["min_contract_security_percent"]),
-            max_contract_security_percent=row["max_contract_security_percent"],
-            min_ai_score=int(row["min_ai_score"]),
+            max_contract_security_percent=row["max_contract_security_percent"], min_ai_score=int(row["min_ai_score"]),
         )
 
     def update(self, **values) -> None:
         allowed = {
-            "min_price", "max_price", "advance_required", "min_advance_percent",
-            "max_postpayment_days", "min_submission_days",
-            "min_application_security_percent", "max_application_security_percent",
+            "min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days",
+            "min_submission_days", "min_application_security_percent", "max_application_security_percent",
             "min_contract_security_percent", "max_contract_security_percent", "min_ai_score",
         }
         values = {key: value for key, value in values.items() if key in allowed}
@@ -239,26 +204,16 @@ class CriteriaStore:
             )
 
     def get_enabled_platforms(self) -> list[str]:
+        """Вернуть ровно выбранный пользователем набор, включая пустой набор."""
         user_id = self._user_id_and_ensure()
         with self.db._connect() as conn:
             row = conn.execute(f"SELECT enabled_platforms FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)).fetchone()
-        if row is None or not row["enabled_platforms"]:
+        if row is None or row["enabled_platforms"] is None:
             return list(SUPPORTED_PLATFORMS)
         try:
             data = json.loads(row["enabled_platforms"])
             if isinstance(data, list):
-                clean = [str(x).strip() for x in data if str(x).strip() in SUPPORTED_PLATFORMS]
-                # Добавляем новые площадки в старые пользовательские настройки,
-                # не меняя уже сделанный пользователем явный выбор остальных.
-                known_before = {"eis", "b2b_center", "unipro", "rts_tender", "tmk"}
-                if clean and set(clean).issubset(known_before) and "rosatom" not in clean:
-                    clean.append("rosatom")
-                    with self.db._connect() as write_conn:
-                        write_conn.execute(
-                            f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?",
-                            (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
-                        )
-                return clean or list(SUPPORTED_PLATFORMS)
+                return [str(x).strip() for x in data if str(x).strip() in SUPPORTED_PLATFORMS]
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
         return list(SUPPORTED_PLATFORMS)
