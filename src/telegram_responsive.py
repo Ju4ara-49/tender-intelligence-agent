@@ -96,9 +96,8 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
             current.remove(platform)
         else:
             current.add(platform)
-        if platform == "eis" and "eis" not in current:
-            current.add("eis")
-            self._send(chat_id, "ЕИС пока нельзя отключить.", self._keyboard())
+        # Все площадки, включая ЕИС и Росатом, являются обычными переключателями.
+        # Никакая площадка не должна принудительно возвращаться после выключения.
         self._call_user(chat_id, self.criteria_store.set_enabled_platforms, sorted(current))
         logger.info("Telegram-бот: площадка изменена chat_id=%s platform=%s before=%s after=%s", chat_id, platform, before, sorted(current))
         self._show_platforms(chat_id)
