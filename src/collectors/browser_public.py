@@ -36,15 +36,7 @@ class _BrowserTenderCollector(BaseCollector):
         return bool(config.get("collectors", {}).get(self.platform, {}).get("enabled", True))
 
     def search(self, keywords: list[str], since: datetime | None = None) -> list[Tender]:
-        """Search each keyword separately and merge results.
-
-        Passing all Telegram keywords as one string is incorrect for many
-        portals: their search forms treat spaces as AND conditions. That made
-        RTS/TMK/Rosatom return zero results for otherwise valid searches such
-        as ``станки, полуавтоматы, сварочные аппараты, электроды``. EIS and
-        B2B already search terms independently, so browser collectors now do
-        the same and deduplicate by platform/external_id.
-        """
+        """Search each keyword separately and merge results."""
         terms = [str(x).strip() for x in keywords if str(x).strip()]
         if not terms:
             return []
@@ -76,7 +68,7 @@ class _BrowserTenderCollector(BaseCollector):
                     page.wait_for_load_state("networkidle", timeout=7000)
                 except Exception:
                     pass
-                html = page.content()
+                html = self._collect_rendered_html(page)
                 browser.close()
         except PlaywrightTimeoutError as exc:
             logger.warning("%s: timeout for %r: %s", self.platform, query, exc)
@@ -103,12 +95,21 @@ class _BrowserTenderCollector(BaseCollector):
                 browser = pw.chromium.launch(headless=True)
                 page = browser.new_page(locale="ru-RU")
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-                page.wait_for_timeout(1500)
+
+                # Fabrikant renders important procurement data asynchronously
+                # and, depending on the procedure type, may place it inside
+                # an iframe or behind an information tab. Give the application
+                # time to finish rendering and open the common information tabs
+                # without attempting to bypass authentication/WAF.
+                page.wait_for_timeout(2500)
+                self._open_information_sections(page)
+                page.wait_for_timeout(1200)
                 try:
                     page.wait_for_load_state("networkidle", timeout=7000)
                 except Exception:
                     pass
-                html = page.content()
+
+                html = self._collect_rendered_html(page)
                 browser.close()
                 soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
                 if "web application firewall" in soup_text or "временно заблокирован" in soup_text:
@@ -118,6 +119,49 @@ class _BrowserTenderCollector(BaseCollector):
         except Exception as exc:
             logger.warning("%s: detail failed %s: %s", self.platform, external_id, exc)
             return None
+
+    @staticmethod
+    def _collect_rendered_html(page) -> str:
+        """Return the main DOM plus HTML/text from same-origin frames.
+
+        Fabrikant can render procedure information in an iframe. BeautifulSoup
+        cannot see iframe DOM nodes when parsing page.content(), so collecting
+        each frame here prevents the detail parser from seeing only the title
+        and price while missing customer, region and dates.
+        """
+        chunks: list[str] = []
+        try:
+            chunks.append(page.content())
+        except Exception:
+            pass
+        for frame in page.frames:
+            if frame == page.main_frame:
+                continue
+            try:
+                frame_html = frame.content()
+                if frame_html:
+                    chunks.append(frame_html)
+            except Exception:
+                continue
+        return "\n".join(chunks)
+
+    @staticmethod
+    def _open_information_sections(page) -> None:
+        labels = (
+            "Общая информация", "Сведения о закупке", "Информация о закупке",
+            "Основная информация", "Сведения", "Условия закупки",
+        )
+        for label in labels:
+            try:
+                loc = page.get_by_text(label, exact=False)
+                count = min(loc.count(), 3)
+                for idx in range(count):
+                    item = loc.nth(idx)
+                    if item.is_visible():
+                        item.click(timeout=1000)
+                        page.wait_for_timeout(250)
+            except Exception:
+                continue
 
     def _perform_search(self, page, query: str) -> None:
         selectors = [
@@ -264,8 +308,6 @@ class _BrowserTenderCollector(BaseCollector):
 
 class RtsTenderCollector(_BrowserTenderCollector):
     platform = "rts_tender"
-    # The public procurement search lives under /poisk/. Searching the home
-    # page is unreliable because it may render only the marketing shell.
     BASE_URL = "https://www.rts-tender.ru/poisk/"
     SEARCH_HINTS = ("Поиск", "Поиск закупок", "Закупки")
     LINK_HINTS = ("/poisk/id/", "/poisk/search", "procedure", "tender")
@@ -273,7 +315,6 @@ class RtsTenderCollector(_BrowserTenderCollector):
 
 class TmkCollector(_BrowserTenderCollector):
     platform = "tmk"
-    # TMK is a hash-routed SPA; the root URL can show only the JS/Cookie gate.
     BASE_URL = "https://zakupki.tmk-group.com/#tmk/front/index"
     SEARCH_HINTS = ("Поиск", "Закупки", "Найти")
     LINK_HINTS = ("tmk/front", "procedure", "tender", "zakup")
