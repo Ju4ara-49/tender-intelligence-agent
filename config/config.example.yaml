@@ -28,6 +28,11 @@ collectors:
     request_delay_seconds: 1
     max_pages: 1
     timeout_seconds: 30
+  unipro:
+    enabled: true
+    max_pages: 5
+    request_delay_seconds: 2
+    timeout_seconds: 30
 
 filters:
   # Минимальная длина текста для проверки ключевых слов
