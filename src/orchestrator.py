@@ -163,6 +163,21 @@ class Orchestrator:
         stats["found"] = len(all_tenders)
         for collector, tender in all_tenders:
             if self.stop_requested: break
+
+            # Fabrikant's public catalogue can return historical rows even
+            # when the current search is intended to use the configured
+            # lookback window. The registry publication date is trustworthy;
+            # discard stale rows before opening expensive detail pages.
+            if getattr(collector, "platform", "") == "fabrikant" and tender.published_at is not None:
+                published = tender.published_at
+                if published.tzinfo is None:
+                    published = published.replace(tzinfo=timezone.utc)
+                collector_config = self.settings.config.get("collectors", {}).get("fabrikant", {})
+                since = datetime.now(timezone.utc) - timedelta(days=int(collector_config.get("lookback_days", 3)))
+                if published < since:
+                    logger.debug("fabrikant: пропущена старая процедура %s | published=%s | since=%s", tender.external_id, published, since)
+                    continue
+
             if not self.keyword_filter.matches(tender): continue
             stats["filtered"] += 1
             existing = self.db.exists(tender.unique_key)
