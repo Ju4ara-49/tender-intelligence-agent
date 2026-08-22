@@ -33,9 +33,7 @@ def main() -> None:
         region="Москва",
         customer="Тестовый заказчик",
         law_type="223-ФЗ",
-        raw_data={
-            "procurement_method": "Запрос предложений",
-        },
+        raw_data={"procurement_method": "Запрос предложений"},
     )
 
     tender_id = db.save_tender(tender)
@@ -52,36 +50,18 @@ def main() -> None:
         ),
     )
 
-    export_tenders_to_excel(
-        db,
-        output,
-        tender_ids=[tender_id],
-    )
+    export_tenders_to_excel(db, output, tender_ids=[tender_id])
 
     wb = load_workbook(output)
     ws = wb["Тендеры"]
 
     headers = [cell.value for cell in ws[1]]
     expected = [
-        "Площадка",
-        "Номер закупки",
-        "Наименование",
-        "Заказчик",
-        "Регион",
-        "НМЦК",
-        "Валюта",
-        "Дата публикации",
-        "Дата окончания подачи заявок",
-        "Осталось дней до подачи",
-        "Закон",
-        "Способ закупки",
-        "AI score",
-        "Рекомендация",
-        "Краткое резюме",
-        "Риски",
-        "Начальная цена",
-        "Комментарий по срокам",
-        "Ссылка",
+        "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
+        "НМЦК", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
+        "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
+        "Рекомендация", "Краткое резюме", "Риски", "Начальная цена",
+        "Комментарий по срокам", "Ссылка",
     ]
 
     assert headers == expected, headers
@@ -110,6 +90,7 @@ def main() -> None:
     print(f"Clickable tender link: {hyperlink.target}")
     print(f"Initial price: {ws['Q2'].value}")
     print(f"Procurement method: {ws['L2'].value}")
+    print("Excel schema checks: PASS")
 
 
 if __name__ == "__main__":
