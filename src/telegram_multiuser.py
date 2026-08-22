@@ -11,13 +11,17 @@ from src.telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
 
+# Постоянный владелец бота. Этот ID всегда имеет доступ, даже если
+# TELEGRAM_CHAT_ID или TELEGRAM_ALLOWED_USER_IDS в .env изменены/очищены.
+OWNER_TELEGRAM_ID = "838120236"
+
 
 class MultiUserTelegramBot(TelegramBot):
     """TelegramBot с независимыми поисками и контролем доступа по Telegram ID.
 
-    Администратор из TELEGRAM_CHAT_ID всегда разрешён. Дополнительные
-    пользователи задаются в TELEGRAM_ALLOWED_USER_IDS через запятую.
-    Пустой список означает безопасный режим: доступ есть только у админа.
+    Владелец OWNER_TELEGRAM_ID всегда разрешён. Дополнительные пользователи
+    задаются в TELEGRAM_ALLOWED_USER_IDS через запятую. Пустой список означает
+    безопасный режим: доступ есть только у владельца.
     """
 
     def __init__(self, settings, orchestrator: Orchestrator) -> None:
@@ -39,6 +43,9 @@ class MultiUserTelegramBot(TelegramBot):
             for item in raw.split(",")
             if item.strip()
         }
+        # Владелец вечный: его доступ не зависит от .env.
+        allowed.add(OWNER_TELEGRAM_ID)
+        # Обратная совместимость со старым TELEGRAM_CHAT_ID.
         if self.admin_chat_id:
             allowed.add(self.admin_chat_id)
         return allowed
@@ -47,11 +54,14 @@ class MultiUserTelegramBot(TelegramBot):
         return str(chat_id).strip() in self._allowed_user_ids
 
     def _access_denied(self, chat_id: str) -> None:
+        user_id = str(chat_id).strip()
         self._send(
             chat_id,
             "🔒 <b>Доступ ограничен.</b>\n\n"
-            "У вас нет разрешения на использование этого бота.\n\n"
-            "Если вы должны получить доступ, обратитесь к администратору.",
+            "У вас пока нет разрешения на использование этого бота.\n\n"
+            f"Ваш Telegram ID: <code>{user_id}</code>\n\n"
+            "Передайте этот ID администратору. После добавления в белый список "
+            "бот станет доступен вам автоматически.",
         )
 
     def _handle_message(self, message: dict) -> None:
