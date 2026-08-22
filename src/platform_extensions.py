@@ -7,6 +7,11 @@ from src.collectors.fabrikant import FabrikantCollector
 from src.collectors.registry import ALL_COLLECTORS
 
 
+# UniPro окончательно выведен из проекта. Фабрикант занимает его место.
+if "unipro" in SUPPORTED_PLATFORMS:
+    SUPPORTED_PLATFORMS.remove("unipro")
+PLATFORM_NAMES.pop("unipro", None)
+
 _EXTRA_PLATFORMS = {
     "rosatom": "Росатом",
     "fabrikant": "Фабрикант",
