@@ -99,6 +99,10 @@ def export_tenders_to_excel(
             wrap_text=True,
         )
 
+    # Увеличиваем высоту строки заголовков, чтобы многострочный текст
+    # не упирался в элементы Excel.
+    ws.row_dimensions[1].height = 42
+
     now = datetime.now(timezone.utc)
 
     for row in rows:
@@ -180,8 +184,11 @@ def export_tenders_to_excel(
             cell.hyperlink = str(cell.value)
             cell.font = Font(color="0563C1", underline="single")
 
+    # Автофильтр сохраняем, но стрелки выпадающих списков скрываем:
+    # они перекрывают текст заголовков.
     if ws.max_row >= 1:
         ws.auto_filter.ref = ws.dimensions
+        ws.auto_filter.showDropDown = True
 
     ws.freeze_panes = "A2"
 
