@@ -11,11 +11,12 @@ from src.collectors.b2b_center import B2BCenterCollector
 logger = logging.getLogger(__name__)
 BASE_URL = "https://www.b2b-center.ru"
 LOGIN_URL = f"{BASE_URL}/login.html"
+SUPPLIER_URL = f"{BASE_URL}/app/next/dashboard/supplier/?group=buy"
 STORAGE_STATE = Path("data/b2b_center_storage.json")
 
 
 class AuthenticatedB2BCenterCollector(B2BCenterCollector):
-    """B2B-Center collector with persistent browser authentication."""
+    """B2B-Center collector with a persistent authenticated browser session."""
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -25,7 +26,7 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
         self.manual_login = os.getenv("B2B_CENTER_MANUAL_LOGIN", "").strip().lower() in {"1", "true", "yes", "on"}
 
         if not self.username or not self.password:
-            logger.info("B2B-Center: логин/пароль не заданы; используется открытый доступ")
+            logger.warning("B2B-Center: логин/пароль не заданы")
             return
 
         if STORAGE_STATE.exists():
@@ -33,23 +34,28 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
 
         if not self.authenticated and self.manual_login:
             self.authenticated = self._manual_login()
-        elif not self.authenticated:
-            logger.warning("B2B-Center: сохранённой авторизации нет; для первого входа установите B2B_CENTER_MANUAL_LOGIN=1")
 
         if self.authenticated:
             logger.info("B2B-Center: авторизация выполнена успешно")
         else:
-            logger.warning("B2B-Center: авторизация не выполнена; используется открытый доступ")
+            logger.warning("B2B-Center: авторизация не подтверждена")
+
+    def _new_context(self, browser, storage=False):
+        kwargs = {"user_agent": self.session.headers.get("User-Agent")}
+        if storage and STORAGE_STATE.exists():
+            kwargs["storage_state"] = str(STORAGE_STATE)
+        return browser.new_context(**kwargs)
 
     def _use_saved_state(self) -> bool:
         try:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
-                context = browser.new_context(storage_state=str(STORAGE_STATE), user_agent=self.session.headers.get("User-Agent"))
+                context = self._new_context(browser, storage=True)
                 page = context.new_page()
-                page.goto(BASE_URL, wait_until="domcontentloaded", timeout=self.timeout * 1000)
-                ok = self._page_is_authenticated(page)
+                page.goto(SUPPLIER_URL, wait_until="domcontentloaded", timeout=self.timeout * 1000)
+                page.wait_for_timeout(2000)
+                ok = self._supplier_workspace_available(page)
                 if ok:
                     self._copy_cookies(context)
                 browser.close()
@@ -68,10 +74,11 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=False)
-                context = browser.new_context(user_agent=self.session.headers.get("User-Agent"))
+                context = self._new_context(browser)
                 page = context.new_page()
                 page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=self.timeout * 1000)
 
+                # Fill credentials when the current login form exposes them.
                 try:
                     username = page.get_by_label("Логин или email", exact=True)
                     password = page.get_by_label("Пароль", exact=True)
@@ -83,28 +90,26 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
                     password.wait_for(state="visible", timeout=10000)
                     username.fill(self.username)
                     password.fill(self.password)
-                    form = password.locator("xpath=ancestor::form[1]")
-                    submit = form.get_by_role("button", name="Войти", exact=True)
-                    if submit.count() == 0:
-                        submit = page.get_by_role("button", name="Войти", exact=True).last
+                    submit = page.get_by_role("button", name="Войти", exact=True).last
                     if submit.count():
                         submit.click()
                 except Exception:
-                    logger.info("B2B-Center: поля входа не заполнены автоматически; выполните вход вручную")
+                    logger.info("B2B-Center: автоматическое заполнение формы не удалось; выполните вход вручную")
 
-                logger.info("B2B-Center: выполните вход в открывшемся окне браузера; состояние будет сохранено автоматически")
-                for _ in range(180):
-                    if self._page_is_authenticated(page):
+                logger.info("B2B-Center: выполните вход в открывшемся браузере. Затем откройте рабочее место поставщика.")
+
+                for _ in range(300):
+                    if self._supplier_workspace_available(page):
                         cookies = context.cookies()
                         if cookies:
                             context.storage_state(path=str(STORAGE_STATE))
                             self._copy_cookies(context)
                             browser.close()
-                            logger.info("B2B-Center: ручная авторизация сохранена; cookies=%d", len(cookies))
+                            logger.info("B2B-Center: рабочее место поставщика подтверждено; cookies=%d", len(cookies))
                             return True
                     page.wait_for_timeout(1000)
 
-                logger.warning("B2B-Center: ручная авторизация не завершена за 180 секунд")
+                logger.warning("B2B-Center: рабочее место поставщика не подтверждено за 5 минут")
                 browser.close()
                 return False
         except Exception:
@@ -112,18 +117,20 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
             return False
 
     @staticmethod
-    def _page_is_authenticated(page) -> bool:
+    def _supplier_workspace_available(page) -> bool:
         try:
             url = page.url.lower()
+            if "/app/next/dashboard/supplier/" not in url:
+                return False
             text = page.locator("body").inner_text(timeout=3000).lower()
+            return "рабочее место" in text or "поставщик" in text or "закуп" in text
         except Exception:
             return False
-        bad = ("неверный пароль", "неверный логин", "неверные учетные данные", "ошибка авторизации", "не удалось войти")
-        if any(x in text for x in bad):
-            return False
-        good = ("личный кабинет", "выйти", "logout", "личные данные", "мой профиль")
-        return any(x in text for x in good) or "/login.html" not in url
 
     def _copy_cookies(self, context) -> None:
         for cookie in context.cookies():
-            self.session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain"), path=cookie.get("path", "/"))
+            self.session.cookies.set(
+                cookie["name"], cookie["value"],
+                domain=cookie.get("domain"),
+                path=cookie.get("path", "/"),
+            )
