@@ -337,6 +337,15 @@ class Orchestrator:
 
             if self.db.exists(tender.unique_key):
 
+                existing_tender_id = self.db.get_tender_id(
+                    tender.unique_key
+                )
+
+                if existing_tender_id is not None:
+                    current_run_tender_ids.append(
+                        existing_tender_id
+                    )
+
                 if self.db.was_notified(
                     tender.unique_key
                 ):

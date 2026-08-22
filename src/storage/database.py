@@ -98,6 +98,18 @@ class TenderDatabase:
             ).fetchone()
         return row is not None
 
+    def get_tender_id(self, unique_key: str) -> int | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM tenders WHERE unique_key = ?",
+                (unique_key,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return int(row["id"])
+
     def was_notified(self, unique_key: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
