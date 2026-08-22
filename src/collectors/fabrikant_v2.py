@@ -1,9 +1,8 @@
 """Robust public Fabrikant collector.
 
 The public Fabrikant registry exposes the main 44-FZ fields directly in the
-result table: procedure number, name, NMCC, organizer, customer, publication
-date and request end date. Region is not a registry column, so it is enriched
-from the procedure detail page when available.
+result table. Procedure details are additionally parsed for law and procurement
+method so the unified Tender/Excel output is complete.
 """
 from __future__ import annotations
 
@@ -85,7 +84,6 @@ class FabrikantV2Collector(_BrowserTenderCollector):
 
     @classmethod
     def _find_registry_header(cls, table) -> tuple[list[str], object] | None:
-        """Find the actual Fabrikant registry header, not a nested/layout table."""
         for row in table.find_all("tr"):
             cells = row.find_all(["th", "td"], recursive=False)
             headers = [cls._norm(" ".join(c.stripped_strings)) for c in cells]
@@ -97,8 +95,6 @@ class FabrikantV2Collector(_BrowserTenderCollector):
     @classmethod
     def _clean_registry_title(cls, value: str) -> str:
         value = cls._norm(value)
-        # Fabrikant appends badges/markers such as "СМП СОНО" or "1875" to
-        # the visible name. They are not part of the procurement subject.
         value = re.sub(r"\s*(?:СМП\s+СОНО|СМП|СОНО)\s*$", "", value, flags=re.I)
         value = re.sub(r"\s+v\s*=\s*\?\s*1875\s*$", "", value, flags=re.I)
         value = re.sub(r"\s+1875\s*$", "", value)
@@ -148,10 +144,6 @@ class FabrikantV2Collector(_BrowserTenderCollector):
 
                 seen.add(external_id)
                 self._urls[external_id] = href
-                logger.debug(
-                    "fabrikant: registry row %s | title=%s | price=%s | organizer=%s | customer=%s | published=%s | deadline=%s",
-                    external_id, bool(title), bool(price), bool(organizer), bool(customer), published, deadline,
-                )
                 results.append(Tender(
                     platform=self.platform,
                     external_id=external_id,
@@ -163,19 +155,14 @@ class FabrikantV2Collector(_BrowserTenderCollector):
                     published_at=published,
                     start_date=published,
                     customer=customer,
+                    law_type=self._law_from_url(href),
                     raw_data={
                         "source": self.BASE_URL,
+                        "law_type": self._law_from_url(href),
                         "search_row": {
                             "headers": headers,
                             "values": values,
-                            "mapping": {
-                                "title": idx_title,
-                                "price": idx_price,
-                                "organizer": idx_organizer,
-                                "customer": idx_customer,
-                                "published": idx_published,
-                                "deadline": idx_deadline,
-                            },
+                            "mapping": {"title": idx_title, "price": idx_price, "organizer": idx_organizer, "customer": idx_customer, "published": idx_published, "deadline": idx_deadline},
                             "organizer": organizer,
                             "published_raw": published_raw,
                             "deadline_raw": deadline_raw,
@@ -186,7 +173,6 @@ class FabrikantV2Collector(_BrowserTenderCollector):
         if results:
             return results
 
-        # Card/div fallback for alternative Fabrikant layouts.
         for anchor in soup.find_all("a", href=True):
             href = urljoin(self.BASE_URL, str(anchor.get("href", "")).strip())
             if urlparse(href).netloc.lower() != base_host or "/procedure/" not in href.lower():
@@ -197,8 +183,17 @@ class FabrikantV2Collector(_BrowserTenderCollector):
                 continue
             seen.add(external_id)
             self._urls[external_id] = href
-            results.append(Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=href, description=title, raw_data={"source": self.BASE_URL}))
+            results.append(Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=href, description=title, law_type=self._law_from_url(href), raw_data={"source": self.BASE_URL, "law_type": self._law_from_url(href)}))
         return results
+
+    @staticmethod
+    def _law_from_url(url: str) -> str:
+        path = urlparse(url).path.lower()
+        if "/44/" in path:
+            return "44-ФЗ"
+        if "/223/" in path:
+            return "223-ФЗ"
+        return ""
 
     @staticmethod
     def _procedure_anchor(row, base_host):
@@ -229,10 +224,7 @@ class FabrikantV2Collector(_BrowserTenderCollector):
     def _parse_datetime(value: str) -> datetime | None:
         if not value:
             return None
-        for pattern in (
-            r"(\d{1,2})[./-](\d{1,2})[./-](20\d{2})(?:\s+(\d{1,2}):(\d{2})(?::\d{2})?)?",
-            r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2}))?",
-        ):
+        for pattern in (r"(\d{1,2})[./-](\d{1,2})[./-](20\d{2})(?:\s+(\d{1,2}):(\d{2})(?::\d{2})?)?", r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2}))?"):
             match = re.search(pattern, value)
             if not match:
                 continue
@@ -261,10 +253,36 @@ class FabrikantV2Collector(_BrowserTenderCollector):
         published = self._date_field(soup, text, ("дата публикации", "дата размещения", "дата создания", "дата начала", "дата закупки", "опубликовано"))
         deadline = self._date_field(soup, text, ("окончание подачи заявок", "дата окончания подачи заявок", "срок подачи заявок", "окончательный срок подачи заявок", "дата окончания приема заявок", "прием заявок до", "завершение подачи"))
         price = self._extract_price(text)
-        title = subject or self._clean_title(soup, external_id)
-        return Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=url, description=text[:10000], price=price, deadline=deadline, published_at=published, start_date=published, region=region, customer=customer, raw_data={"source": url, "subject": subject, "customer": customer, "region": region})
 
-    _FIELD_LABELS = ("предмет закупки", "предмет торгов", "наименование закупки", "наименование процедуры", "объект закупки", "предмет договора", "наименование товара", "заказчик", "наименование заказчика", "организатор закупки", "организатор", "регион", "регион заказчика", "регион поставки", "место поставки", "место нахождения", "адрес поставки", "место проведения", "дата публикации", "дата размещения", "дата создания", "дата начала", "дата закупки", "опубликовано", "окончание подачи заявок", "дата окончания подачи заявок", "срок подачи заявок", "окончательный срок подачи заявок", "дата окончания приема заявок", "прием заявок до", "завершение подачи")
+        procurement_method = self._field(soup, (
+            "способ закупки", "способ определения поставщика", "вид процедуры",
+            "тип процедуры", "форма закупки", "тип закупки", "способ проведения",
+        ))
+        law_type = self._field(soup, ("закон", "законодательство", "регламент", "нормативная база", "основание проведения"))
+        if not law_type:
+            law_type = self._law_from_url(url)
+        # Fabrikant sometimes renders the law only as a URL/application marker.
+        # Never leave a clearly identifiable 44/223 procedure without law.
+        if not law_type:
+            lower = text.lower()
+            if "44-фз" in lower or "44 фз" in lower or "44-федеральн" in lower:
+                law_type = "44-ФЗ"
+            elif "223-фз" in lower or "223 фз" in lower or "223-федеральн" in lower:
+                law_type = "223-ФЗ"
+
+        title = subject or self._clean_title(soup, external_id)
+        raw_data = {
+            "source": url,
+            "subject": subject,
+            "customer": customer,
+            "region": region,
+            "law_type": law_type,
+            "procurement_method": procurement_method,
+        }
+        logger.info("fabrikant: parsed %s | subject=%s | customer=%s | region=%s | published=%s | deadline=%s | law=%s | method=%s", external_id, bool(subject), bool(customer), bool(region), published, deadline, law_type or "", procurement_method or "")
+        return Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=url, description=text[:10000], price=price, deadline=deadline, published_at=published, start_date=published, region=region, customer=customer, law_type=law_type, raw_data=raw_data)
+
+    _FIELD_LABELS = ("предмет закупки", "предмет торгов", "наименование закупки", "наименование процедуры", "объект закупки", "предмет договора", "наименование товара", "заказчик", "наименование заказчика", "организатор закупки", "организатор", "регион", "регион заказчика", "регион поставки", "место поставки", "место нахождения", "адрес поставки", "место проведения", "дата публикации", "дата размещения", "дата создания", "дата начала", "дата закупки", "опубликовано", "окончание подачи заявок", "дата окончания подачи заявок", "срок подачи заявок", "окончательный срок подачи заявок", "дата окончания приема заявок", "прием заявок до", "завершение подачи", "способ закупки", "способ определения поставщика", "вид процедуры", "тип процедуры", "форма закупки", "тип закупки", "способ проведения", "закон", "законодательство", "регламент", "нормативная база", "основание проведения")
 
     @classmethod
     def _field(cls, soup: BeautifulSoup, labels: tuple[str, ...]) -> str:
@@ -304,7 +322,7 @@ class FabrikantV2Collector(_BrowserTenderCollector):
     @staticmethod
     def _strip_value(value: str) -> str:
         value = re.sub(r"\s+", " ", value).strip(" :;|")
-        return re.split(r"\s+(?:Дата|Регион|Заказчик|Предмет|Место|Срок|Организатор|Цена|НМЦ)\s*:", value, maxsplit=1, flags=re.I)[0][:1000]
+        return re.split(r"\s+(?:Дата|Регион|Заказчик|Предмет|Место|Срок|Организатор|Цена|НМЦ|Способ закупки|Закон)\s*:", value, maxsplit=1, flags=re.I)[0][:1000]
 
     @classmethod
     def _date_field(cls, soup: BeautifulSoup, text: str, labels: tuple[str, ...]) -> datetime | None:
