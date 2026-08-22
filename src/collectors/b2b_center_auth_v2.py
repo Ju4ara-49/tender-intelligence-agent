@@ -6,13 +6,20 @@ import logging
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from src.collectors.b2b_center import B2BCenterCollector
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://www.b2b-center.ru"
 LOGIN_URL = f"{BASE_URL}/login.html"
 SUPPLIER_URL = f"{BASE_URL}/app/next/dashboard/supplier/?group=buy"
-STORAGE_STATE = Path("data/b2b_center_storage.json")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STORAGE_STATE = PROJECT_ROOT / "data" / "b2b_center_storage.json"
+
+# The collector can be instantiated directly by tests/CLI, without src.settings.
+# Therefore load the project's .env here as well.
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 class AuthenticatedB2BCenterCollector(B2BCenterCollector):
@@ -78,7 +85,6 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
                 page = context.new_page()
                 page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=self.timeout * 1000)
 
-                # Fill credentials when the current login form exposes them.
                 try:
                     username = page.get_by_label("Логин или email", exact=True)
                     password = page.get_by_label("Пароль", exact=True)
