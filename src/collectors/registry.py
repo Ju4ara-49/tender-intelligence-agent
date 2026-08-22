@@ -8,8 +8,8 @@ from src.collectors.base import BaseCollector
 from src.collectors.b2b_center_auth_v2 import AuthenticatedB2BCenterCollector
 from src.collectors.browser_public import RtsTenderCollector, TmkCollector
 from src.collectors.eis_zakupki import EisZakupkiCollector
+from src.collectors.fabrikant import FabrikantCollector
 from src.collectors.rosatom import RosatomCollector
-from src.collectors.unipro import UniproCollector
 
 
 # Все поддерживаемые площадки. Конкретное включение управляется Telegram.
@@ -19,7 +19,7 @@ from src.collectors.unipro import UniproCollector
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
     EisZakupkiCollector,
     AuthenticatedB2BCenterCollector,
-    UniproCollector,
+    FabrikantCollector,
     RtsTenderCollector,
     TmkCollector,
     RosatomCollector,
