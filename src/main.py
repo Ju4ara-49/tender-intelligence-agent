@@ -97,10 +97,10 @@ def main() -> int:
         return 0
 
     if args.command == "bot":
-        from src.telegram_multiuser import MultiUserTelegramBot
+        from src.telegram_responsive import ResponsiveMultiUserTelegramBot
 
         orchestrator = Orchestrator(settings)
-        bot = MultiUserTelegramBot(settings, orchestrator)
+        bot = ResponsiveMultiUserTelegramBot(settings, orchestrator)
         bot.run_polling()
         return 0
 
