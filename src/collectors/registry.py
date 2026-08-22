@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Type
 
 from src.collectors.base import BaseCollector
-from src.collectors.b2b_center import B2BCenterCollector
+from src.collectors.b2b_center_auth import AuthenticatedB2BCenterCollector
 from src.collectors.eis_zakupki import EisZakupkiCollector
 
 
@@ -13,7 +13,7 @@ from src.collectors.eis_zakupki import EisZakupkiCollector
 # импортируйте класс и добавьте его в ALL_COLLECTORS.
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
     EisZakupkiCollector,
-    B2BCenterCollector,
+    AuthenticatedB2BCenterCollector,
 ]
 
 
