@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Type
 
 from src.collectors.base import BaseCollector
-from src.collectors.b2b_center_auth import AuthenticatedB2BCenterCollector
+from src.collectors.b2b_center_auth_v2 import AuthenticatedB2BCenterCollector
 from src.collectors.eis_zakupki import EisZakupkiCollector
 
 
@@ -32,7 +32,6 @@ def get_enabled_collectors(
     """
 
     enabled: list[BaseCollector] = []
-
     selected = None
 
     if enabled_platforms is not None:
@@ -48,14 +47,10 @@ def get_enabled_collectors(
         if not instance.is_enabled(config):
             continue
 
-        if selected is not None:
-            if instance.platform not in selected:
-                continue
+        if selected is not None and instance.platform not in selected:
+            continue
 
         platform_config = instance.get_platform_config(config)
-
-        enabled.append(
-            collector_cls(platform_config)
-        )
+        enabled.append(collector_cls(platform_config))
 
     return enabled
