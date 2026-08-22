@@ -3,7 +3,7 @@
 The platforms expose their search UI through client-side JavaScript, so a
 normal requests parser is unreliable. These collectors use Playwright with
 bounded waits and conservative link parsing. They never bypass login,
-CAPTCHA, or access controls.
+CAPTCHA, WAF, or access controls.
 """
 from __future__ import annotations
 
@@ -36,10 +36,34 @@ class _BrowserTenderCollector(BaseCollector):
         return bool(config.get("collectors", {}).get(self.platform, {}).get("enabled", True))
 
     def search(self, keywords: list[str], since: datetime | None = None) -> list[Tender]:
+        """Search each keyword separately and merge results.
+
+        Passing all Telegram keywords as one string is incorrect for many
+        portals: their search forms treat spaces as AND conditions. That made
+        RTS/TMK/Rosatom return zero results for otherwise valid searches such
+        as ``станки, полуавтоматы, сварочные аппараты, электроды``. EIS and
+        B2B already search terms independently, so browser collectors now do
+        the same and deduplicate by platform/external_id.
+        """
         terms = [str(x).strip() for x in keywords if str(x).strip()]
         if not terms:
             return []
-        query = " ".join(terms)
+
+        merged: dict[str, Tender] = {}
+        for term in terms:
+            results = self._search_one(term)
+            for tender in results:
+                merged[tender.unique_key] = tender
+                if len(merged) >= self.max_results:
+                    break
+            if len(merged) >= self.max_results:
+                break
+
+        logger.info("%s: найдено %d уникальных процедур", self.platform, len(merged))
+        return list(merged.values())[: self.max_results]
+
+    def _search_one(self, query: str) -> list[Tender]:
+        logger.info("%s: поиск по ключевому слову: %s", self.platform, query)
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
@@ -47,24 +71,28 @@ class _BrowserTenderCollector(BaseCollector):
                 page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=self.timeout_ms)
                 page.wait_for_timeout(1800)
                 self._perform_search(page, query)
-                # JS-heavy portals can render the result grid after the initial
-                # navigation. Give the application a bounded second phase.
-                page.wait_for_timeout(2200)
+                page.wait_for_timeout(3000)
                 try:
-                    page.wait_for_load_state("networkidle", timeout=5000)
+                    page.wait_for_load_state("networkidle", timeout=7000)
                 except Exception:
                     pass
                 html = page.content()
                 browser.close()
         except PlaywrightTimeoutError as exc:
-            logger.warning("%s: timeout: %s", self.platform, exc)
+            logger.warning("%s: timeout for %r: %s", self.platform, query, exc)
             return []
         except Exception as exc:
-            logger.warning("%s: browser search failed: %s", self.platform, exc)
+            logger.warning("%s: browser search failed for %r: %s", self.platform, query, exc)
             return []
+
+        soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
+        if "web application firewall" in soup_text or "временно заблокирован" in soup_text:
+            logger.warning("%s: портал вернул страницу WAF; поиск невозможен без обхода защиты", self.platform)
+            return []
+
         results = self._parse_results(html)
-        logger.info("%s: найдено %d процедур", self.platform, len(results))
-        return results[: self.max_results]
+        logger.info("%s: keyword=%r: принято %d результатов", self.platform, query, len(results))
+        return results
 
     def get_details(self, external_id: str) -> Tender | None:
         url = self._urls.get(str(external_id))
@@ -75,14 +103,18 @@ class _BrowserTenderCollector(BaseCollector):
                 browser = pw.chromium.launch(headless=True)
                 page = browser.new_page(locale="ru-RU")
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(1500)
                 try:
-                    page.wait_for_load_state("networkidle", timeout=5000)
+                    page.wait_for_load_state("networkidle", timeout=7000)
                 except Exception:
                     pass
-                tender = self._parse_detail(page.content(), str(external_id), url)
+                html = page.content()
                 browser.close()
-                return tender
+                soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
+                if "web application firewall" in soup_text or "временно заблокирован" in soup_text:
+                    logger.warning("%s: WAF при загрузке деталей %s", self.platform, external_id)
+                    return None
+                return self._parse_detail(html, str(external_id), url)
         except Exception as exc:
             logger.warning("%s: detail failed %s: %s", self.platform, external_id, exc)
             return None
@@ -107,7 +139,6 @@ class _BrowserTenderCollector(BaseCollector):
             except Exception:
                 continue
 
-        # Some SPAs expose search through a visible button first.
         for text in self.SEARCH_HINTS:
             try:
                 button = page.get_by_text(text, exact=False).first
@@ -128,6 +159,8 @@ class _BrowserTenderCollector(BaseCollector):
             except Exception:
                 continue
 
+        logger.warning("%s: поле поиска не найдено для запроса %r", self.platform, query)
+
     def _parse_results(self, html: str) -> list[Tender]:
         soup = BeautifulSoup(html, "html.parser")
         results: list[Tender] = []
@@ -145,8 +178,6 @@ class _BrowserTenderCollector(BaseCollector):
                 continue
 
             low = href.lower()
-            # Do not require a particular URL shape: modern SPA portals often
-            # put procedure links behind hash routes or generic numeric paths.
             if not any(hint in low for hint in self.LINK_HINTS) and not re.search(r"\d{6,}", href + " " + title):
                 continue
 
@@ -190,6 +221,7 @@ class _BrowserTenderCollector(BaseCollector):
     def _extract_id(href: str, title: str) -> str | None:
         patterns = [
             r"(?:procedure|tender|purchase)[^0-9]{0,30}(\d{5,})",
+            r"(?:/|#)l(\d{6,})(?:[-/]|$)",
             r"(?:/|#)(\d{6,})(?:/|$)",
             r"\b(\d{7,})\b",
         ]
@@ -232,12 +264,16 @@ class _BrowserTenderCollector(BaseCollector):
 
 class RtsTenderCollector(_BrowserTenderCollector):
     platform = "rts_tender"
-    BASE_URL = "https://www.rts-tender.ru/"
+    # The public procurement search lives under /poisk/. Searching the home
+    # page is unreliable because it may render only the marketing shell.
+    BASE_URL = "https://www.rts-tender.ru/poisk/"
     SEARCH_HINTS = ("Поиск", "Поиск закупок", "Закупки")
+    LINK_HINTS = ("/poisk/id/", "/poisk/search", "procedure", "tender")
 
 
 class TmkCollector(_BrowserTenderCollector):
     platform = "tmk"
-    BASE_URL = "https://zakupki.tmk-group.com/"
+    # TMK is a hash-routed SPA; the root URL can show only the JS/Cookie gate.
+    BASE_URL = "https://zakupki.tmk-group.com/#tmk/front/index"
     SEARCH_HINTS = ("Поиск", "Закупки", "Найти")
-    LINK_HINTS = ("procedure", "tender", "com/", "zakup")
+    LINK_HINTS = ("tmk/front", "procedure", "tender", "zakup")
