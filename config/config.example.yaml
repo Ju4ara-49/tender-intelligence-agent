@@ -23,7 +23,7 @@ collectors:
     max_pages: 5
     records_per_page: 10
   b2b_center:
-    enabled: false
+    enabled: true
     lookback_days: 3
     request_delay_seconds: 1
     max_pages: 1
