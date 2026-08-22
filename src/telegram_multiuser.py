@@ -13,9 +13,14 @@ from src.telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
 
-# Постоянный владелец бота. Этот ID всегда имеет доступ.
 OWNER_TELEGRAM_ID = "838120236"
 WHITELIST_FILE = Path("data/telegram_allowed_users.json")
+
+BTN_ADMIN = "👑 Управление доступом"
+BTN_ADMIN_ADD = "➕ Добавить пользователя"
+BTN_ADMIN_REMOVE = "➖ Удалить пользователя"
+BTN_ADMIN_USERS = "📋 Список пользователей"
+BTN_ADMIN_BACK = "↩️ Назад"
 
 
 class MultiUserTelegramBot(TelegramBot):
@@ -27,6 +32,7 @@ class MultiUserTelegramBot(TelegramBot):
         self._user_orchestrators: dict[str, Orchestrator] = {}
         self._search_lock = threading.Lock()
         self._whitelist_lock = threading.Lock()
+        self._admin_waiting: dict[str, str] = {}
         self._allowed_user_ids = self._load_allowed_user_ids()
         logger.info(
             "Telegram-доступ: whitelist включён; разрешённых пользователей=%d",
@@ -34,7 +40,11 @@ class MultiUserTelegramBot(TelegramBot):
         )
 
     def _load_allowed_user_ids(self) -> set[str]:
-        allowed = {item.strip() for item in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if item.strip()}
+        allowed = {
+            item.strip()
+            for item in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",")
+            if item.strip()
+        }
         try:
             if WHITELIST_FILE.exists():
                 data = json.loads(WHITELIST_FILE.read_text(encoding="utf-8"))
@@ -50,7 +60,10 @@ class MultiUserTelegramBot(TelegramBot):
     def _save_allowed_user_ids(self) -> None:
         WHITELIST_FILE.parent.mkdir(parents=True, exist_ok=True)
         users = sorted(x for x in self._allowed_user_ids if x != OWNER_TELEGRAM_ID)
-        WHITELIST_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
+        WHITELIST_FILE.write_text(
+            json.dumps(users, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def _is_owner(self, chat_id: str) -> bool:
         return str(chat_id).strip() == OWNER_TELEGRAM_ID
@@ -69,65 +82,135 @@ class MultiUserTelegramBot(TelegramBot):
             "бот станет доступен вам автоматически.",
         )
 
+    def _admin_keyboard(self) -> dict:
+        return {
+            "keyboard": [
+                [{"text": BTN_ADMIN_ADD}],
+                [{"text": BTN_ADMIN_REMOVE}],
+                [{"text": BTN_ADMIN_USERS}],
+                [{"text": BTN_ADMIN_BACK}],
+            ],
+            "resize_keyboard": True,
+            "is_persistent": True,
+        }
+
     def _admin_menu(self, chat_id: str) -> None:
         self._send(
             chat_id,
             "<b>👑 Управление доступом</b>\n\n"
-            "➕ Добавить пользователя — <code>/add_user ID</code>\n"
-            "➖ Удалить пользователя — <code>/remove_user ID</code>\n"
-            "📋 Список пользователей — <code>/users</code>\n\n"
-            "Пример:\n<code>/add_user 1378791558</code>",
-            self._keyboard(),
+            "Выберите действие:",
+            self._admin_keyboard(),
         )
+
+    def _show_users(self, chat_id: str) -> None:
+        users = sorted(self._allowed_user_ids)
+        lines = ["<b>👥 Разрешённые пользователи</b>", "", f"Всего: {len(users)}", ""]
+        for user_id in users:
+            suffix = " — владелец" if user_id == OWNER_TELEGRAM_ID else ""
+            lines.append(f"• <code>{user_id}</code>{suffix}")
+        self._send(chat_id, "\n".join(lines), self._admin_keyboard())
 
     def _admin_command(self, chat_id: str, text: str) -> bool:
         if not self._is_owner(chat_id):
             return False
-        parts = text.strip().split()
+        text = text.strip()
+        parts = text.split()
         command = parts[0].lower() if parts else ""
-        if command in {"/admin", "/users", "/пользователи"}:
-            if command != "/admin":
-                users = sorted(self._allowed_user_ids)
-                lines = ["<b>👥 Разрешённые пользователи</b>", "", f"Всего: {len(users)}"]
-                for user_id in users:
-                    suffix = " — владелец" if user_id == OWNER_TELEGRAM_ID else ""
-                    lines.append(f"• <code>{user_id}</code>{suffix}")
-                self._send(chat_id, "\n".join(lines), self._keyboard())
-            else:
-                self._admin_menu(chat_id)
+
+        if command == "/admin":
+            self._admin_waiting.pop(chat_id, None)
+            self._admin_menu(chat_id)
+            return True
+        if command in {"/users", "/пользователи"}:
+            self._admin_waiting.pop(chat_id, None)
+            self._show_users(chat_id)
             return True
         if command in {"/add_user", "/добавить"}:
             if len(parts) != 2 or not parts[1].isdigit():
-                self._send(chat_id, "Формат: <code>/add_user 123456789</code>", self._keyboard())
+                self._admin_waiting[chat_id] = "add"
+                self._send(chat_id, "Введите Telegram ID пользователя, которого нужно добавить:", self._admin_keyboard())
                 return True
-            user_id = parts[1]
-            with self._whitelist_lock:
-                self._allowed_user_ids.add(user_id)
-                self._save_allowed_user_ids()
-            self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> добавлен в белый список.", self._keyboard())
+            self._add_user(chat_id, parts[1])
             return True
         if command in {"/remove_user", "/удалить"}:
             if len(parts) != 2 or not parts[1].isdigit():
-                self._send(chat_id, "Формат: <code>/remove_user 123456789</code>", self._keyboard())
+                self._admin_waiting[chat_id] = "remove"
+                self._send(chat_id, "Введите Telegram ID пользователя, которого нужно удалить:", self._admin_keyboard())
                 return True
-            user_id = parts[1]
-            if user_id == OWNER_TELEGRAM_ID:
-                self._send(chat_id, "⛔ Владельца удалить нельзя. Ваш доступ постоянный.", self._keyboard())
-                return True
-            with self._whitelist_lock:
-                self._allowed_user_ids.discard(user_id)
-                self._save_allowed_user_ids()
-            self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> удалён из белого списка.", self._keyboard())
+            self._remove_user(chat_id, parts[1])
             return True
         return False
+
+    def _add_user(self, chat_id: str, user_id: str) -> None:
+        with self._whitelist_lock:
+            self._allowed_user_ids.add(user_id)
+            self._save_allowed_user_ids()
+        self._admin_waiting.pop(chat_id, None)
+        self._send(
+            chat_id,
+            f"✅ Пользователь <code>{user_id}</code> добавлен в белый список.",
+            self._admin_keyboard(),
+        )
+
+    def _remove_user(self, chat_id: str, user_id: str) -> None:
+        if user_id == OWNER_TELEGRAM_ID:
+            self._send(chat_id, "⛔ Владельца удалить нельзя. Ваш доступ постоянный.", self._admin_keyboard())
+            return
+        with self._whitelist_lock:
+            self._allowed_user_ids.discard(user_id)
+            self._save_allowed_user_ids()
+        self._admin_waiting.pop(chat_id, None)
+        self._send(
+            chat_id,
+            f"✅ Пользователь <code>{user_id}</code> удалён из белого списка.",
+            self._admin_keyboard(),
+        )
 
     def _handle_message(self, message: dict) -> None:
         chat_id = str(message.get("chat", {}).get("id", ""))
         text = (message.get("text") or "").strip()
         if not chat_id:
             return
-        if self._admin_command(chat_id, text):
-            return
+
+        if self._is_owner(chat_id) and chat_id in self._admin_waiting and text:
+            if text == BTN_ADMIN_BACK:
+                self._admin_waiting.pop(chat_id, None)
+                self._send(chat_id, "Возвращаемся в основное меню.", self._keyboard())
+                return
+            if text in {BTN_ADMIN_ADD, BTN_ADMIN_REMOVE, BTN_ADMIN_USERS, BTN_ADMIN}:
+                pass
+            elif text.isdigit():
+                action = self._admin_waiting.get(chat_id)
+                if action == "add":
+                    self._add_user(chat_id, text)
+                else:
+                    self._remove_user(chat_id, text)
+                return
+            else:
+                self._send(chat_id, "Нужен числовой Telegram ID. Например: <code>1378791558</code>", self._admin_keyboard())
+                return
+
+        if self._is_owner(chat_id):
+            if text == BTN_ADMIN:
+                self._admin_menu(chat_id)
+                return
+            if text == BTN_ADMIN_ADD:
+                self._admin_waiting[chat_id] = "add"
+                self._send(chat_id, "Введите Telegram ID пользователя, которого нужно добавить:", self._admin_keyboard())
+                return
+            if text == BTN_ADMIN_REMOVE:
+                self._admin_waiting[chat_id] = "remove"
+                self._send(chat_id, "Введите Telegram ID пользователя, которого нужно удалить:", self._admin_keyboard())
+                return
+            if text == BTN_ADMIN_USERS:
+                self._show_users(chat_id)
+                return
+            if text == BTN_ADMIN_BACK:
+                self._send(chat_id, "Возвращаемся в основное меню.", self._keyboard())
+                return
+            if self._admin_command(chat_id, text):
+                return
+
         if not self._is_allowed(chat_id):
             logger.warning("Telegram-доступ: отказ пользователю chat_id=%s", chat_id)
             self._access_denied(chat_id)
