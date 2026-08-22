@@ -105,14 +105,23 @@ class Orchestrator:
             logger.info("%s: загружаем детали тендера %s", getattr(collector, "platform", "unknown"), tender.external_id)
             detailed = get_details(tender.external_id)
             if detailed:
+                # The public registry row is authoritative for basic procedure
+                # metadata. Detail pages often contain several historical
+                # dates (contract period, creation date, archive date, etc.)
+                # and the generic detail parser can otherwise overwrite the
+                # correct search-row publication/deadline/customer/region.
                 if detailed.title: tender.title = detailed.title
                 if detailed.description: tender.description = detailed.description
                 if detailed.price is not None: tender.price = detailed.price
                 if detailed.currency: tender.currency = detailed.currency
-                if detailed.deadline: tender.deadline = detailed.deadline
-                if detailed.published_at: tender.published_at = detailed.published_at
-                if detailed.region: tender.region = detailed.region
-                if detailed.customer: tender.customer = detailed.customer
+                if tender.deadline is None and detailed.deadline:
+                    tender.deadline = detailed.deadline
+                if tender.published_at is None and detailed.published_at:
+                    tender.published_at = detailed.published_at
+                if not tender.region and detailed.region:
+                    tender.region = detailed.region
+                if not tender.customer and detailed.customer:
+                    tender.customer = detailed.customer
                 if detailed.law_type: tender.law_type = detailed.law_type
                 if detailed.url: tender.url = detailed.url
                 if detailed.raw_data:
