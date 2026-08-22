@@ -1,13 +1,8 @@
-"""Многопользовательский runtime для Telegram-бота.
-
-Базовый TelegramBot отвечает за интерфейс и хранение настроек. Этот слой
-разделяет запущенные поиски по chat_id, создаёт отдельный Orchestrator для
-каждого пользователя и направляет найденные тендеры пользователю, который
-запустил поиск, а не только владельцу TELEGRAM_CHAT_ID.
-"""
+"""Многопользовательский runtime Telegram-бота с белым списком доступа."""
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 
@@ -18,13 +13,66 @@ logger = logging.getLogger(__name__)
 
 
 class MultiUserTelegramBot(TelegramBot):
-    """TelegramBot с независимыми поисками для каждого пользователя."""
+    """TelegramBot с независимыми поисками и контролем доступа по Telegram ID.
+
+    Администратор из TELEGRAM_CHAT_ID всегда разрешён. Дополнительные
+    пользователи задаются в TELEGRAM_ALLOWED_USER_IDS через запятую.
+    Пустой список означает безопасный режим: доступ есть только у админа.
+    """
 
     def __init__(self, settings, orchestrator: Orchestrator) -> None:
         super().__init__(settings, orchestrator)
         self._search_threads: dict[str, threading.Thread] = {}
         self._user_orchestrators: dict[str, Orchestrator] = {}
         self._search_lock = threading.Lock()
+        self._allowed_user_ids = self._load_allowed_user_ids()
+
+        logger.info(
+            "Telegram-доступ: whitelist включён; разрешённых пользователей=%d",
+            len(self._allowed_user_ids),
+        )
+
+    def _load_allowed_user_ids(self) -> set[str]:
+        raw = os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
+        allowed = {
+            item.strip()
+            for item in raw.split(",")
+            if item.strip()
+        }
+        if self.admin_chat_id:
+            allowed.add(self.admin_chat_id)
+        return allowed
+
+    def _is_allowed(self, chat_id: str) -> bool:
+        return str(chat_id).strip() in self._allowed_user_ids
+
+    def _access_denied(self, chat_id: str) -> None:
+        self._send(
+            chat_id,
+            "🔒 <b>Доступ ограничен.</b>\n\n"
+            "У вас нет разрешения на использование этого бота.\n\n"
+            "Если вы должны получить доступ, обратитесь к администратору.",
+        )
+
+    def _handle_message(self, message: dict) -> None:
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        if chat_id and not self._is_allowed(chat_id):
+            logger.warning(
+                "Telegram-доступ: отказ пользователю chat_id=%s",
+                chat_id,
+            )
+            self._access_denied(chat_id)
+            return
+        super()._handle_message(message)
+
+    def _handle_callback(self, callback: dict) -> None:
+        message = callback.get("message") or {}
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        if chat_id and not self._is_allowed(chat_id):
+            self._answer_callback(str(callback.get("id", "")))
+            self._access_denied(chat_id)
+            return
+        super()._handle_callback(callback)
 
     def _cmd_search(self, chat_id: str) -> None:
         with self._search_lock:
@@ -39,9 +87,6 @@ class MultiUserTelegramBot(TelegramBot):
                 return
 
             orchestrator = Orchestrator(self.settings)
-            # Уведомления этого конкретного поиска должны идти пользователю,
-            # который его запустил. Админский TELEGRAM_CHAT_ID при этом
-            # продолжает использоваться для служебного сообщения при старте.
             orchestrator.notifier.chat_id = chat_id
             self._user_orchestrators[chat_id] = orchestrator
             orchestrator.clear_stop_request()
