@@ -8,6 +8,9 @@ from datetime import datetime, timezone
 from src.storage.database import TenderDatabase
 
 
+SUPPORTED_PLATFORMS = ["eis", "b2b_center", "unipro", "rts_tender", "tmk"]
+
+
 @dataclass
 class TenderCriteria:
     min_price: float | None = None
@@ -30,15 +33,7 @@ class TenderCriteria:
 
 
 class CriteriaStore:
-    """Хранение критериев Telegram отдельно для каждого пользователя.
-
-    TelegramBot передаёт chat_id своим обработчикам, поэтому здесь мы
-    определяем активного пользователя по локальной переменной chat_id в
-    вызывающем стеке. Для CLI/scheduler, где chat_id отсутствует, используется
-    служебный пользователь ``default``. Это позволяет перейти от старой
-    глобальной записи к многопользовательской схеме без изменения рабочего
-    интерфейса бота и без изменения существующего кода запуска агента.
-    """
+    """Хранение критериев Telegram отдельно для каждого пользователя."""
 
     USERS_TABLE = "tender_settings_users"
     DEFAULT_USER_ID = "default"
@@ -71,21 +66,15 @@ class CriteriaStore:
                 """
             )
 
-            # Однократно переносим старую глобальную настройку id=1 в
-            # пользовательское хранилище default. Старую таблицу не удаляем:
-            # это безопасно для существующих баз и позволяет откатиться.
             old_exists = conn.execute(
                 """
-                SELECT 1
-                FROM sqlite_master
+                SELECT 1 FROM sqlite_master
                 WHERE type = 'table' AND name = 'tender_settings'
                 """
             ).fetchone()
 
             if old_exists:
-                old_row = conn.execute(
-                    "SELECT * FROM tender_settings WHERE id = 1"
-                ).fetchone()
+                old_row = conn.execute("SELECT * FROM tender_settings WHERE id = 1").fetchone()
                 if old_row is not None:
                     conn.execute(
                         f"""
@@ -103,25 +92,20 @@ class CriteriaStore:
                         """,
                         (
                             self.DEFAULT_USER_ID,
-                            old_row["min_price"],
-                            old_row["max_price"],
-                            old_row["advance_required"],
-                            old_row["min_advance_percent"],
-                            old_row["max_postpayment_days"],
-                            old_row["min_submission_days"],
+                            old_row["min_price"], old_row["max_price"],
+                            old_row["advance_required"], old_row["min_advance_percent"],
+                            old_row["max_postpayment_days"], old_row["min_submission_days"],
                             old_row["min_application_security_percent"],
                             old_row["max_application_security_percent"],
                             old_row["min_contract_security_percent"],
                             old_row["max_contract_security_percent"],
-                            old_row["min_ai_score"],
-                            old_row["keywords"],
-                            old_row["enabled_platforms"],
+                            old_row["min_ai_score"], old_row["keywords"],
+                            json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
                             old_row["updated_at"],
                         ),
                     )
 
     def _current_user_id(self) -> str:
-        """Возвращает chat_id пользователя текущего Telegram-вызова."""
         frame = inspect.currentframe()
         try:
             frame = frame.f_back if frame else None
@@ -139,18 +123,13 @@ class CriteriaStore:
     def _ensure_user(self, user_id: str) -> None:
         with self.db._connect() as conn:
             row = conn.execute(
-                f"SELECT 1 FROM {self.USERS_TABLE} WHERE user_id = ?",
-                (user_id,),
+                f"SELECT 1 FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)
             ).fetchone()
-
             if row is not None:
                 return
 
-            # Новый пользователь получает копию текущих настроек default.
-            # После этого изменения полностью независимы.
             source = conn.execute(
-                f"SELECT * FROM {self.USERS_TABLE} WHERE user_id = ?",
-                (self.DEFAULT_USER_ID,),
+                f"SELECT * FROM {self.USERS_TABLE} WHERE user_id = ?", (self.DEFAULT_USER_ID,)
             ).fetchone()
 
             if source is None:
@@ -162,11 +141,7 @@ class CriteriaStore:
                         min_ai_score, enabled_platforms, updated_at
                     ) VALUES (?, 7, 5, 70, ?, ?)
                     """,
-                    (
-                        user_id,
-                        json.dumps(["eis"], ensure_ascii=False),
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
+                    (user_id, json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
                 )
             else:
                 conn.execute(
@@ -184,20 +159,14 @@ class CriteriaStore:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        user_id,
-                        source["min_price"],
-                        source["max_price"],
-                        source["advance_required"],
-                        source["min_advance_percent"],
-                        source["max_postpayment_days"],
-                        source["min_submission_days"],
+                        user_id, source["min_price"], source["max_price"],
+                        source["advance_required"], source["min_advance_percent"],
+                        source["max_postpayment_days"], source["min_submission_days"],
                         source["min_application_security_percent"],
                         source["max_application_security_percent"],
                         source["min_contract_security_percent"],
-                        source["max_contract_security_percent"],
-                        source["min_ai_score"],
-                        source["keywords"],
-                        source["enabled_platforms"],
+                        source["max_contract_security_percent"], source["min_ai_score"],
+                        source["keywords"], source["enabled_platforms"] or json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
@@ -210,17 +179,11 @@ class CriteriaStore:
     def get(self) -> TenderCriteria:
         user_id = self._user_id_and_ensure()
         with self.db._connect() as conn:
-            row = conn.execute(
-                f"SELECT * FROM {self.USERS_TABLE} WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
-
+            row = conn.execute(f"SELECT * FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)).fetchone()
         if row is None:
             return TenderCriteria()
-
         return TenderCriteria(
-            min_price=row["min_price"],
-            max_price=row["max_price"],
+            min_price=row["min_price"], max_price=row["max_price"],
             advance_required=bool(row["advance_required"]),
             min_advance_percent=float(row["min_advance_percent"]),
             max_postpayment_days=row["max_postpayment_days"],
@@ -237,31 +200,21 @@ class CriteriaStore:
             "min_price", "max_price", "advance_required", "min_advance_percent",
             "max_postpayment_days", "min_submission_days",
             "min_application_security_percent", "max_application_security_percent",
-            "min_contract_security_percent", "max_contract_security_percent",
-            "min_ai_score",
+            "min_contract_security_percent", "max_contract_security_percent", "min_ai_score",
         }
         values = {key: value for key, value in values.items() if key in allowed}
         if not values:
             return
-
         user_id = self._user_id_and_ensure()
         values["updated_at"] = datetime.now(timezone.utc).isoformat()
         fields = ", ".join(f"{key} = ?" for key in values)
-
         with self.db._connect() as conn:
-            conn.execute(
-                f"UPDATE {self.USERS_TABLE} SET {fields} WHERE user_id = ?",
-                (*values.values(), user_id),
-            )
+            conn.execute(f"UPDATE {self.USERS_TABLE} SET {fields} WHERE user_id = ?", (*values.values(), user_id))
 
     def get_keywords(self) -> list[str] | None:
         user_id = self._user_id_and_ensure()
         with self.db._connect() as conn:
-            row = conn.execute(
-                f"SELECT keywords FROM {self.USERS_TABLE} WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
-
+            row = conn.execute(f"SELECT keywords FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)).fetchone()
         if row is None or not row["keywords"]:
             return None
         try:
@@ -274,49 +227,47 @@ class CriteriaStore:
 
     def set_keywords(self, keywords: list[str]) -> None:
         user_id = self._user_id_and_ensure()
-        clean = []
-        seen = set()
+        clean, seen = [], set()
         for keyword in keywords:
             value = str(keyword).strip()
             if value and value.lower() not in seen:
-                clean.append(value)
-                seen.add(value.lower())
+                clean.append(value); seen.add(value.lower())
         with self.db._connect() as conn:
             conn.execute(
-                f"""
-                UPDATE {self.USERS_TABLE}
-                SET keywords = ?, updated_at = ?
-                WHERE user_id = ?
-                """,
+                f"UPDATE {self.USERS_TABLE} SET keywords = ?, updated_at = ? WHERE user_id = ?",
                 (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
             )
 
     def get_enabled_platforms(self) -> list[str]:
         user_id = self._user_id_and_ensure()
         with self.db._connect() as conn:
-            row = conn.execute(
-                f"SELECT enabled_platforms FROM {self.USERS_TABLE} WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
+            row = conn.execute(f"SELECT enabled_platforms FROM {self.USERS_TABLE} WHERE user_id = ?", (user_id,)).fetchone()
         if row is None or not row["enabled_platforms"]:
-            return ["eis"]
+            return list(SUPPORTED_PLATFORMS)
         try:
             data = json.loads(row["enabled_platforms"])
             if isinstance(data, list):
-                return [str(x) for x in data]
+                clean = [str(x).strip() for x in data if str(x).strip() in SUPPORTED_PLATFORMS]
+                # Старые пользовательские записи создавались с единственной
+                # площадкой ЕИС. Теперь все пять collectors подключены, поэтому
+                # такая старая запись автоматически переводится на полный набор.
+                if clean == ["eis"]:
+                    clean = list(SUPPORTED_PLATFORMS)
+                    with self.db._connect() as write_conn:
+                        write_conn.execute(
+                            f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?",
+                            (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
+                        )
+                return clean or list(SUPPORTED_PLATFORMS)
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
-        return ["eis"]
+        return list(SUPPORTED_PLATFORMS)
 
     def set_enabled_platforms(self, platforms: list[str]) -> None:
         user_id = self._user_id_and_ensure()
-        clean = list(dict.fromkeys(str(x) for x in platforms))
+        clean = [x for x in dict.fromkeys(str(x).strip() for x in platforms) if x in SUPPORTED_PLATFORMS]
         with self.db._connect() as conn:
             conn.execute(
-                f"""
-                UPDATE {self.USERS_TABLE}
-                SET enabled_platforms = ?, updated_at = ?
-                WHERE user_id = ?
-                """,
+                f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?",
                 (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
             )
