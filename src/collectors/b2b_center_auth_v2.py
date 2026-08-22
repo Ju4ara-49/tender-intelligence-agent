@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from datetime import datetime
+from html import unescape
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from src.collectors.b2b_center import B2BCenterCollector
+from src.collectors.b2b_center import B2BCenterCollector, BASE_URL, SEARCH_URL
+from src.models.tender import Tender
 
 logger = logging.getLogger(__name__)
-BASE_URL = "https://www.b2b-center.ru"
 LOGIN_URL = f"{BASE_URL}/login.html"
 SUPPLIER_URL = f"{BASE_URL}/app/next/dashboard/supplier/?group=buy"
-SEARCH_URL = f"{BASE_URL}/market/"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STORAGE_STATE = PROJECT_ROOT / "data" / "b2b_center_storage.json"
 load_dotenv(PROJECT_ROOT / ".env")
@@ -58,7 +60,7 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
                 ok = self._supplier_workspace_available(page)
                 cookies = context.cookies() if ok else []
                 if ok and cookies:
-                    self._copy_cookies(context)
+                    self._copy_cookies(cookies)
                 result = ok and bool(cookies) and bool(self.session.cookies)
                 browser.close()
                 return result
@@ -101,7 +103,7 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
                         if cookies:
                             STORAGE_STATE.parent.mkdir(parents=True, exist_ok=True)
                             context.storage_state(path=str(STORAGE_STATE))
-                            self._copy_cookies(context)
+                            self._copy_cookies(cookies)
                             browser.close()
                             return bool(self.session.cookies)
                     page.wait_for_timeout(1000)
@@ -122,7 +124,10 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
             try:
                 page.locator("a.search-results-title[href]").first.wait_for(state="attached", timeout=15000)
             except Exception:
-                page.wait_for_timeout(5000)
+                try:
+                    page.locator("a[href*='tender-'], a[href*='tenders-']").first.wait_for(state="attached", timeout=10000)
+                except Exception:
+                    page.wait_for_timeout(5000)
             html = page.content()
             browser.close()
             return html
@@ -131,22 +136,73 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
         if not self.authenticated or not STORAGE_STATE.exists():
             return super()._load_search_page(keyword)
         try:
-            html = self._authenticated_search_html(keyword)
-            soup = BeautifulSoup(html, "lxml")
-            if soup.select_one("table.search-results") is None:
-                link = soup.select_one("a.search-results-title[href]")
-                if link is not None:
-                    table = link.find_parent("table")
-                    if table is not None:
-                        classes = table.get("class", [])
-                        if "search-results" not in classes:
-                            classes.append("search-results")
-                            table["class"] = classes
-                        html = str(soup)
-            return html
+            return self._authenticated_search_html(keyword)
         except Exception:
             logger.exception("B2B-Center: ошибка браузерного поиска по %s", keyword)
             return ""
+
+    def _parse_search_html(self, html: str, keyword: str, since: datetime | None = None) -> list[Tender]:
+        """Use the legacy parser when available, then fall back to modern result links."""
+        results = super()._parse_search_html(html, keyword, since)
+        if results:
+            return results
+
+        soup = BeautifulSoup(html or "", "lxml")
+        anchors = soup.select("a.search-results-title[href], a[href*='tender-'], a[href*='tenders-']")
+        seen: set[str] = set()
+        fallback: list[Tender] = []
+        for link in anchors:
+            href = unescape((link.get("href") or "").strip())
+            if not href:
+                continue
+            url = urljoin(BASE_URL, href)
+            external_id = self._extract_external_id(href, link.get_text(" ", strip=True))
+            if not external_id or external_id in seen:
+                continue
+            seen.add(external_id)
+
+            container = link
+            for _ in range(5):
+                parent = getattr(container, "parent", None)
+                if parent is None:
+                    break
+                container = parent
+                if container.name in {"tr", "li", "article"} or "result" in " ".join(container.get("class", [])):
+                    break
+
+            row_text = self._clean_text(container.get_text(" ", strip=True))
+            title_text = self._clean_text(link.get_text(" ", strip=True))
+            desc = link.select_one(".search-results-title-desc")
+            if desc is not None:
+                title_text = self._clean_text(desc.get_text(" ", strip=True))
+            title = self._clean_procedure_title(title_text, external_id)
+            if not title:
+                title = f"Тендер № {external_id}"
+
+            published = self._parse_date_text(row_text)
+            tender = Tender(
+                platform=self.platform,
+                external_id=str(external_id),
+                title=title[:1000],
+                url=url,
+                description=row_text[:10000],
+                price=self._extract_price(row_text),
+                currency="RUB",
+                published_at=published,
+                deadline=None,
+                end_date=None,
+                customer="",
+                region="",
+                raw_data={"keyword": keyword, "search_text": row_text[:10000], "search_href": href, "details_url": url},
+            )
+            if since is not None and published is not None and self._normalize_datetime(published) < self._normalize_datetime(since):
+                continue
+            self._tender_urls[str(external_id)] = url
+            self._tender_titles[str(external_id)] = title
+            fallback.append(tender)
+
+        logger.info("B2B-Center: fallback-парсер принял %s результатов", len(fallback))
+        return fallback
 
     @staticmethod
     def _supplier_workspace_available(page) -> bool:
@@ -158,6 +214,6 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
         except Exception:
             return False
 
-    def _copy_cookies(self, context) -> None:
-        for cookie in context.cookies():
+    def _copy_cookies(self, cookies) -> None:
+        for cookie in cookies:
             self.session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain"), path=cookie.get("path", "/"))
