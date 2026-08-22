@@ -67,9 +67,10 @@ class TelegramBot:
         self._search_threads: dict[str, threading.Thread] = {}
         self._search_orchestrators: dict[str, Orchestrator] = {}
 
-    def _call(self, method: str, **params) -> dict:
+    def _call(self, method: str, request_timeout: float = 10.0, **params) -> dict:
         url = TELEGRAM_API.format(token=self.bot_token, method=method)
-        with httpx.Client(timeout=40.0) as client:
+        timeout = httpx.Timeout(request_timeout, connect=5.0)
+        with httpx.Client(timeout=timeout) as client:
             response = client.post(url, json=params)
             response.raise_for_status()
             return response.json()
@@ -79,14 +80,14 @@ class TelegramBot:
             params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
             if reply_markup is not None:
                 params["reply_markup"] = reply_markup
-            return self._call("sendMessage", **params)
+            return self._call("sendMessage", request_timeout=10.0, **params)
         except httpx.HTTPError as exc:
             logger.error("Telegram-бот: ошибка отправки chat_id=%s: %s", chat_id, exc)
             return None
 
     def _answer_callback(self, callback_query_id: str) -> None:
         try:
-            self._call("answerCallbackQuery", callback_query_id=callback_query_id)
+            self._call("answerCallbackQuery", request_timeout=10.0, callback_query_id=callback_query_id)
         except httpx.HTTPError as exc:
             logger.error("Telegram-бот: ошибка callback: %s", exc)
 
@@ -125,7 +126,7 @@ class TelegramBot:
         params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
         if self._offset is not None:
             params["offset"] = self._offset
-        result = self._call("getUpdates", **params)
+        result = self._call("getUpdates", request_timeout=35.0, **params)
         for update in result.get("result", []):
             self._offset = update["update_id"] + 1
             if "callback_query" in update:
