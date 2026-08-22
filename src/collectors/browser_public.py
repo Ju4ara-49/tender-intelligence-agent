@@ -2,7 +2,7 @@
 
 The platforms expose their search UI through client-side JavaScript, so a
 normal requests parser is unreliable. These collectors use Playwright with
-short, bounded waits and conservative link parsing. They never bypass login,
+bounded waits and conservative link parsing. They never bypass login,
 CAPTCHA, or access controls.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
@@ -45,8 +45,15 @@ class _BrowserTenderCollector(BaseCollector):
                 browser = pw.chromium.launch(headless=True)
                 page = browser.new_page(locale="ru-RU")
                 page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                page.wait_for_timeout(1800)
                 self._perform_search(page, query)
-                page.wait_for_timeout(1200)
+                # JS-heavy portals can render the result grid after the initial
+                # navigation. Give the application a bounded second phase.
+                page.wait_for_timeout(2200)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
                 html = page.content()
                 browser.close()
         except PlaywrightTimeoutError as exc:
@@ -68,7 +75,11 @@ class _BrowserTenderCollector(BaseCollector):
                 browser = pw.chromium.launch(headless=True)
                 page = browser.new_page(locale="ru-RU")
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(1200)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
                 tender = self._parse_detail(page.content(), str(external_id), url)
                 browser.close()
                 return tender
@@ -84,6 +95,7 @@ class _BrowserTenderCollector(BaseCollector):
             "input[placeholder*='поиск' i]",
             "input[placeholder*='закуп' i]",
             "input[placeholder*='наимен' i]",
+            "input[placeholder*='ключев' i]",
         ]
         for selector in selectors:
             try:
@@ -94,16 +106,18 @@ class _BrowserTenderCollector(BaseCollector):
                     return
             except Exception:
                 continue
+
         # Some SPAs expose search through a visible button first.
         for text in self.SEARCH_HINTS:
             try:
                 button = page.get_by_text(text, exact=False).first
                 if button.count() and button.is_visible():
                     button.click()
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(700)
                     break
             except Exception:
                 continue
+
         for selector in selectors:
             try:
                 locator = page.locator(selector).first
@@ -118,20 +132,40 @@ class _BrowserTenderCollector(BaseCollector):
         soup = BeautifulSoup(html, "html.parser")
         results: list[Tender] = []
         seen: set[str] = set()
+        base_host = urlparse(self.BASE_URL).netloc.lower()
+
         for anchor in soup.find_all("a", href=True):
             href = urljoin(self.BASE_URL, str(anchor.get("href", "")).strip())
+            parsed = urlparse(href)
+            if parsed.netloc and parsed.netloc.lower() != base_host:
+                continue
+
             title = " ".join(anchor.stripped_strings)
             if not title or len(title) < 5:
                 continue
+
             low = href.lower()
-            if not any(hint in low for hint in self.LINK_HINTS):
+            # Do not require a particular URL shape: modern SPA portals often
+            # put procedure links behind hash routes or generic numeric paths.
+            if not any(hint in low for hint in self.LINK_HINTS) and not re.search(r"\d{6,}", href + " " + title):
                 continue
+
             external_id = self._extract_id(href, title)
             if not external_id or external_id in seen:
                 continue
+
             seen.add(external_id)
             self._urls[external_id] = href
-            results.append(Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=href, description=title, raw_data={"source": self.BASE_URL}))
+            results.append(
+                Tender(
+                    platform=self.platform,
+                    external_id=external_id,
+                    title=title[:1000],
+                    url=href,
+                    description=title,
+                    raw_data={"source": self.BASE_URL},
+                )
+            )
         return results
 
     def _parse_detail(self, html: str, external_id: str, url: str) -> Tender:
@@ -141,11 +175,24 @@ class _BrowserTenderCollector(BaseCollector):
         text = " ".join(soup.stripped_strings)
         price = self._extract_price(text)
         deadline = self._extract_date(text)
-        return Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=url, description=text[:10000], price=price, deadline=deadline, raw_data={"source": url})
+        return Tender(
+            platform=self.platform,
+            external_id=external_id,
+            title=title[:1000],
+            url=url,
+            description=text[:10000],
+            price=price,
+            deadline=deadline,
+            raw_data={"source": url},
+        )
 
     @staticmethod
     def _extract_id(href: str, title: str) -> str | None:
-        patterns = [r"(?:procedure|tender|purchase)[^0-9]{0,20}(\d{5,})", r"(?:/|#)(\d{6,})(?:/|$)", r"\b(\d{7,})\b"]
+        patterns = [
+            r"(?:procedure|tender|purchase)[^0-9]{0,30}(\d{5,})",
+            r"(?:/|#)(\d{6,})(?:/|$)",
+            r"\b(\d{7,})\b",
+        ]
         for source in (href, title):
             for pattern in patterns:
                 match = re.search(pattern, source, re.I)
@@ -155,7 +202,12 @@ class _BrowserTenderCollector(BaseCollector):
 
     @staticmethod
     def _extract_price(text: str) -> float | None:
-        for match in re.finditer(r"(?:цена|стоимость|НМЦ|начальн\w* цена)[^0-9]{0,40}([0-9][0-9\s]{2,}(?:[.,][0-9]{1,2})?)", text, re.I):
+        for match in re.finditer(
+            r"(?:цена|стоимость|НМЦ|начальн\w* цена)[^0-9]{0,40}"
+            r"([0-9][0-9\s]{2,}(?:[.,][0-9]{1,2})?)",
+            text,
+            re.I,
+        ):
             try:
                 return float(match.group(1).replace(" ", "").replace(",", "."))
             except ValueError:
@@ -164,7 +216,12 @@ class _BrowserTenderCollector(BaseCollector):
 
     @staticmethod
     def _extract_date(text: str) -> datetime | None:
-        match = re.search(r"(?:до|окончани\w*|срок[^0-9]{0,10})[^0-9]{0,30}(\d{1,2})[./](\d{1,2})[./](20\d{2})", text, re.I)
+        match = re.search(
+            r"(?:до|окончани\w*|срок[^0-9]{0,10})[^0-9]{0,30}"
+            r"(\d{1,2})[./](\d{1,2})[./](20\d{2})",
+            text,
+            re.I,
+        )
         if not match:
             return None
         try:
