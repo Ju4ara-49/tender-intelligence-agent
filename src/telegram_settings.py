@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from src.storage.database import TenderDatabase
 
 
-SUPPORTED_PLATFORMS = ["eis", "b2b_center", "unipro", "rts_tender", "tmk"]
+SUPPORTED_PLATFORMS = ["eis", "b2b_center", "unipro", "rts_tender", "tmk", "rosatom"]
 
 
 @dataclass
@@ -248,11 +248,11 @@ class CriteriaStore:
             data = json.loads(row["enabled_platforms"])
             if isinstance(data, list):
                 clean = [str(x).strip() for x in data if str(x).strip() in SUPPORTED_PLATFORMS]
-                # Старые пользовательские записи создавались с единственной
-                # площадкой ЕИС. Теперь все пять collectors подключены, поэтому
-                # такая старая запись автоматически переводится на полный набор.
-                if clean == ["eis"]:
-                    clean = list(SUPPORTED_PLATFORMS)
+                # Добавляем новые площадки в старые пользовательские настройки,
+                # не меняя уже сделанный пользователем явный выбор остальных.
+                known_before = {"eis", "b2b_center", "unipro", "rts_tender", "tmk"}
+                if clean and set(clean).issubset(known_before) and "rosatom" not in clean:
+                    clean.append("rosatom")
                     with self.db._connect() as write_conn:
                         write_conn.execute(
                             f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?",
