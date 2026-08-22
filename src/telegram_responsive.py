@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from src.telegram_bot import HELP_TEXT, PLATFORM_NAMES
@@ -19,6 +20,21 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
     def run_polling(self) -> None:
         if not self.bot_token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в .env — бот не может запуститься.")
+
+        # Telegram API must bypass any system/WinINET proxy configuration.
+        # httpx uses trust_env=True by default, and on some Windows setups
+        # this can result in TLS EOF errors while connecting to api.telegram.org.
+        no_proxy_hosts = ["api.telegram.org"]
+        existing = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+        hosts = [item.strip() for item in existing.split(",") if item.strip()]
+        for host in no_proxy_hosts:
+            if host not in hosts:
+                hosts.append(host)
+        no_proxy = ",".join(hosts)
+        os.environ["NO_PROXY"] = no_proxy
+        os.environ["no_proxy"] = no_proxy
+
+        logger.info("Telegram-бот: api.telegram.org добавлен в NO_PROXY")
         logger.info("Telegram-бот запущен. Открытый доступ; admin_chat_id=%s", self.admin_chat_id or "не задан")
         if self.admin_chat_id:
             self._send(self.admin_chat_id, "Бот запущен. Пользовательский доступ открыт.\n\n" + HELP_TEXT, self._keyboard())
