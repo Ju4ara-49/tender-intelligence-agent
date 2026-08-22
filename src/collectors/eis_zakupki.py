@@ -1,4 +1,4 @@
-﻿"""EIS / zakupki.gov.ru collector."""
+"""EIS / zakupki.gov.ru collector."""
 
 from __future__ import annotations
 
@@ -245,7 +245,6 @@ class EisZakupkiCollector(BaseCollector):
             params = {
                 "searchString": keyword,
                 "morphology": "on",
-                "search-filter": "Дате размещения",
                 "pageNumber": page,
                 "sortDirection": "false",
                 "recordsPerPage": f"_{self.records_per_page}",
@@ -1625,14 +1624,10 @@ class EisZakupkiCollector(BaseCollector):
 
         text = str(text or "")
 
-        # В карточке деталей ЕИС есть служебная шапка,
-        # содержащая слова "Регион", "Личный кабинет" и т.п.
-        # Поэтому сначала ищем явное значение региона.
-
         patterns = [
             r"(?:^|\s)Регион\s*[:\-]\s*"
             r"(Вологодская\s+обл\.?|"
-            r"[А-ЯЁ][А-ЯЁа-яё\-]+(?:ская|ский|ское|ская\s+обл\.?)"
+            r"[А-ЯЁ][А-ЯЁа-яё\-]+(?:ская|ский|ское)"
             r"(?:\s+обл\.?)?)"
             r"(?:\s|$)",
 
@@ -1677,18 +1672,10 @@ class EisZakupkiCollector(BaseCollector):
 
             for marker in stop_markers:
                 if marker in value:
-                    value = value.split(
-                        marker,
-                        1,
-                    )[0]
+                    value = value.split(marker, 1)[0]
 
-            value = (
-                EisZakupkiCollector._clean_text(
-                    value
-                )
-            )
+            value = EisZakupkiCollector._clean_text(value)
 
-            # Отбрасываем служебный мусор ЕИС.
             if not value:
                 continue
 
@@ -1699,6 +1686,37 @@ class EisZakupkiCollector(BaseCollector):
                 continue
 
             return value[:500]
+
+        location_patterns = [
+            r"Место\s+нахождения\s*[:\-]?\s*"
+            r".{0,100}?"
+            r"(?:\d{5,6}\s*,?\s*)?"
+            r"(?:г\.?\s*)"
+            r"([А-ЯЁ][А-ЯЁа-яё\-]+)",
+
+            r"Почтовый\s+адрес\s*[:\-]?\s*"
+            r".{0,100}?"
+            r"(?:\d{5,6}\s*,?\s*)?"
+            r"(?:г\.?\s*)"
+            r"([А-ЯЁ][А-ЯЁа-яё\-]+)",
+        ]
+
+        for pattern in location_patterns:
+            match = re.search(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            if not match:
+                continue
+
+            value = EisZakupkiCollector._clean_text(
+                match.group(1)
+            )
+
+            if value:
+                return value[:200]
 
         return ""
 
@@ -2139,17 +2157,81 @@ class EisZakupkiCollector(BaseCollector):
         url: str,
         params: dict | None = None,
     ) -> requests.Response:
+        """Выполнить GET-запрос к ЕИС с повтором временных ошибок."""
 
-        response = self.session.get(
-            url,
-            params=params,
-            timeout=self.timeout,
+        max_attempts = 3
+
+        retry_statuses = {
+            429,
+            500,
+            502,
+            503,
+            504,
+        }
+
+        for attempt in range(
+            1,
+            max_attempts + 1,
+        ):
+            try:
+                response = self.session.get(
+                    url,
+                    params=params,
+                    timeout=self.timeout,
+                )
+
+                if response.status_code in retry_statuses:
+                    if attempt < max_attempts:
+                        delay = 2 * attempt
+
+                        logger.warning(
+                            "ЕИС: HTTP %s | попытка %d/%d | "
+                            "повтор через %d сек.",
+                            response.status_code,
+                            attempt,
+                            max_attempts,
+                            delay,
+                        )
+
+                        time.sleep(delay)
+                        continue
+
+                response.raise_for_status()
+
+                return response
+
+            except requests.RequestException as exc:
+                status_code = getattr(
+                    exc.response,
+                    "status_code",
+                    None,
+                )
+
+                if (
+                    status_code in retry_statuses
+                    and attempt < max_attempts
+                ):
+                    delay = 2 * attempt
+
+                    logger.warning(
+                        "ЕИС: временная HTTP ошибка %s | "
+                        "попытка %d/%d | повтор через %d сек.: %s",
+                        status_code,
+                        attempt,
+                        max_attempts,
+                        delay,
+                        exc,
+                    )
+
+                    time.sleep(delay)
+                    continue
+
+                raise
+
+        raise RuntimeError(
+            f"ЕИС: не удалось получить страницу после "
+            f"{max_attempts} попыток: {url}"
         )
-
-        response.raise_for_status()
-
-        return response
-
     # ==================================================================
     # UTILS
     # ==================================================================
@@ -2184,7 +2266,3 @@ class EisZakupkiCollector(BaseCollector):
         )
 
         return value.strip()
-
-
-
-
