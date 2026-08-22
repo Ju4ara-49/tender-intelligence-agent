@@ -35,6 +35,10 @@ collectors:
     enabled: true
     timeout_seconds: 30
     max_results: 100
+  rosatom:
+    enabled: true
+    timeout_seconds: 45
+    max_results: 100
 
 filters:
   min_text_length: 10
