@@ -20,6 +20,7 @@ data/*.db
 data/*.sqlite
 data/*.db-*
 data/search_counter.txt
+data/b2b_center_storage.json
 logs/*.log
 output/*
 !output/.gitkeep
