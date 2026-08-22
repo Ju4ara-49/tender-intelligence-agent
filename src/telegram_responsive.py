@@ -65,5 +65,5 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
         lines = ["<b>Площадки поиска</b>", "", "Нажмите на площадку, чтобы включить или выключить её.", ""]
         for platform, name in PLATFORM_NAMES.items():
             lines.append(f"{'☑' if platform in enabled else '☐'} {name}")
-        lines += ["", "<i>Подключены: ЕИС, B2B-Center, UniPro, РТС-тендер и ТМК.</i>", "<i>B2B-Center использует сохранённую авторизованную сессию.</i>"]
+        lines += ["", "<i>Подключены: ЕИС, B2B-Center, UniPro, РТС-тендер, ТМК и Росатом.</i>", "<i>B2B-Center использует сохранённую авторизованную сессию.</i>"]
         self._send(chat_id, "\n".join(lines), self._platform_keyboard(chat_id))
