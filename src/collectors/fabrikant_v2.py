@@ -1,4 +1,10 @@
-"""Robust public Fabrikant collector."""
+"""Robust public Fabrikant collector.
+
+The public Fabrikant registry exposes the main 44-FZ fields directly in the
+result table: procedure number, name, NMCC, organizer, customer, publication
+date and request end date. Region is not a registry column, so it is enriched
+from the procedure detail page when available.
+"""
 from __future__ import annotations
 
 import logging
@@ -36,7 +42,7 @@ class FabrikantV2Collector(_BrowserTenderCollector):
                     if since is not None and tender.published_at is not None:
                         published = tender.published_at
                         if published.tzinfo is None:
-                            published = published.astimezone()
+                            published = published.replace(tzinfo=since.tzinfo)
                         if published < since:
                             continue
                     merged[tender.unique_key] = tender
@@ -77,6 +83,27 @@ class FabrikantV2Collector(_BrowserTenderCollector):
                         return candidate
         return ""
 
+    @classmethod
+    def _find_registry_header(cls, table) -> tuple[list[str], object] | None:
+        """Find the actual Fabrikant registry header, not a nested/layout table."""
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"], recursive=False)
+            headers = [cls._norm(" ".join(c.stripped_strings)) for c in cells]
+            lowered = {x.lower() for x in headers}
+            if "№ извещения" in lowered and "наименование" in lowered and "заказчик" in lowered:
+                return headers, row
+        return None
+
+    @classmethod
+    def _clean_registry_title(cls, value: str) -> str:
+        value = cls._norm(value)
+        # Fabrikant appends badges/markers such as "СМП СОНО" or "1875" to
+        # the visible name. They are not part of the procurement subject.
+        value = re.sub(r"\s*(?:СМП\s+СОНО|СМП|СОНО)\s*$", "", value, flags=re.I)
+        value = re.sub(r"\s+v\s*=\s*\?\s*1875\s*$", "", value, flags=re.I)
+        value = re.sub(r"\s+1875\s*$", "", value)
+        return value.strip()
+
     def _parse_results(self, html: str) -> list[Tender]:
         soup = BeautifulSoup(html, "html.parser")
         results: list[Tender] = []
@@ -84,18 +111,15 @@ class FabrikantV2Collector(_BrowserTenderCollector):
         base_host = urlparse(self.BASE_URL).netloc.lower()
 
         for table in soup.find_all("table"):
-            header_row = table.find("tr")
-            if not header_row:
+            header_info = self._find_registry_header(table)
+            if not header_info:
                 continue
-            header_cells = header_row.find_all(["th", "td"], recursive=False)
-            headers = [self._norm(" ".join(c.stripped_strings)) for c in header_cells]
-            if not headers:
-                continue
+            headers, _ = header_info
 
             idx_title = self._column_index(headers, "Наименование", "Предмет закупки", "Наименование закупки", "Объект закупки")
             idx_price = self._column_index(headers, "НМЦ", "Начальная (максимальная) цена", "Начальная цена", "Цена")
             idx_customer = self._column_index(headers, "Заказчик", "Наименование заказчика", "Заказчик / Организатор")
-            idx_region = self._column_index(headers, "Регион", "Регион заказчика", "Регион поставки", "Место поставки", "Место нахождения")
+            idx_organizer = self._column_index(headers, "Организатор")
             idx_published = self._column_index(headers, "Дата публикации", "Дата размещения", "Дата размещено", "Размещено", "Дата начала")
             idx_deadline = self._column_index(headers, "Завершение подачи", "Окончание подачи", "Срок подачи", "Срок подачи заявок", "Окончание приема заявок", "Дата окончания приема заявок", "Дата окончания подачи заявок")
 
@@ -113,9 +137,9 @@ class FabrikantV2Collector(_BrowserTenderCollector):
                     continue
 
                 values = [self._norm(" ".join(c.stripped_strings)) for c in cells]
-                title = self._cell(values, idx_title) or anchor_title
+                title = self._clean_registry_title(self._cell(values, idx_title) or anchor_title)
+                organizer = self._cell(values, idx_organizer)
                 customer = self._cell(values, idx_customer) or self._row_value_by_label(values, ("Заказчик", "Наименование заказчика"))
-                region = self._cell(values, idx_region) or self._row_value_by_label(values, ("Регион", "Регион заказчика", "Регион поставки", "Место поставки", "Место нахождения"))
                 published_raw = self._cell(values, idx_published) or self._row_value_by_label(values, ("Дата публикации", "Дата размещения", "Размещено", "Дата начала"))
                 deadline_raw = self._cell(values, idx_deadline) or self._row_value_by_label(values, ("Завершение подачи", "Окончание подачи", "Срок подачи", "Срок подачи заявок", "Окончание приема заявок", "Дата окончания приема заявок", "Дата окончания подачи заявок"))
                 published = self._parse_datetime(published_raw)
@@ -124,6 +148,10 @@ class FabrikantV2Collector(_BrowserTenderCollector):
 
                 seen.add(external_id)
                 self._urls[external_id] = href
+                logger.debug(
+                    "fabrikant: registry row %s | title=%s | price=%s | organizer=%s | customer=%s | published=%s | deadline=%s",
+                    external_id, bool(title), bool(price), bool(organizer), bool(customer), published, deadline,
+                )
                 results.append(Tender(
                     platform=self.platform,
                     external_id=external_id,
@@ -134,14 +162,21 @@ class FabrikantV2Collector(_BrowserTenderCollector):
                     deadline=deadline,
                     published_at=published,
                     start_date=published,
-                    region=region,
                     customer=customer,
                     raw_data={
                         "source": self.BASE_URL,
                         "search_row": {
                             "headers": headers,
                             "values": values,
-                            "mapping": {"title": idx_title, "price": idx_price, "customer": idx_customer, "region": idx_region, "published": idx_published, "deadline": idx_deadline},
+                            "mapping": {
+                                "title": idx_title,
+                                "price": idx_price,
+                                "organizer": idx_organizer,
+                                "customer": idx_customer,
+                                "published": idx_published,
+                                "deadline": idx_deadline,
+                            },
+                            "organizer": organizer,
                             "published_raw": published_raw,
                             "deadline_raw": deadline_raw,
                         },
@@ -151,11 +186,12 @@ class FabrikantV2Collector(_BrowserTenderCollector):
         if results:
             return results
 
+        # Card/div fallback for alternative Fabrikant layouts.
         for anchor in soup.find_all("a", href=True):
             href = urljoin(self.BASE_URL, str(anchor.get("href", "")).strip())
             if urlparse(href).netloc.lower() != base_host or "/procedure/" not in href.lower():
                 continue
-            title = self._norm(" ".join(anchor.stripped_strings))
+            title = self._clean_registry_title(" ".join(anchor.stripped_strings))
             external_id = self._extract_id(href, title)
             if not title or len(title) < 5 or not external_id or external_id in seen:
                 continue
@@ -289,16 +325,5 @@ class FabrikantV2Collector(_BrowserTenderCollector):
         node = soup.find("h1") or soup.find("title")
         title = " ".join(node.stripped_strings) if node else ""
         title = re.sub(r"\s+", " ", title).strip()
-        if not title or re.match(rf"^сведения\s+о\s+закупке\s+{re.escape(external_id)}$", title, re.I):
-            return f"Процедура {external_id}"
-        return title
-
-    @staticmethod
-    def _extract_id(href: str, title: str) -> str | None:
-        patterns = [r"(?:procedure|tender|purchase)[^0-9]{0,30}(\d{5,})", r"(?:/|#)l(\d{6,})(?:[-/]|$)", r"(?:/|#)(\d{6,})(?:/|$)", r"\b(\d{7,})\b"]
-        for source in (href, title):
-            for pattern in patterns:
-                match = re.search(pattern, source, re.I)
-                if match:
-                    return match.group(1)
-        return None
+        title = re.sub(r"\s*[-|]\s*(?:Фабрикант|Fabrikant).*$", "", title, flags=re.I)
+        return title or external_id
