@@ -8,7 +8,7 @@ from src.collectors.base import BaseCollector
 from src.collectors.b2b_center_auth_v2 import AuthenticatedB2BCenterCollector
 from src.collectors.browser_public import RtsTenderCollector, TmkCollector
 from src.collectors.eis_zakupki import EisZakupkiCollector
-from src.collectors.fabrikant_v2 import FabrikantV2Collector
+from src.collectors.fabrikant_v3 import FabrikantV3Collector
 from src.collectors.rosatom import RosatomCollector
 
 
@@ -16,7 +16,7 @@ from src.collectors.rosatom import RosatomCollector
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
     EisZakupkiCollector,
     AuthenticatedB2BCenterCollector,
-    FabrikantV2Collector,
+    FabrikantV3Collector,
     RtsTenderCollector,
     TmkCollector,
     RosatomCollector,
