@@ -1,8 +1,8 @@
-"""Интерактивный Telegram-бот Tender Intelligence Agent.
+﻿"""Интерактивный Telegram-бот Tender Intelligence Agent.
 
-Доступ к боту открыт для пользователей Telegram. TELEGRAM_CHAT_ID
-используется только как идентификатор администратора/получателя служебных
-уведомлений и больше не является белым списком пользователей.
+Доступ открыт для пользователей Telegram. Настройки и запущенные поиски
+изолированы по chat_id пользователя. TELEGRAM_CHAT_ID используется только
+для административного уведомления о запуске бота.
 """
 from __future__ import annotations
 
@@ -39,9 +39,9 @@ HELP_TEXT = (
     "/start — открыть меню\n"
     "/search — запустить поиск\n"
     "/settings — показать критерии\n"
-    "/стоп — остановить поиск\n"
+    "/стоп — остановить свой поиск\n"
     "/help — эта справка\n\n"
-    "Ключевые слова и площадки можно настроить отдельно."
+    "У каждого пользователя свои ключевые слова, фильтры и площадки."
 )
 
 PLATFORM_NAMES = {
@@ -54,7 +54,7 @@ PLATFORM_NAMES = {
 
 
 class TelegramBot:
-    """Long-polling Telegram-бот с открытым пользовательским доступом."""
+    """Long-polling Telegram-бот с многопользовательским режимом."""
 
     def __init__(self, settings: AppSettings, orchestrator: Orchestrator) -> None:
         self.settings = settings
@@ -64,7 +64,8 @@ class TelegramBot:
         self.admin_chat_id = str(settings.telegram_chat_id).strip()
         self._offset: int | None = None
         self._waiting_for: dict[str, str] = {}
-        self._search_thread: threading.Thread | None = None
+        self._search_threads: dict[str, threading.Thread] = {}
+        self._search_orchestrators: dict[str, Orchestrator] = {}
 
     def _call(self, method: str, **params) -> dict:
         url = TELEGRAM_API.format(token=self.bot_token, method=method)
@@ -107,16 +108,9 @@ class TelegramBot:
     def run_polling(self) -> None:
         if not self.bot_token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в .env — бот не может запуститься.")
-        logger.info(
-            "Telegram-бот запущен. Пользовательский доступ открыт; admin_chat_id=%s",
-            self.admin_chat_id or "не задан",
-        )
+        logger.info("Telegram-бот запущен. Открытый доступ; admin_chat_id=%s", self.admin_chat_id or "не задан")
         if self.admin_chat_id:
-            self._send(
-                self.admin_chat_id,
-                "Бот запущен. Пользовательский доступ открыт.\n\n" + HELP_TEXT,
-                reply_markup=self._keyboard(),
-            )
+            self._send(self.admin_chat_id, "Бот запущен. Пользовательский доступ открыт.\n\n" + HELP_TEXT, self._keyboard())
         while True:
             try:
                 self._poll_once()
@@ -136,10 +130,8 @@ class TelegramBot:
             self._offset = update["update_id"] + 1
             if "callback_query" in update:
                 self._handle_callback(update["callback_query"])
-                continue
-            message = update.get("message")
-            if message:
-                self._handle_message(message)
+            elif update.get("message"):
+                self._handle_message(update["message"])
 
     def _handle_callback(self, callback: dict) -> None:
         callback_id = str(callback.get("id", ""))
@@ -157,7 +149,7 @@ class TelegramBot:
             if data.startswith("platform:"):
                 self._toggle_platform(chat_id, data.split(":", 1)[1])
             elif data == "keywords:clear":
-                self.criteria_store.set_keywords([])
+                self._call_user(chat_id, self.criteria_store.set_keywords, [])
                 self._answer_callback(callback_id)
                 self._send(chat_id, "Ключевые слова очищены.", self._keyboard())
                 return
@@ -170,8 +162,16 @@ class TelegramBot:
             logger.exception("Telegram-бот: ошибка callback=%s", data)
             self._answer_callback(callback_id)
 
-    def _platform_keyboard(self) -> dict:
-        enabled = set(self.criteria_store.get_enabled_platforms())
+    @staticmethod
+    def _criteria_call(chat_id: str, func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    def _call_user(self, chat_id: str, func, *args, **kwargs):
+        # CriteriaStore определяет пользователя по chat_id в стеке вызовов.
+        return self._criteria_call(chat_id, func, *args, **kwargs)
+
+    def _platform_keyboard(self, chat_id: str) -> dict:
+        enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
         rows = []
         for platform, name in PLATFORM_NAMES.items():
             mark = "☑" if platform in enabled else "☐"
@@ -180,17 +180,17 @@ class TelegramBot:
         return {"inline_keyboard": rows}
 
     def _show_platforms(self, chat_id: str) -> None:
-        enabled = set(self.criteria_store.get_enabled_platforms())
+        enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
         lines = ["<b>Площадки поиска</b>", "", "Нажмите на площадку, чтобы включить или выключить её.", ""]
         for platform, name in PLATFORM_NAMES.items():
             lines.append(f"{'☑' if platform in enabled else '☐'} {name}")
         lines += ["", "<i>Сейчас реально подключена только ЕИС.</i>", "<i>Остальные площадки пока можно настраивать, но поиск по ним ещё не выполняется.</i>"]
-        self._send(chat_id, "\n".join(lines), self._platform_keyboard())
+        self._send(chat_id, "\n".join(lines), self._platform_keyboard(chat_id))
 
     def _toggle_platform(self, chat_id: str, platform: str) -> None:
         if platform not in PLATFORM_NAMES:
             return
-        current = set(self.criteria_store.get_enabled_platforms())
+        current = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
         if platform in current:
             current.remove(platform)
         else:
@@ -198,11 +198,11 @@ class TelegramBot:
         if platform == "eis" and "eis" not in current:
             current.add("eis")
             self._send(chat_id, "ЕИС пока нельзя отключить: это единственная подключённая к поиску площадка.", self._keyboard())
-        self.criteria_store.set_enabled_platforms(list(current))
+        self._call_user(chat_id, self.criteria_store.set_enabled_platforms, list(current))
         self._show_platforms(chat_id)
 
     def _show_keywords(self, chat_id: str) -> None:
-        keywords = self.criteria_store.get_keywords()
+        keywords = self._call_user(chat_id, self.criteria_store.get_keywords)
         if keywords:
             text = "<b>Ключевые слова</b>\n\n" + "\n".join(f"{i}. {v}" for i, v in enumerate(keywords, 1))
         else:
@@ -263,7 +263,7 @@ class TelegramBot:
             if not values:
                 self._send(chat_id, "Введите хотя бы одно ключевое слово через запятую.", self._keyboard())
                 return True
-            self.criteria_store.set_keywords(values)
+            self._call_user(chat_id, self.criteria_store.set_keywords, values)
             self._waiting_for.pop(chat_id, None)
             self._send(chat_id, "<b>Ключевые слова сохранены.</b>\n\n" + "\n".join(f"• {x}" for x in values), self._keyboard())
             return True
@@ -271,16 +271,13 @@ class TelegramBot:
         if ":" in raw:
             raw = raw.split(":", 1)[1].strip()
         try:
-            if field in {"min_price", "max_price"}:
-                value = float(raw.replace(" ", "").replace(",", "."))
-            else:
-                value = int(raw)
+            value = float(raw.replace(" ", "").replace(",", ".")) if field in {"min_price", "max_price"} else int(raw)
             if value < 0:
                 raise ValueError
         except ValueError:
             self._send(chat_id, "Некорректное значение. Введите число ещё раз.", self._keyboard())
             return True
-        self.criteria_store.update(**{field: value})
+        self._call_user(chat_id, self.criteria_store.update, **{field: value})
         self._waiting_for.pop(chat_id, None)
         labels = {"min_price": "Цена от", "max_price": "Цена до", "min_ai_score": "Балл", "min_submission_days": "Срок"}
         display = int(value) if isinstance(value, float) and value.is_integer() else value
@@ -288,72 +285,91 @@ class TelegramBot:
         return True
 
     def _cmd_settings(self, chat_id: str) -> None:
-        c = self.criteria_store.get()
-        keywords = self.criteria_store.get_keywords()
-        platforms = self.criteria_store.get_enabled_platforms()
+        c = self._call_user(chat_id, self.criteria_store.get)
+        keywords = self._call_user(chat_id, self.criteria_store.get_keywords)
+        platforms = self._call_user(chat_id, self.criteria_store.get_enabled_platforms)
         def fmt(v):
             if v is None:
                 return "не задано"
             return f"{int(v):,}".replace(",", " ") if float(v).is_integer() else str(v)
         keywords_text = ", ".join(keywords) if keywords else "из config/keywords.yaml"
         names = ", ".join(PLATFORM_NAMES.get(p, p) for p in platforms)
-        text = ("<b>Текущие критерии поиска</b>\n\n"
-                f"Цена от: {fmt(c.min_price)}\nЦена до: {fmt(c.max_price)}\n"
-                f"Балл: {c.min_ai_score}\nСрок: {c.min_submission_days} дн.\n"
-                f"Ключевые слова: {keywords_text}\nПлощадки: {names}\n\n"
-                "Измените нужный параметр кнопками ниже.")
+        text = (
+            "<b>Текущие критерии поиска</b>\n\n"
+            f"Цена от: {fmt(c.min_price)}\nЦена до: {fmt(c.max_price)}\n"
+            f"Балл: {c.min_ai_score}\nСрок: {c.min_submission_days} дн.\n"
+            f"Ключевые слова: {keywords_text}\nПлощадки: {names}\n\n"
+            "Измените нужный параметр кнопками ниже."
+        )
         self._send(chat_id, text, self._keyboard())
 
     def _cmd_reset(self, chat_id: str) -> None:
-        self.criteria_store.update(min_price=None, max_price=None, min_ai_score=70, min_submission_days=7)
-        self.criteria_store.set_keywords([])
-        self.criteria_store.set_enabled_platforms(["eis"])
+        self._call_user(chat_id, self.criteria_store.update, min_price=None, max_price=None, min_ai_score=70, min_submission_days=7)
+        self._call_user(chat_id, self.criteria_store.set_keywords, [])
+        self._call_user(chat_id, self.criteria_store.set_enabled_platforms, ["eis"])
         self._waiting_for.pop(chat_id, None)
         self._send(chat_id, "<b>Критерии поиска сброшены.</b>\n\nЦена от: не задано\nЦена до: не задано\nБалл: 70\nСрок: 7 дн.\nКлючевые слова: из config/keywords.yaml\nПлощадки: ЕИС", self._keyboard())
 
     def _cmd_search(self, chat_id: str) -> None:
-        if self._search_thread is not None and self._search_thread.is_alive():
-            self._send(chat_id, "Поиск уже выполняется.\n\nЕсли нужно остановить его — нажмите «Стоп».", self._keyboard())
+        thread = self._search_threads.get(chat_id)
+        if thread is not None and thread.is_alive():
+            self._send(chat_id, "Ваш поиск уже выполняется.\n\nЕсли нужно остановить его — нажмите «Стоп».", self._keyboard())
             return
         self._send(chat_id, "Запускаю новый поиск тендеров.\n\nПоиск выполняется в фоне.", self._keyboard())
-        self.orchestrator.clear_stop_request()
-        self._search_thread = threading.Thread(target=self._run_search, args=(chat_id,), daemon=True, name="telegram-search")
-        self._search_thread.start()
+        search_orchestrator = Orchestrator(self.settings)
+        search_orchestrator.notifier.chat_id = chat_id
+        self._search_orchestrators[chat_id] = search_orchestrator
+        thread = threading.Thread(target=self._run_search, args=(chat_id, search_orchestrator), daemon=True, name=f"telegram-search-{chat_id}")
+        self._search_threads[chat_id] = thread
+        thread.start()
 
-    def _run_search(self, chat_id: str) -> None:
+    def _run_search(self, chat_id: str, search_orchestrator: Orchestrator) -> None:
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.\n\n⏳ Пожалуйста, подождите...", self._keyboard())
         try:
-            stats = self.orchestrator.run_cycle()
+            stats = search_orchestrator.run_cycle()
             elapsed = int(time.monotonic() - started_at)
             elapsed_text = f"{elapsed // 60} мин. {elapsed % 60:02d} сек." if elapsed >= 60 else f"{elapsed} сек."
-            state = "остановлен" if self.orchestrator.stop_requested else "завершён"
-            text = (f"{'⛔' if self.orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\n"
-                    f"Время работы: {elapsed_text}\n\nНайдено на площадках: {stats['found']}\n"
-                    f"Прошло фильтр по ключевым словам: {stats['filtered']}\nНовых тендеров: {stats['new']}\n"
-                    f"Проанализировано AI: {stats['analyzed']}\nИсключено по критериям: {stats['excluded_by_criteria']}\n"
-                    f"Отправлено уведомлений: {stats['notified']}\nПропущено дублей: {stats['skipped_duplicate']}\n\n"
-                    "📊 <b>Результат сохранён в Excel.</b>")
+            state = "остановлен" if search_orchestrator.stop_requested else "завершён"
+            text = (
+                f"{'⛔' if search_orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\n"
+                f"Время работы: {elapsed_text}\n\n"
+                f"Найдено на площадках: {stats['found']}\n"
+                f"Прошло фильтр по ключевым словам: {stats['filtered']}\n"
+                f"Новых тендеров: {stats['new']}\n"
+                f"Проанализировано AI: {stats['analyzed']}\n"
+                f"Исключено по критериям: {stats['excluded_by_criteria']}\n"
+                f"Отправлено уведомлений: {stats['notified']}\n"
+                f"Пропущено дублей: {stats['skipped_duplicate']}\n\n"
+                "📊 <b>Результат сохранён в Excel.</b>"
+            )
             self._send(chat_id, text, self._keyboard())
         except Exception:
-            logger.exception("Telegram-бот: ошибка выполнения поиска")
+            logger.exception("Telegram-бот: ошибка выполнения поиска для chat_id=%s", chat_id)
             self._send(chat_id, "❌ <b>Ошибка поиска.</b>\n\nПодробности находятся в logs/agent.log.", self._keyboard())
+        finally:
+            self._search_threads.pop(chat_id, None)
+            self._search_orchestrators.pop(chat_id, None)
 
     def _cmd_stop(self, chat_id: str) -> None:
-        if self._search_thread is None or not self._search_thread.is_alive():
-            self._send(chat_id, "Сейчас поиск не выполняется.", self._keyboard())
+        thread = self._search_threads.get(chat_id)
+        search_orchestrator = self._search_orchestrators.get(chat_id)
+        if thread is None or not thread.is_alive() or search_orchestrator is None:
+            self._send(chat_id, "Сейчас ваш поиск не выполняется.", self._keyboard())
             return
-        self.orchestrator.request_stop()
-        self._send(chat_id, "Получена команда остановки. Текущий этап завершится, после чего поиск будет остановлен.", self._keyboard())
+        search_orchestrator.request_stop()
+        self._send(chat_id, "Получена команда остановки вашего поиска. Текущий этап завершится, после чего поиск будет остановлен.", self._keyboard())
 
     def _cmd_help(self, chat_id: str) -> None:
         self._send(chat_id, HELP_TEXT, self._keyboard())
 
     def _cmd_status(self, chat_id: str) -> None:
         db = self.orchestrator.db
-        text = ("<b>Статус агента</b>\n\n"
-                f"Тендеров в базе: {db.count_tenders()}\n"
-                f"Отправлено уведомлений всего: {db.count_notifications()}\n"
-                f"AI: {self.settings.ai_model} ({self.settings.ai_provider})\n"
-                f"Telegram: {'настроен' if self.settings.telegram_bot_token else 'dry-run'}")
+        text = (
+            "<b>Статус агента</b>\n\n"
+            f"Тендеров в базе: {db.count_tenders()}\n"
+            f"Отправлено уведомлений всего: {db.count_notifications()}\n"
+            f"AI: {self.settings.ai_model} ({self.settings.ai_provider})\n"
+            f"Telegram: {'настроен' if self.settings.telegram_bot_token else 'dry-run'}"
+        )
         self._send(chat_id, text, self._keyboard())
