@@ -1,4 +1,4 @@
-﻿"""Реестр сборщиков — точка регистрации новых площадок."""
+"""Реестр сборщиков — точка регистрации новых площадок."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Type
 from src.collectors.base import BaseCollector
 from src.collectors.b2b_center_auth_v2 import AuthenticatedB2BCenterCollector
 from src.collectors.eis_zakupki import EisZakupkiCollector
+from src.collectors.unipro import UniproCollector
 
 
 # Чтобы добавить новую площадку —
@@ -14,6 +15,7 @@ from src.collectors.eis_zakupki import EisZakupkiCollector
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
     EisZakupkiCollector,
     AuthenticatedB2BCenterCollector,
+    UniproCollector,
 ]
 
 
