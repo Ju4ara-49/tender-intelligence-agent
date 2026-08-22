@@ -1,4 +1,4 @@
-﻿"""Экспорт результатов тендерного поиска в Excel."""
+"""Экспорт результатов тендерного поиска в Excel."""
 
 from __future__ import annotations
 
@@ -47,7 +47,8 @@ def export_tenders_to_excel(
                     a.relevance_score,
                     a.summary,
                     a.recommendation,
-                    a.risks,                    a.deadline_note,
+                    a.risks,
+                    a.deadline_note,
                     a.is_stub,
                     a.analyzed_at
 
@@ -73,9 +74,9 @@ def export_tenders_to_excel(
     ws = wb.active
     ws.title = "Тендеры"
 
+    # Не выводим служебные поля поиска и статус.
+    # W/X/Y из старой версии Excel также не формируются.
     headers = [
-        "№ поиска",
-        "Дата поиска",
         "Площадка",
         "Номер закупки",
         "Наименование",
@@ -88,15 +89,13 @@ def export_tenders_to_excel(
         "Осталось дней до подачи",
         "Закон",
         "Способ закупки",
-        "Статус",
         "AI score",
         "Рекомендация",
         "Краткое резюме",
         "Риски",
-        "Цена контракта",
+        "Начальная цена",
         "Комментарий по срокам",
         "Ссылка",
-
     ]
 
     ws.append(headers)
@@ -155,11 +154,6 @@ def export_tenders_to_excel(
             row["recommendation"] or "",
         )
 
-        status = raw_data.get(
-            "status",
-            "",
-        )
-
         deadline = _parse_datetime(row["deadline"])
         published_at = _parse_datetime(row["published_at"])
 
@@ -191,8 +185,6 @@ def export_tenders_to_excel(
 
         ws.append(
             [
-                search_number if search_number is not None else "",
-                _excel_datetime(now),
                 platform,
                 row["external_id"] or "",
                 row["title"] or "",
@@ -205,14 +197,21 @@ def export_tenders_to_excel(
                 days_left,
                 row["law_type"] or "",
                 procurement_method,
-                status,
                 row["relevance_score"],
                 recommendation,
                 row["summary"] or "",
-                risks,                row["deadline_note"] or "",
+                risks,
+                row["price"],
+                row["deadline_note"] or "",
                 row["url"] or "",
             ]
         )
+
+    # Делаем ссылку на тендер настоящей гиперссылкой Excel.
+    for cell in ws["S"][1:]:
+        if cell.row > 1 and cell.value:
+            cell.hyperlink = str(cell.value)
+            cell.font = Font(color="0563C1", underline="single")
 
     if ws.max_row >= 1:
         ws.auto_filter.ref = ws.dimensions
@@ -220,28 +219,25 @@ def export_tenders_to_excel(
     ws.freeze_panes = "A2"
 
     widths = {
-        1: 6,    # № поиска
-        2: 12,   # Дата поиска
-        3: 11,   # Площадка
-        4: 22,   # Номер закупки
-        5: 55,   # Наименование
-        6: 32,   # Заказчик
-        7: 13,   # Регион
-        8: 18,   # НМЦК
-        9: 5,    # Валюта
-        10: 14,  # Дата публикации
-        11: 24,  # Дата окончания подачи заявок
-        12: 20,  # Осталось дней до подачи
-        13: 8,   # Закон
-        14: 30,  # Способ закупки
-        15: 18,  # Этап закупки
-        16: 10,  # AI score
-        17: 18,  # Рекомендация
-        18: 45,  # Краткое резюме
-        19: 35,  # Риски
-        20: 35,  # Цена контракта
-        21: 35,  # Комментарий по срокам
-        22: 55,  # Ссылка
+        1: 14,  # Площадка
+        2: 22,  # Номер закупки
+        3: 55,  # Наименование
+        4: 32,  # Заказчик
+        5: 18,  # Регион
+        6: 18,  # НМЦК
+        7: 8,   # Валюта
+        8: 14,  # Дата публикации
+        9: 24,  # Дата окончания подачи заявок
+        10: 20, # Осталось дней до подачи
+        11: 8,  # Закон
+        12: 30, # Способ закупки
+        13: 10, # AI score
+        14: 18, # Рекомендация
+        15: 45, # Краткое резюме
+        16: 35, # Риски
+        17: 20, # Начальная цена
+        18: 35, # Комментарий по срокам
+        19: 55, # Ссылка
     }
 
     for column, width in widths.items():
@@ -261,25 +257,26 @@ def export_tenders_to_excel(
             )
 
     # Форматы Excel:
-    # B  = дата поиска
-    # H  = НМЦК (число)
-    # J  = дата публикации
-    # K  = дата окончания подачи заявок
-    # L  = осталось дней до подачи
-    # P  = AI score
+    # F  = НМЦК
+    # H  = дата публикации
+    # I  = дата окончания подачи заявок
+    # J  = осталось дней до подачи
+    # M  = AI score
+    # Q  = Начальная цена
 
-    for column in ("B", "J", "K"):
+    for column in ("H", "I"):
         for cell in ws[column][1:]:
             cell.number_format = "dd.mm.yyyy"
 
-    for cell in ws["H"][1:]:
-        cell.number_format = '#,##0.00 "₽"'
+    for column in ("F", "Q"):
+        for cell in ws[column][1:]:
+            cell.number_format = '#,##0.00 "₽"'
 
-    for cell in ws["L"][1:]:
-        cell.number_format = '0'
+    for cell in ws["J"][1:]:
+        cell.number_format = "0"
 
-    for cell in ws["P"][1:]:
-        cell.number_format = '0'
+    for cell in ws["M"][1:]:
+        cell.number_format = "0"
 
     stats = wb.create_sheet("Статистика")
 
@@ -370,12 +367,3 @@ def _excel_datetime(value: datetime | None):
         return None
 
     return value.replace(tzinfo=None)
-
-
-
-
-
-
-
-
-
