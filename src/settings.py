@@ -36,6 +36,13 @@ class AppSettings:
     ai_provider: str = "ollama"
     ollama_url: str = "http://localhost:11434"
 
+    email_enabled: bool = False
+    email_smtp_host: str = "smtp.mail.ru"
+    email_smtp_port: int = 465
+    email_from: str = ""
+    email_password: str = ""
+    email_to: str = ""
+
     log_level: str = "INFO"
 
     project_root: Path = field(default_factory=lambda: PROJECT_ROOT)
@@ -192,6 +199,38 @@ def load_settings(env_file: Path | None = None) -> AppSettings:
                 "ollama_url",
                 "http://localhost:11434",
             ),
+        ).strip(),
+
+        email_enabled=os.getenv(
+            "EMAIL_ENABLED",
+            "false",
+        ).strip().lower() in {"1", "true", "yes", "on"},
+
+        email_smtp_host=os.getenv(
+            "EMAIL_SMTP_HOST",
+            "smtp.mail.ru",
+        ).strip(),
+
+        email_smtp_port=int(
+            os.getenv(
+                "EMAIL_SMTP_PORT",
+                "465",
+            ).strip()
+        ),
+
+        email_from=os.getenv(
+            "EMAIL_FROM",
+            "specmash_prom@mail.ru",
+        ).strip(),
+
+        email_password=os.getenv(
+            "EMAIL_PASSWORD",
+            "",
+        ),
+
+        email_to=os.getenv(
+            "EMAIL_TO",
+            "specmash_prom@mail.ru",
         ).strip(),
 
         log_level=os.getenv(
