@@ -35,100 +35,26 @@ jobs:
           python test_ai_score.py
           python test_b2b_parser.py
 
-      - name: Excel export smoke test
+      - name: Run real SQLite Excel integration test
+        run: python tests/test_excel_export_integration.py
+
+      - name: Verify generated Excel file exists
         run: |
-          python - <<'PY'
-          import json
-          import sqlite3
-          import tempfile
-          from pathlib import Path
-          from src.export.excel import export_tenders_to_excel
+          test -f output/github_actions_excel_test.xlsx
+          ls -lh output/github_actions_excel_test.xlsx
 
-          schema = """
-          CREATE TABLE tenders (
-              id INTEGER PRIMARY KEY,
-              platform TEXT,
-              external_id TEXT,
-              title TEXT,
-              url TEXT,
-              description TEXT,
-              price REAL,
-              currency TEXT,
-              deadline TEXT,
-              published_at TEXT,
-              region TEXT,
-              customer TEXT,
-              law_type TEXT,
-              raw_data TEXT
-          );
-          CREATE TABLE analyses (
-              tender_id INTEGER,
-              relevance_score INTEGER,
-              summary TEXT,
-              recommendation TEXT,
-              risks TEXT,
-              deadline_note TEXT,
-              is_stub INTEGER,
-              analyzed_at TEXT
-          );
-          """
-
-          class DB:
-              def __init__(self, path):
-                  self.path = path
-
-              def _connect(self):
-                  conn = sqlite3.connect(self.path)
-                  conn.row_factory = sqlite3.Row
-                  return conn
-
-          with tempfile.TemporaryDirectory() as tmp:
-              db_path = Path(tmp) / "test.db"
-              with sqlite3.connect(db_path) as conn:
-                  conn.executescript(schema)
-                  raw = json.dumps({"procurement_method": "Запрос предложений"}, ensure_ascii=False)
-                  conn.execute(
-                      "INSERT INTO tenders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                      (1, "b2b_center", "TEST-001", "Тестовый тендер", "https://example.com/tender/1", "", 125000, "RUB", "2026-09-01T12:00:00+00:00", "2026-08-22T10:00:00+00:00", "Москва", "Тестовый заказчик", "223-ФЗ", raw),
-                  )
-                  conn.execute(
-                      "INSERT INTO analyses VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                      (1, 85, "Тестовое резюме", "review", "", "Осталось достаточно времени", 0, "2026-08-22T10:00:00+00:00"),
-                  )
-                  conn.commit()
-
-              output = Path(tmp) / "test.xlsx"
-              export_tenders_to_excel(DB(db_path), output, [1], 999)
-
-              from openpyxl import load_workbook
-              wb = load_workbook(output)
-              ws = wb["Тендеры"]
-              headers = [cell.value for cell in ws[1]]
-              expected = [
-                  "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
-                  "НМЦК", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
-                  "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
-                  "Рекомендация", "Краткое резюме", "Риски", "Начальная цена",
-                  "Комментарий по срокам", "Ссылка",
-              ]
-              assert headers == expected, headers
-              assert "№ поиска" not in headers
-              assert "Дата поиска" not in headers
-              assert "Статус" not in headers
-              assert "W" not in headers and "X" not in headers and "Y" not in headers
-              assert ws["Q2"].value == 125000
-              assert ws["S2"].hyperlink is not None
-              assert ws["S2"].hyperlink.target == "https://example.com/tender/1"
-              assert ws["L2"].value == "Запрос предложений"
-
-              print("Excel smoke test: PASS")
-              print("Columns:", len(headers))
-              print("Clickable link:", ws["S2"].hyperlink.target)
-              print("Initial price:", ws["Q2"].value)
-
-      - name: Upload Excel smoke-test artifact
+      - name: Upload generated Excel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: excel-smoke-test
-          path: /tmp/**/test.xlsx
-          if-no-files-found: ignore
+          name: tender-intelligence-excel-test
+          path: output/github_actions_excel_test.xlsx
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload test SQLite database
+        uses: actions/upload-artifact@v4
+        with:
+          name: tender-intelligence-test-db
+          path: output/github_actions_test.db
+          if-no-files-found: error
+          retention-days: 14
