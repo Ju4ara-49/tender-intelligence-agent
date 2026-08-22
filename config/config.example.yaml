@@ -22,11 +22,10 @@ collectors:
     request_delay_seconds: 1
     max_pages: 1
     timeout_seconds: 30
-  unipro:
+  fabrikant:
     enabled: true
-    max_pages: 5
-    request_delay_seconds: 2
-    timeout_seconds: 30
+    timeout_seconds: 45
+    max_results: 100
   rts_tender:
     enabled: true
     timeout_seconds: 30
