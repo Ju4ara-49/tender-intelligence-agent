@@ -10,6 +10,8 @@ from logging.handlers import RotatingFileHandler
 from src.orchestrator import Orchestrator
 from src.scheduler import run_scheduled
 from src.settings import PROJECT_ROOT, load_settings
+# Зарегистрировать дополнительные площадки до создания Orchestrator/Telegram-бота.
+import src.platform_extensions  # noqa: F401,E402
 
 
 def setup_logging(settings) -> None:
