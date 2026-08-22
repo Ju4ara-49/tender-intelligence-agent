@@ -6,10 +6,7 @@ import logging
 import os
 import threading
 import time
-from html import escape
 from pathlib import Path
-
-from openpyxl import load_workbook
 
 from src.orchestrator import Orchestrator
 from src.telegram_bot import TelegramBot
@@ -98,12 +95,7 @@ class MultiUserTelegramBot(TelegramBot):
         }
 
     def _admin_menu(self, chat_id: str) -> None:
-        self._send(
-            chat_id,
-            "<b>👑 Управление доступом</b>\n\n"
-            "Выберите действие:",
-            self._admin_keyboard(),
-        )
+        self._send(chat_id, "<b>👑 Управление доступом</b>\n\nВыберите действие:", self._admin_keyboard())
 
     def _show_users(self, chat_id: str) -> None:
         users = sorted(self._allowed_user_ids)
@@ -116,10 +108,8 @@ class MultiUserTelegramBot(TelegramBot):
     def _admin_command(self, chat_id: str, text: str) -> bool:
         if not self._is_owner(chat_id):
             return False
-        text = text.strip()
-        parts = text.split()
+        parts = text.strip().split()
         command = parts[0].lower() if parts else ""
-
         if command == "/admin":
             self._admin_waiting.pop(chat_id, None)
             self._admin_menu(chat_id)
@@ -149,11 +139,7 @@ class MultiUserTelegramBot(TelegramBot):
             self._allowed_user_ids.add(user_id)
             self._save_allowed_user_ids()
         self._admin_waiting.pop(chat_id, None)
-        self._send(
-            chat_id,
-            f"✅ Пользователь <code>{user_id}</code> добавлен в белый список.",
-            self._admin_keyboard(),
-        )
+        self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> добавлен в белый список.", self._admin_keyboard())
 
     def _remove_user(self, chat_id: str, user_id: str) -> None:
         if user_id == OWNER_TELEGRAM_ID:
@@ -163,11 +149,7 @@ class MultiUserTelegramBot(TelegramBot):
             self._allowed_user_ids.discard(user_id)
             self._save_allowed_user_ids()
         self._admin_waiting.pop(chat_id, None)
-        self._send(
-            chat_id,
-            f"✅ Пользователь <code>{user_id}</code> удалён из белого списка.",
-            self._admin_keyboard(),
-        )
+        self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> удалён из белого списка.", self._admin_keyboard())
 
     def _handle_message(self, message: dict) -> None:
         chat_id = str(message.get("chat", {}).get("id", ""))
@@ -180,16 +162,14 @@ class MultiUserTelegramBot(TelegramBot):
                 self._admin_waiting.pop(chat_id, None)
                 self._send(chat_id, "Возвращаемся в основное меню.", self._keyboard())
                 return
-            if text in {BTN_ADMIN_ADD, BTN_ADMIN_REMOVE, BTN_ADMIN_USERS, BTN_ADMIN}:
-                pass
-            elif text.isdigit():
-                action = self._admin_waiting.get(chat_id)
-                if action == "add":
-                    self._add_user(chat_id, text)
-                else:
-                    self._remove_user(chat_id, text)
-                return
-            else:
+            if text not in {BTN_ADMIN_ADD, BTN_ADMIN_REMOVE, BTN_ADMIN_USERS, BTN_ADMIN}:
+                if text.isdigit():
+                    action = self._admin_waiting.get(chat_id)
+                    if action == "add":
+                        self._add_user(chat_id, text)
+                    else:
+                        self._remove_user(chat_id, text)
+                    return
                 self._send(chat_id, "Нужен числовой Telegram ID. Например: <code>1378791558</code>", self._admin_keyboard())
                 return
 
@@ -218,34 +198,6 @@ class MultiUserTelegramBot(TelegramBot):
             logger.warning("Telegram-доступ: отказ пользователю chat_id=%s", chat_id)
             self._access_denied(chat_id)
             return
-
-        # Кнопка «Ключевые слова» теперь сразу переводит пользователя
-        # в режим ввода. Дополнительно свободный текст из основного меню
-        # принимаем как ключевые слова — это восстанавливает привычный
-        # сценарий: можно просто написать «станки».
-        if text == self.BTN_KEYWORDS if hasattr(self, "BTN_KEYWORDS") else False:
-            pass
-
-        if text == "Ключевые слова":
-            self._ask_value(
-                chat_id,
-                "keywords",
-                "<b>Введите ключевые слова</b> через запятую.\n\n"
-                "Например:\n<code>станки, токарные станки, фрезерные станки</code>\n\n"
-                "Можно ввести одно слово, например: <code>станки</code>.",
-            )
-            return
-
-        menu_buttons = {
-            "Цена от:", "Цена до:", "Балл:", "Срок:", "Ключевые слова",
-            "Площадки", "Сброс", "Поиск", "Настройки", "Стоп", "Помощь",
-        }
-
-        if text and not text.startswith("/") and text not in menu_buttons and chat_id not in self._waiting_for:
-            self._ask_value(chat_id, "keywords", "Ключевые слова сохранены.\n\nВведите ключевые слова через запятую:")
-            self._handle_value_input(chat_id, text)
-            return
-
         super()._handle_message(message)
 
     def _handle_callback(self, callback: dict) -> None:
@@ -272,60 +224,6 @@ class MultiUserTelegramBot(TelegramBot):
             self._search_threads[chat_id] = thread
             thread.start()
 
-    def _find_excel_results(self, search_number: int) -> list[dict[str, str]]:
-        output_dir = Path(self.settings.config.get("export", {}).get("output_dir", "output"))
-        files = sorted(output_dir.glob(f"search_{search_number:03d}_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not files:
-            return []
-        try:
-            wb = load_workbook(files[0], read_only=True, data_only=True)
-            ws = wb["Тендеры"]
-            rows = list(ws.iter_rows(values_only=True))
-            if not rows:
-                wb.close()
-                return []
-            headers = [str(x).strip() if x is not None else "" for x in rows[0]]
-            index = {name: i for i, name in enumerate(headers)}
-            results: list[dict[str, str]] = []
-            for row in rows[1:]:
-                title = str(row[index.get("Наименование", 2)] or "").strip()
-                if not title:
-                    continue
-                results.append({
-                    "title": title,
-                    "price": str(row[index.get("Начальная цена", 5)] or "не указана"),
-                    "deadline": str(row[index.get("Дата окончания подачи заявок", 8)] or "не указан"),
-                    "score": str(row[index.get("AI score", 12)] or "—"),
-                    "url": str(row[index.get("Ссылка", 16)] or ""),
-                })
-            wb.close()
-            return results
-        except Exception:
-            logger.exception("Telegram: не удалось прочитать Excel результатов поиска №%03d", search_number)
-            return []
-
-    def _send_search_results(self, chat_id: str, results: list[dict[str, str]]) -> None:
-        if not results:
-            return
-        chunks: list[str] = []
-        current = "<b>📋 Результаты текущего поиска</b>\n\n"
-        for number, item in enumerate(results, 1):
-            title = escape(item["title"])
-            price = escape(item["price"])
-            deadline = escape(item["deadline"])
-            score = escape(item["score"])
-            url = item["url"].strip()
-            link = f'\n🔗 <a href="{escape(url, quote=True)}">Открыть тендер</a>' if url else ""
-            block = f"<b>{number}. {title}</b>\n💰 {price}\n⏰ {deadline} | AI: {score}{link}\n\n"
-            if len(current) + len(block) > 3800:
-                chunks.append(current.rstrip())
-                current = "<b>📋 Продолжение результатов</b>\n\n"
-            current += block
-        if current.strip():
-            chunks.append(current.rstrip())
-        for chunk in chunks:
-            self._send(chat_id, chunk, self._keyboard())
-
     def _run_search_for_user(self, chat_id: str, orchestrator: Orchestrator) -> None:
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.\n\n⏳ Пожалуйста, подождите...", self._keyboard())
@@ -334,26 +232,21 @@ class MultiUserTelegramBot(TelegramBot):
             elapsed = int(time.monotonic() - started_at)
             elapsed_text = f"{elapsed // 60} мин. {elapsed % 60:02d} сек." if elapsed >= 60 else f"{elapsed} сек."
             state = "остановлен" if orchestrator.stop_requested else "завершён"
-            results = self._find_excel_results(stats["search_number"])
-            result_count = len(results)
-            duplicate_note = " (все они уже встречались ранее)" if stats["skipped_duplicate"] and stats["new"] == 0 else ""
             text = (
                 f"{'⛔' if orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\n"
                 f"Время работы: {elapsed_text}\n\n"
                 f"Найдено на площадках: {stats['found']}\n"
                 f"Прошло фильтр по ключевым словам: {stats['filtered']}\n"
-                f"Результатов в Excel: {result_count}\n"
                 f"Новых тендеров: {stats['new']}\n"
                 f"Проанализировано AI: {stats['analyzed']}\n"
                 f"Исключено по критериям: {stats['excluded_by_criteria']}\n"
-                f"Отправлено новых уведомлений: {stats['notified']}\n"
-                f"Пропущено дублей: {stats['skipped_duplicate']}{duplicate_note}\n\n"
-                "📊 <b>Результаты сохранены в Excel и показаны ниже.</b>"
+                f"Отправлено уведомлений: {stats['notified']}\n"
+                f"Пропущено дублей: {stats['skipped_duplicate']}\n\n"
+                "📊 <b>Результат сохранён в Excel.</b>"
             )
             self._send(chat_id, text, self._keyboard())
-            self._send_search_results(chat_id, results)
         except Exception:
-            logger.exception("Telegram-бот: ошибка выполнения поиска chat_id=%s", chat_id)
+            logger.exception("Telegram-бот: ошибка выполнения поиска для chat_id=%s", chat_id)
             self._send(chat_id, "❌ <b>Ошибка поиска.</b>\n\nПодробности находятся в logs/agent.log.", self._keyboard())
         finally:
             with self._search_lock:
