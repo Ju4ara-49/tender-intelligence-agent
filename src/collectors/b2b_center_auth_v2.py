@@ -1,4 +1,4 @@
-"""B2B-Center authentication using the real JavaScript login page."""
+"""B2B-Center authentication using the current JavaScript login page."""
 
 from __future__ import annotations
 
@@ -10,13 +10,15 @@ from src.collectors.b2b_center import B2BCenterCollector
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://www.b2b-center.ru"
-LOGIN_URL = f"{BASE_URL}/members/login.html"
+LOGIN_URL = f"{BASE_URL}/login.html"
 
 
 class AuthenticatedB2BCenterCollector(B2BCenterCollector):
-    """B2B-Center collector with browser-based login fallback.
+    """B2B-Center collector with browser-based login.
 
-    Credentials are read only from local environment variables.
+    Credentials are read only from local environment variables. The browser is
+    used only for the login flow; cookies are copied into the existing
+    requests session and the normal collector then reuses that session.
     """
 
     def __init__(self, config: dict | None = None):
@@ -63,34 +65,54 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
                     timeout=self.timeout * 1000,
                 )
 
-                password_field = page.locator('input[type="password"]').first
-                password_field.wait_for(timeout=self.timeout * 1000)
+                # Current B2B-Center login page exposes fields by their labels:
+                # "Логин или email" and "Пароль". Prefer label-based selectors
+                # and keep generic fallbacks for minor markup changes.
+                username_field = page.get_by_label("Логин или email", exact=True)
+                password_field = page.get_by_label("Пароль", exact=True)
 
-                form = password_field.locator("xpath=ancestor::form[1]")
-                username_field = form.locator(
-                    'input[type="text"], input[type="email"]'
-                ).first
                 if username_field.count() == 0:
                     username_field = page.locator(
-                        'input[type="text"], input[type="email"]'
+                        'input[name*="login" i], input[name*="email" i], '
+                        'input[type="email"], input[type="text"]'
                     ).first
+                if password_field.count() == 0:
+                    password_field = page.locator('input[type="password"]').first
+
+                username_field.wait_for(state="visible", timeout=self.timeout * 1000)
+                password_field.wait_for(state="visible", timeout=self.timeout * 1000)
 
                 username_field.fill(self.username)
                 password_field.fill(self.password)
 
-                buttons = form.locator('button, input[type="submit"]')
-                button = buttons.first
-                if button.count() == 0:
-                    button = page.get_by_text("Войти", exact=True).first
-                button.click()
+                # Submit the login form. If the button is rendered outside the
+                # form, use the visible text fallback.
+                form = password_field.locator("xpath=ancestor::form[1]")
+                submit = form.get_by_role("button", name="Войти", exact=True)
+                if submit.count() == 0:
+                    submit = page.get_by_role("button", name="Войти", exact=True).last
+                if submit.count() == 0:
+                    submit = form.locator('input[type="submit"]').first
 
-                page.wait_for_timeout(2000)
+                submit.wait_for(state="visible", timeout=self.timeout * 1000)
+                submit.click()
+
+                # Give the JS login request/navigation time to finish.
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1500)
+
+                current_url = page.url.lower()
                 text = page.locator("body").inner_text(timeout=5000).lower()
 
                 bad = (
                     "неверный пароль",
                     "неверный логин",
+                    "неверные учетные данные",
                     "ошибка авторизации",
+                    "не удалось войти",
                 )
                 good = (
                     "личный кабинет",
@@ -98,18 +120,34 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
                     "logout",
                     "личные данные",
                 )
-                authenticated = any(x in text for x in good) and not any(
+
+                # A successful login normally leaves /login.html. Also accept
+                # explicit authenticated UI markers on the resulting page.
+                left_login = "/login.html" not in current_url
+                authenticated = (left_login or any(x in text for x in good)) and not any(
                     x in text for x in bad
                 )
 
-                if authenticated:
-                    for cookie in context.cookies():
+                cookies = context.cookies()
+                if authenticated and cookies:
+                    for cookie in cookies:
                         self.session.cookies.set(
                             cookie["name"],
                             cookie["value"],
                             domain=cookie.get("domain"),
                             path=cookie.get("path", "/"),
                         )
+                    logger.info(
+                        "B2B-Center: browser login succeeded; cookies=%d",
+                        len(cookies),
+                    )
+                else:
+                    logger.warning(
+                        "B2B-Center: login check failed; url=%s cookies=%d",
+                        page.url,
+                        len(cookies),
+                    )
+                    authenticated = False
 
                 browser.close()
                 return authenticated
