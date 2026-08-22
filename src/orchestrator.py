@@ -10,6 +10,7 @@ from src.collectors.registry import get_enabled_collectors
 from src.filters.keyword_filter import KeywordFilter
 from src.models.tender import Tender
 from src.notifications.telegram import TelegramNotifier
+from src.notifications.email import EmailNotifier
 from src.settings import AppSettings
 from src.storage.database import TenderDatabase
 from src.telegram_settings import CriteriaStore
@@ -69,6 +70,15 @@ class Orchestrator:
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
             dry_run_when_no_token=settings.telegram_dry_run,
+        )
+
+        self.email_notifier = EmailNotifier(
+            enabled=settings.email_enabled,
+            smtp_host=settings.email_smtp_host,
+            smtp_port=settings.email_smtp_port,
+            username=settings.email_from,
+            password=settings.email_password,
+            recipient=settings.email_to,
         )
 
         self._stop_requested = False
@@ -528,7 +538,7 @@ class Orchestrator:
         )
 
         # ----------------------------------------------------------
-        # EXCEL
+        # EXCEL + EMAIL
         # ----------------------------------------------------------
 
         try:
@@ -568,6 +578,11 @@ class Orchestrator:
             logger.info(
                 "Excel: создан новый файл текущего прогона: %s",
                 export_path,
+            )
+
+            self.email_notifier.send_excel(
+                export_path,
+                search_number,
             )
 
         except Exception:
