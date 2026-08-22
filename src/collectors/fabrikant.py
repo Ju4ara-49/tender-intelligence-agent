@@ -85,7 +85,7 @@ class FabrikantCollector(_BrowserTenderCollector):
         return results
 
     def _parse_detail(self, html: str, external_id: str, url: str) -> Tender:
-        """Extract structured Fabrikant fields instead of using the page H1."""
+        """Extract structured Fabrikant fields from the rendered detail page."""
         soup = BeautifulSoup(html, "html.parser")
         text = " ".join(soup.stripped_strings)
 
@@ -113,8 +113,6 @@ class FabrikantCollector(_BrowserTenderCollector):
         ))
         price = self._extract_price(text)
 
-        # Do not expose generic headings such as "Сведения о закупке ..." as
-        # the subject when the structured subject is present on the page.
         title = subject or self._clean_title(soup, external_id)
         description = text[:10000]
 
@@ -155,40 +153,105 @@ class FabrikantCollector(_BrowserTenderCollector):
 
     @classmethod
     def _field(cls, soup: BeautifulSoup, labels: tuple[str, ...]) -> str:
-        """Read a value next to a known Russian label from tables/definition lists."""
-        wanted = {cls._norm(x).lower() for x in labels}
+        """Read a value next to a known Russian label on a rendered Fabrikant page.
 
+        Fabrikant does not keep all fields in ordinary two-column tables. Some
+        fields are rendered as nested div/spans, and after JavaScript rendering
+        the label and value may become siblings inside one large container.
+        The previous parser therefore found the subject but often missed
+        customer/region. We use several DOM layouts plus a bounded text fallback.
+        """
+        wanted = {cls._norm(x).lower().rstrip(":") for x in labels}
+
+        # 1. Standard table / definition-list layouts.
         for node in soup.find_all(["tr", "dt", "div", "li", "p"]):
-            parts = [cls._norm(" ".join(x.stripped_strings)) for x in node.find_all(recursive=False)]
-            if len(parts) >= 2 and cls._norm(parts[0]).lower().rstrip(":") in wanted:
-                value = cls._norm(" ".join(parts[1:]))
+            children = [cls._norm(" ".join(x.stripped_strings)) for x in node.find_all(recursive=False)]
+            children = [x for x in children if x]
+            if len(children) >= 2 and cls._norm(children[0]).lower().rstrip(":") in wanted:
+                value = cls._strip_generic_value(" ".join(children[1:]))
                 if value and value.lower() not in wanted:
-                    return cls._strip_generic_value(value)
+                    return value
 
             own = cls._norm(" ".join(node.stripped_strings))
             for label in labels:
                 pattern = rf"^{re.escape(label)}\s*:\s*(.+)$"
                 match = re.match(pattern, own, re.I)
                 if match:
-                    return cls._strip_generic_value(match.group(1))
+                    value = cls._strip_generic_value(match.group(1))
+                    if value and value.lower() != label.lower():
+                        return value
 
-        # Fallback for plain rendered text where labels and values are split
-        # only by whitespace/newlines after JavaScript rendering.
-        full = "\n".join(cls._norm(x) for x in soup.stripped_strings if cls._norm(x))
+        # 2. Explicit label nodes: take the nearest non-empty sibling/value.
         for label in labels:
-            match = re.search(rf"(?:^|\n){re.escape(label)}\s*:?\s*([^\n]+)", full, re.I)
+            for node in soup.find_all(string=re.compile(rf"^\s*{re.escape(label)}\s*:??\s*$", re.I)):
+                parent = node.parent
+                if not parent:
+                    continue
+                for candidate in list(parent.next_siblings) + list(parent.parent.children if parent.parent else []):
+                    value = cls._norm(" ".join(candidate.stripped_strings)) if hasattr(candidate, "stripped_strings") else cls._norm(str(candidate))
+                    if value and value.lower() != label.lower():
+                        value = cls._strip_generic_value(value)
+                        if value:
+                            return value
+
+        # 3. Bounded plain-text fallback. Search after the label and stop at
+        # the next known field label instead of consuming the whole page.
+        lines = [cls._norm(x) for x in soup.stripped_strings if cls._norm(x)]
+        all_labels = tuple(dict.fromkeys(cls._FIELD_LABELS + tuple(labels)))
+        boundary = "|".join(re.escape(x) for x in all_labels)
+        for i, line in enumerate(lines):
+            for label in labels:
+                match = re.match(rf"^{re.escape(label)}\s*:?\s*(.*)$", line, re.I)
+                if not match:
+                    continue
+                value = cls._strip_generic_value(match.group(1))
+                if value and value.lower() != label.lower():
+                    return value
+                for following in lines[i + 1 : i + 8]:
+                    if re.match(rf"^(?:{boundary})\s*:??", following, re.I):
+                        break
+                    if following:
+                        value = cls._strip_generic_value(following)
+                        if value:
+                            return value
+
+        # 4. Final bounded search over the flattened rendered text.
+        full = cls._norm(" ".join(lines))
+        for label in labels:
+            match = re.search(
+                rf"{re.escape(label)}\s*:?\s*(.+?)(?=\s+(?:{boundary})\s*:|$)",
+                full,
+                re.I,
+            )
             if match:
                 value = cls._strip_generic_value(match.group(1))
                 if value and value.lower() != label.lower():
                     return value
         return ""
 
+    _FIELD_LABELS = (
+        "предмет закупки", "предмет торгов", "наименование закупки",
+        "наименование процедуры", "объект закупки", "наименование предмета",
+        "предмет договора", "наименование товара", "заказчик",
+        "наименование заказчика", "организатор закупки", "организатор",
+        "регион", "регион поставки", "место поставки", "место нахождения",
+        "адрес поставки", "место проведения", "дата публикации",
+        "дата размещения", "дата создания", "дата начала", "дата закупки",
+        "опубликовано", "окончание подачи заявок", "дата окончания подачи заявок",
+        "срок подачи заявок", "окончательный срок подачи заявок",
+        "дата окончания приема заявок", "прием заявок до",
+        "начальная цена", "начальная максимальная цена", "цена",
+    )
+
     @staticmethod
     def _strip_generic_value(value: str) -> str:
         value = re.sub(r"\s+", " ", value).strip(" :;|")
-        # Do not accidentally return another UI label when two fields are
-        # rendered on one line.
-        value = re.split(r"\s+(?:Дата|Регион|Заказчик|Предмет|Место|Срок)\s*:", value, maxsplit=1, flags=re.I)[0]
+        value = re.split(
+            r"\s+(?:Дата|Регион|Заказчик|Предмет|Место|Срок|Организатор|Цена)\s*:",
+            value,
+            maxsplit=1,
+            flags=re.I,
+        )[0]
         return value[:1000]
 
     @classmethod
@@ -197,9 +260,12 @@ class FabrikantCollector(_BrowserTenderCollector):
         date = cls._parse_datetime(value)
         if date:
             return date
+
+        # Search the rendered text directly after the label. This handles
+        # layouts where the date is in a separate span/table cell.
         for label in labels:
             match = re.search(
-                rf"{re.escape(label)}\s*:?\s*(\d{{1,2}}[./-]\d{{1,2}}[./-]20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?)",
+                rf"{re.escape(label)}\s*:?\s*(\d{{1,2}}[./-]\d{{1,2}}[./-]20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?|20\d{{2}}[./-]\d{{1,2}}[./-]\d{{1,2}}(?:\s+\d{{1,2}}:\d{{2}})?)",
                 text,
                 re.I,
             )
@@ -214,15 +280,25 @@ class FabrikantCollector(_BrowserTenderCollector):
         if not value:
             return None
         match = re.search(r"(\d{1,2})[./-](\d{1,2})[./-](20\d{2})(?:\s+(\d{1,2}):(\d{2}))?", value)
-        if not match:
-            return None
-        try:
-            return datetime(
-                int(match.group(3)), int(match.group(2)), int(match.group(1)),
-                int(match.group(4) or 0), int(match.group(5) or 0),
-            )
-        except ValueError:
-            return None
+        if match:
+            try:
+                return datetime(
+                    int(match.group(3)), int(match.group(2)), int(match.group(1)),
+                    int(match.group(4) or 0), int(match.group(5) or 0),
+                )
+            except ValueError:
+                return None
+
+        match = re.search(r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2}))?", value)
+        if match:
+            try:
+                return datetime(
+                    int(match.group(1)), int(match.group(2)), int(match.group(3)),
+                    int(match.group(4) or 0), int(match.group(5) or 0),
+                )
+            except ValueError:
+                return None
+        return None
 
     @staticmethod
     def _clean_title(soup: BeautifulSoup, external_id: str) -> str:
