@@ -108,7 +108,7 @@ class MultiUserTelegramBot(TelegramBot):
     def _cmd_search(self, chat_id: str) -> None:
         with self._search_lock:
             thread = self._search_threads.get(chat_id)
-            if thread is not None and thread.is_alive(): self._send(chat_id, "Поиск уже выполняется.\n\nЕсли нужно остановить его — нажмите «Стоп`'.", self._keyboard()); return
+            if thread is not None and thread.is_alive(): self._send(chat_id, "Поиск уже выполняется.\n\nЕсли нужно остановить его — нажмите «Стоп».", self._keyboard()); return
             orchestrator = Orchestrator(self.settings); orchestrator.notifier.chat_id = chat_id; self._user_orchestrators[chat_id] = orchestrator; orchestrator.clear_stop_request()
             self._send(chat_id, "Запускаю новый поиск тендеров.\n\nПоиск выполняется в фоне.", self._keyboard())
             thread = threading.Thread(target=self._run_search_for_user, args=(chat_id, orchestrator), daemon=True, name=f"telegram-search-{chat_id}"); self._search_threads[chat_id] = thread; thread.start()
@@ -120,11 +120,14 @@ class MultiUserTelegramBot(TelegramBot):
         self._send(chat_id, f"📋 <b>Результаты поиска: {len(results)}</b>", self._keyboard())
         for index, tender in enumerate(results, 1):
             price = f"{tender.price:,.0f} {tender.currency}".replace(",", " ") if tender.price is not None else "не указана"
+            published = tender.published_at or tender.start_date
+            published_date = published.strftime("%d.%m.%Y") if published else "не указана"
             deadline = tender.deadline.strftime("%d.%m.%Y") if tender.deadline else "не указан"
             title = html.escape(tender.title or "Без названия")
             customer = html.escape(tender.customer or "не указан")
+            region = html.escape(tender.region or "не указан")
             url = html.escape(tender.url or "")
-            text = f"<b>{index}. {title}</b>\n🏢 {customer}\n💰 {price}\n⏰ до {deadline}"
+            text = f"<b>{index}. {title}</b>\n📅 дата закупки: {published_date}\n🏢 {customer}\n📍 регион: {region}\n💰 {price}\n⏰ до {deadline}"
             if url: text += f'\n🔗 <a href="{url}">Открыть тендер</a>'
             self._send(chat_id, text, self._keyboard())
 
