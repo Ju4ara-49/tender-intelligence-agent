@@ -10,6 +10,7 @@ from html import unescape
 from pathlib import Path
 from urllib.parse import urlencode, urljoin
 
+import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
@@ -25,7 +26,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 
 class AuthenticatedB2BCenterCollector(B2BCenterCollector):
-    """B2B-Center collector with persistent authenticated browser search."""
+    """B2B-Center collector with persistent authenticated browser search/details."""
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -113,24 +114,30 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
             logger.exception("B2B-Center: ошибка ручной авторизации")
             return False
 
-    def _authenticated_search_html(self, keyword: str) -> str:
+    def _authenticated_page_html(self, url: str, wait_selector: str | None = None) -> str:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             context = self._new_context(browser, storage=True)
             page = context.new_page()
-            url = f"{SEARCH_URL}?{urlencode({'f_keyword': keyword, 'searching': '1'})}"
             page.goto(url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
-            try:
-                page.locator("a.search-results-title[href]").first.wait_for(state="attached", timeout=15000)
-            except Exception:
+            if wait_selector:
                 try:
-                    page.locator("a[href*='tender-'], a[href*='tenders-']").first.wait_for(state="attached", timeout=10000)
+                    page.locator(wait_selector).first.wait_for(state="attached", timeout=15000)
                 except Exception:
-                    page.wait_for_timeout(5000)
+                    page.wait_for_timeout(3000)
+            else:
+                page.wait_for_timeout(2000)
             html = page.content()
             browser.close()
             return html
+
+    def _authenticated_search_html(self, keyword: str) -> str:
+        url = f"{SEARCH_URL}?{urlencode({'f_keyword': keyword, 'searching': '1'})}"
+        return self._authenticated_page_html(
+            url,
+            "a.search-results-title[href], a[href*='tender-'], a[href*='tenders-']",
+        )
 
     def _load_search_page(self, keyword: str) -> str:
         if not self.authenticated or not STORAGE_STATE.exists():
@@ -140,6 +147,27 @@ class AuthenticatedB2BCenterCollector(B2BCenterCollector):
         except Exception:
             logger.exception("B2B-Center: ошибка браузерного поиска по %s", keyword)
             return ""
+
+    def _get(self, url: str, params: dict | None = None) -> requests.Response:
+        """For authenticated B2B pages use the saved browser session."""
+        if not self.authenticated or not STORAGE_STATE.exists():
+            return super()._get(url, params=params)
+
+        if params:
+            query = urlencode(params, doseq=True)
+            url = f"{url}{'&' if '?' in url else '?'}{query}"
+
+        try:
+            html = self._authenticated_page_html(url)
+            response = requests.Response()
+            response.status_code = 200
+            response.url = url
+            response.encoding = "utf-8"
+            response._content = html.encode("utf-8")
+            return response
+        except Exception:
+            logger.exception("B2B-Center: ошибка браузерной загрузки %s", url)
+            return super()._get(url, params=params)
 
     def _parse_search_html(self, html: str, keyword: str, since: datetime | None = None) -> list[Tender]:
         """Use the legacy parser when available, then fall back to modern result links."""
