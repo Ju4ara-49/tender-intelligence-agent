@@ -10,6 +10,16 @@ from src.telegram_multiuser import MultiUserTelegramBot
 
 logger = logging.getLogger(__name__)
 
+PLATFORM_NAMES.clear()
+PLATFORM_NAMES.update({
+    "eis": "ЕИС",
+    "b2b_center": "B2B-Center",
+    "fabrikant": "Фабрикант",
+    "rts_tender": "РТС-тендер",
+    "tmk": "ТМК",
+    "rosatom": "Росатом",
+})
+
 
 class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
     """Multi-user bot with interruptible short polling."""
@@ -21,9 +31,6 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
         if not self.bot_token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в .env — бот не может запуститься.")
 
-        # Telegram API must bypass any system/WinINET proxy configuration.
-        # httpx uses trust_env=True by default, and on some Windows setups
-        # this can result in TLS EOF errors while connecting to api.telegram.org.
         no_proxy_hosts = ["api.telegram.org"]
         existing = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
         hosts = [item.strip() for item in existing.split(",") if item.strip()]
@@ -56,14 +63,42 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
         for update in result.get("result", []):
             self._offset = update["update_id"] + 1
             if "callback_query" in update:
+                logger.info("Telegram-бот: callback получен data=%s", update["callback_query"].get("data", ""))
                 self._handle_callback(update["callback_query"])
             elif update.get("message"):
                 self._handle_message(update["message"])
+
+    def _platform_keyboard(self, chat_id: str) -> dict:
+        enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
+        rows = []
+        for platform, name in PLATFORM_NAMES.items():
+            mark = "☑" if platform in enabled else "☐"
+            rows.append([{"text": f"{mark} {name}", "callback_data": f"platform:{platform}"}])
+        rows.append([{"text": "Закрыть", "callback_data": "platform:close"}])
+        return {"inline_keyboard": rows}
 
     def _show_platforms(self, chat_id: str) -> None:
         enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
         lines = ["<b>Площадки поиска</b>", "", "Нажмите на площадку, чтобы включить или выключить её.", ""]
         for platform, name in PLATFORM_NAMES.items():
             lines.append(f"{'☑' if platform in enabled else '☐'} {name}")
-        lines += ["", "<i>Подключены: ЕИС, B2B-Center, UniPro, РТС-тендер, ТМК и Росатом.</i>", "<i>B2B-Center использует сохранённую авторизованную сессию.</i>"]
+        lines.append("")
+        lines.append("<i>Подключены: ЕИС, B2B-Center, Фабрикант, РТС-тендер, ТМК и Росатом.</i>")
         self._send(chat_id, "\n".join(lines), self._platform_keyboard(chat_id))
+
+    def _toggle_platform(self, chat_id: str, platform: str) -> None:
+        if platform not in PLATFORM_NAMES:
+            logger.warning("Telegram-бот: неизвестная площадка в callback: %s", platform)
+            return
+        current = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
+        before = sorted(current)
+        if platform in current:
+            current.remove(platform)
+        else:
+            current.add(platform)
+        if platform == "eis" and "eis" not in current:
+            current.add("eis")
+            self._send(chat_id, "ЕИС пока нельзя отключить.", self._keyboard())
+        self._call_user(chat_id, self.criteria_store.set_enabled_platforms, sorted(current))
+        logger.info("Telegram-бот: площадка изменена chat_id=%s platform=%s before=%s after=%s", chat_id, platform, before, sorted(current))
+        self._show_platforms(chat_id)
