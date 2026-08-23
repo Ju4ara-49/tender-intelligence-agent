@@ -93,12 +93,8 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
 
                 if not links:
                     break
-                # A short page is a strong end-of-pagination signal, but page 1
-                # may be rendered with fewer links because some cards lack URLs.
                 if page_no > 0 and len(links) < page_size:
                     break
-                # If an entire page contains only IDs already seen, the server
-                # ignored the offset; continuing would just duplicate page 1.
                 if page_no > 0 and not new_ids:
                     logger.warning(
                         "B2B-Center: pagination offset=%d returned no new procedures; stopping",
@@ -128,50 +124,16 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
         keyword: str,
         since: datetime | None = None,
     ) -> list[Tender]:
-        # Use the proven parser for normalization, then apply a transparent
-        # relevance gate because the public endpoint can occasionally return
-        # default/broad rows when a query is partially ignored.
+        """Normalize discovery rows without doing the final keyword filter.
+
+        The orchestrator intentionally enriches details before strict keyword
+        filtering. Applying a relevance gate here would recreate the original
+        bug: valid tenders whose keyword appears only in lots/specifications
+        would disappear before details are loaded.
+        """
         results = super()._parse_search_html(html, keyword, since)
-        if not results:
-            return results
-
-        query_tokens = [
-            self._normalize_query_token(token)
-            for token in re.findall(r"[\w-]+", str(keyword or ""), re.UNICODE)
-            if len(token.strip()) >= 3
-        ]
-        if not query_tokens:
-            return results
-
-        filtered: list[Tender] = []
-        for tender in results:
-            text = self._normalize_search_text(
-                " ".join((tender.title or "", tender.description or ""))
-            )
-            if all(self._token_matches(text, token) for token in query_tokens):
-                filtered.append(tender)
-
         logger.info(
-            "B2B-Center: reliable relevance keyword=%r kept=%d excluded=%d",
-            keyword, len(filtered), len(results) - len(filtered),
+            "B2B-Center: discovery normalized keyword=%r results=%d; strict relevance is deferred until after details",
+            keyword, len(results),
         )
-        return filtered
-
-    @staticmethod
-    def _normalize_search_text(text: str) -> str:
-        return re.sub(r"\s+", " ", str(text or "").lower().replace("ё", "е")).strip()
-
-    @staticmethod
-    def _normalize_query_token(token: str) -> str:
-        return re.sub(r"[^\w-]", "", str(token or "").lower().replace("ё", "е"))
-
-    @staticmethod
-    def _token_matches(text: str, token: str) -> bool:
-        if not token:
-            return True
-        if token in text:
-            return True
-        # Small Russian morphology tolerance: станок/станка/станки/станков,
-        # подшипник/подшипники, муфта/муфты, etc.
-        stem = token[: max(4, min(len(token), 6))]
-        return bool(stem) and re.search(rf"\b{re.escape(stem)}\w*", text)
+        return results
