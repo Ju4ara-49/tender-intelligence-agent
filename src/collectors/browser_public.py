@@ -36,11 +36,9 @@ class _BrowserTenderCollector(BaseCollector):
         return bool(config.get("collectors", {}).get(self.platform, {}).get("enabled", True))
 
     def search(self, keywords: list[str], since: datetime | None = None) -> list[Tender]:
-        """Search each keyword separately and merge results."""
         terms = [str(x).strip() for x in keywords if str(x).strip()]
         if not terms:
             return []
-
         merged: dict[str, Tender] = {}
         for term in terms:
             results = self._search_one(term)
@@ -50,7 +48,6 @@ class _BrowserTenderCollector(BaseCollector):
                     break
             if len(merged) >= self.max_results:
                 break
-
         logger.info("%s: найдено %d уникальных процедур", self.platform, len(merged))
         return list(merged.values())[: self.max_results]
 
@@ -115,7 +112,6 @@ class _BrowserTenderCollector(BaseCollector):
 
     @staticmethod
     def _collect_rendered_html(page) -> str:
-        """Return the main DOM plus HTML/text from same-origin frames."""
         chunks: list[str] = []
         try:
             chunks.append(page.content())
@@ -152,13 +148,9 @@ class _BrowserTenderCollector(BaseCollector):
 
     def _perform_search(self, page, query: str) -> None:
         selectors = [
-            "input[type='search']",
-            "input[name*='search' i]",
-            "input[name*='query' i]",
-            "input[placeholder*='поиск' i]",
-            "input[placeholder*='закуп' i]",
-            "input[placeholder*='наимен' i]",
-            "input[placeholder*='ключев' i]",
+            "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
+            "input[placeholder*='поиск' i]", "input[placeholder*='закуп' i]",
+            "input[placeholder*='наимен' i]", "input[placeholder*='ключев' i]",
         ]
         for selector in selectors:
             try:
@@ -169,7 +161,6 @@ class _BrowserTenderCollector(BaseCollector):
                     return
             except Exception:
                 continue
-
         for text in self.SEARCH_HINTS:
             try:
                 button = page.get_by_text(text, exact=False).first
@@ -179,7 +170,6 @@ class _BrowserTenderCollector(BaseCollector):
                     break
             except Exception:
                 continue
-
         for selector in selectors:
             try:
                 locator = page.locator(selector).first
@@ -189,7 +179,6 @@ class _BrowserTenderCollector(BaseCollector):
                     return
             except Exception:
                 continue
-
         logger.warning("%s: поле поиска не найдено для запроса %r", self.platform, query)
 
     def _parse_results(self, html: str) -> list[Tender]:
@@ -198,28 +187,40 @@ class _BrowserTenderCollector(BaseCollector):
         seen: set[str] = set()
         base_host = urlparse(self.BASE_URL).netloc.lower()
 
-        # Modern SPA portals frequently render result cards as buttons/divs
-        # with data-href/data-url/routerlink instead of ordinary <a href>.
-        # Normalize those navigational attributes into the same parsing path.
-        candidates = []
+        # SPA portals do not consistently expose result navigation as <a href>.
+        # Collect all common navigation attributes, including onclick URLs.
+        candidates: list[tuple[object, str]] = []
+        nav_attrs = ("href", "data-href", "data-url", "data-link", "routerlink", "data-routerlink")
+        onclick_re = re.compile(r"(?:location(?:\.href)?|window\.open)\s*\(?\s*['\"]([^'\"]+)['\"]", re.I)
         for node in soup.find_all(True):
-            href = node.get("href")
-            if href:
-                candidates.append((node, str(href)))
-                continue
-            for attr in ("data-href", "data-url", "data-link", "routerlink", "data-routerlink"):
+            raw = None
+            for attr in nav_attrs:
                 value = node.get(attr)
                 if value:
-                    candidates.append((node, str(value)))
+                    raw = str(value).strip()
                     break
+            if not raw:
+                onclick = str(node.get("onclick", ""))
+                match = onclick_re.search(onclick)
+                if match:
+                    raw = match.group(1).strip()
+            if raw and not raw.lower().startswith(("javascript:", "#")):
+                candidates.append((node, raw))
 
-        for anchor, raw_href in candidates:
-            href = urljoin(self.BASE_URL, raw_href.strip())
+        for node, raw_href in candidates:
+            href = urljoin(self.BASE_URL, raw_href)
             parsed = urlparse(href)
             if parsed.netloc and parsed.netloc.lower() != base_host:
                 continue
 
-            title = " ".join(anchor.stripped_strings)
+            # A result card may keep the actual text on its parent while the
+            # navigation attribute is on a tiny icon/button. Prefer a useful
+            # nearby card label over an icon's empty/one-word text.
+            title = " ".join(node.stripped_strings)
+            if len(title) < 5 and node.parent is not None:
+                parent_title = " ".join(node.parent.stripped_strings)
+                if len(parent_title) > len(title):
+                    title = parent_title
             if not title or len(title) < 5:
                 continue
 
@@ -230,19 +231,16 @@ class _BrowserTenderCollector(BaseCollector):
             external_id = self._extract_id(href, title)
             if not external_id or external_id in seen:
                 continue
-
             seen.add(external_id)
             self._urls[external_id] = href
-            results.append(
-                Tender(
-                    platform=self.platform,
-                    external_id=external_id,
-                    title=title[:1000],
-                    url=href,
-                    description=title,
-                    raw_data={"source": self.BASE_URL},
-                )
-            )
+            results.append(Tender(
+                platform=self.platform,
+                external_id=external_id,
+                title=title[:1000],
+                url=href,
+                description=title,
+                raw_data={"source": self.BASE_URL},
+            ))
         return results
 
     def _parse_detail(self, html: str, external_id: str, url: str) -> Tender:
@@ -252,16 +250,9 @@ class _BrowserTenderCollector(BaseCollector):
         text = " ".join(soup.stripped_strings)
         price = self._extract_price(text)
         deadline = self._extract_date(text)
-        return Tender(
-            platform=self.platform,
-            external_id=external_id,
-            title=title[:1000],
-            url=url,
-            description=text[:10000],
-            price=price,
-            deadline=deadline,
-            raw_data={"source": url},
-        )
+        return Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=url,
+                      description=text[:10000], price=price, deadline=deadline,
+                      raw_data={"source": url})
 
     @staticmethod
     def _extract_id(href: str, title: str) -> str | None:
@@ -280,12 +271,7 @@ class _BrowserTenderCollector(BaseCollector):
 
     @staticmethod
     def _extract_price(text: str) -> float | None:
-        for match in re.finditer(
-            r"(?:цена|стоимость|НМЦ|начальн\w* цена)[^0-9]{0,40}"
-            r"([0-9][0-9\s]{2,}(?:[.,][0-9]{1,2})?)",
-            text,
-            re.I,
-        ):
+        for match in re.finditer(r"(?:цена|стоимость|НМЦ|начальн\w* цена)[^0-9]{0,40}([0-9][0-9\s]{2,}(?:[.,][0-9]{1,2})?)", text, re.I):
             try:
                 return float(match.group(1).replace(" ", "").replace(",", "."))
             except ValueError:
@@ -294,12 +280,7 @@ class _BrowserTenderCollector(BaseCollector):
 
     @staticmethod
     def _extract_date(text: str) -> datetime | None:
-        match = re.search(
-            r"(?:до|окончани\w*|срок[^0-9]{0,10})[^0-9]{0,30}"
-            r"(\d{1,2})[./](\d{1,2})[./](20\d{2})",
-            text,
-            re.I,
-        )
+        match = re.search(r"(?:до|окончани\w*|срок[^0-9]{0,10})[^0-9]{0,30}(\d{1,2})[./](\d{1,2})[./](20\d{2})", text, re.I)
         if not match:
             return None
         try:
