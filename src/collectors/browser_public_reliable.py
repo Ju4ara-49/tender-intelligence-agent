@@ -58,6 +58,12 @@ class ReliableBrowserSearchMixin:
             search_control_found,
             len(results),
         )
+        if search_control_found and not results:
+            logger.warning(
+                "%s: RESULT_PARSER_ZERO — поиск был отправлен, но парсер не нашёл процедур для %r",
+                self.platform,
+                query,
+            )
         return results
 
     @staticmethod
@@ -87,12 +93,14 @@ class ReliableBrowserSearchMixin:
                     continue
 
     def _perform_search(self, page, query: str) -> bool:
-        """Find the actual search control, including delayed/embedded widgets."""
+        """Find and explicitly submit the real search form, including SPA forms."""
         selectors = (
             "input[type='search']",
             "input[name*='search' i]",
             "input[name*='query' i]",
             "input[name*='keyword' i]",
+            "input[name*='phrase' i]",
+            "input[name*='text' i]",
             "input[placeholder*='поиск' i]",
             "input[placeholder*='закуп' i]",
             "input[placeholder*='наимен' i]",
@@ -108,19 +116,20 @@ class ReliableBrowserSearchMixin:
         )
         search_labels = (
             "Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти",
-            "Показать", "Показать результаты",
+            "Показать", "Показать результаты", "Применить", "Применить фильтры",
+            "Искать закупки", "Найти процедуры", "Отправить",
         )
 
         frames = [page.main_frame] + [frame for frame in page.frames if frame != page.main_frame]
 
+        # Some portals expose the filter button before the actual input becomes visible.
         for frame in frames:
-            for label in search_labels:
+            for label in ("Расширенный поиск", "Показать фильтры", "Фильтры", "Поиск"):
                 try:
-                    loc = frame.get_by_role("button", name=label, exact=False).first
+                    loc = frame.get_by_text(label, exact=False).first
                     if loc.count() and loc.is_visible():
                         loc.click(timeout=1500)
-                        page.wait_for_timeout(700)
-                        break
+                        page.wait_for_timeout(500)
                 except Exception:
                     continue
 
@@ -136,22 +145,46 @@ class ReliableBrowserSearchMixin:
                             continue
                     except Exception:
                         pass
+
                     submitted = False
-                    try:
-                        loc.press("Enter")
-                        submitted = True
-                    except Exception:
-                        pass
+                    # First try the site's normal submit buttons. This is important for
+                    # portals where Enter only changes the widget state and does not fire
+                    # the search request.
                     for label in search_labels:
                         try:
                             button = frame.get_by_role("button", name=label, exact=False).first
                             if button.count() and button.is_visible():
-                                button.click(timeout=1500)
+                                button.click(timeout=1800)
                                 submitted = True
                                 break
                         except Exception:
                             continue
+
+                    if not submitted:
+                        for selector_button in ("input[type='submit']", "button[type='submit']"):
+                            try:
+                                button = frame.locator(selector_button).last
+                                if button.count() and button.is_visible():
+                                    button.click(timeout=1800)
+                                    submitted = True
+                                    break
+                            except Exception:
+                                continue
+
+                    if not submitted:
+                        try:
+                            loc.press("Enter")
+                            submitted = True
+                        except Exception:
+                            pass
+
                     if submitted:
+                        logger.info(
+                            "%s: SEARCH_SUBMITTED selector=%s frame=%s",
+                            self.platform,
+                            selector,
+                            frame.url,
+                        )
                         return True
                 except Exception:
                     continue
@@ -160,7 +193,26 @@ class ReliableBrowserSearchMixin:
                 textbox = frame.get_by_role("textbox").first
                 if textbox.count() and textbox.is_visible():
                     textbox.fill(query)
+                    for label in search_labels:
+                        try:
+                            button = frame.get_by_role("button", name=label, exact=False).first
+                            if button.count() and button.is_visible():
+                                button.click(timeout=1800)
+                                logger.info(
+                                    "%s: SEARCH_SUBMITTED selector=role=textbox frame=%s button=%s",
+                                    self.platform,
+                                    frame.url,
+                                    label,
+                                )
+                                return True
+                        except Exception:
+                            continue
                     textbox.press("Enter")
+                    logger.info(
+                        "%s: SEARCH_SUBMITTED selector=role=textbox frame=%s method=enter",
+                        self.platform,
+                        frame.url,
+                    )
                     return True
             except Exception:
                 pass
@@ -192,8 +244,6 @@ class ReliableBrowserSearchMixin:
             clicked = False
             for label in load_more_labels:
                 try:
-                    # Playwright Python Locator.filter() does not accept a visible= keyword.
-                    # Filter first, then explicitly check visibility before clicking.
                     candidates = page.get_by_text(label, exact=False)
                     for index in range(candidates.count() - 1, -1, -1):
                         loc = candidates.nth(index)
