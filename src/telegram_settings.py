@@ -34,7 +34,17 @@ class CriteriaStore:
 
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
+        self._explicit_user_id: str | None = None
         self._ensure_schema()
+
+    def set_user_id(self, user_id: str | int | None) -> None:
+        """Явно привязать store к Telegram-пользователю.
+
+        Это надёжнее, чем определять chat_id через introspection стека,
+        особенно когда поиск выполняется в отдельном потоке.
+        """
+        value = str(user_id).strip() if user_id is not None else ""
+        self._explicit_user_id = value or None
 
     def _ensure_schema(self) -> None:
         with self.db._connect() as conn:
@@ -83,6 +93,8 @@ class CriteriaStore:
                     )
 
     def _current_user_id(self) -> str:
+        if self._explicit_user_id:
+            return self._explicit_user_id
         frame = inspect.currentframe()
         try:
             frame = frame.f_back if frame else None
@@ -204,7 +216,7 @@ class CriteriaStore:
                     with self.db._connect() as write_conn:
                         write_conn.execute(
                             f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?",
-                            (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id),
+                            (json.dumps(clean), datetime.now(timezone.utc).isoformat(), user_id),
                         )
                 return clean
         except (TypeError, ValueError, json.JSONDecodeError):
