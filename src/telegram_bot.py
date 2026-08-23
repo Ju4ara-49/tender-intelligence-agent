@@ -1,4 +1,4 @@
-﻿"""Интерактивный Telegram-бот Tender Intelligence Agent.
+"""Интерактивный Telegram-бот Tender Intelligence Agent.
 
 Доступ открыт для пользователей Telegram. Настройки и запущенные поиски
 изолированы по chat_id пользователя. TELEGRAM_CHAT_ID используется только
@@ -96,11 +96,11 @@ class TelegramBot:
         return {
             "keyboard": [
                 [{"text": BTN_PRICE_FROM}, {"text": BTN_PRICE_TO}],
-                [{"text": BTN_SCORE}, {"text": BTN_DAYS}],
+                [{"text": BTN_STOP}, {"text": BTN_DAYS}],
                 [{"text": BTN_KEYWORDS}, {"text": BTN_PLATFORMS}],
                 [{"text": BTN_RESET}],
                 [{"text": BTN_SEARCH}, {"text": BTN_SETTINGS}],
-                [{"text": BTN_STOP}, {"text": BTN_HELP}],
+                [{"text": BTN_SCORE}, {"text": BTN_HELP}],
             ],
             "resize_keyboard": True,
             "is_persistent": True,
