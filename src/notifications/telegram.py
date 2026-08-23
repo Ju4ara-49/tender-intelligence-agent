@@ -20,6 +20,15 @@ class TelegramNotifier:
     Если токен не задан — работает в dry-run режиме (только лог).
     """
 
+    PLATFORM_NAMES = {
+        "eis": "ЕИС",
+        "b2b_center": "B2B-Center",
+        "fabrikant": "Фабрикант",
+        "rts_tender": "РТС-тендер",
+        "tmk": "ТМК",
+        "rosatom": "Росатом",
+    }
+
     def __init__(
         self,
         bot_token: str = "",
@@ -75,8 +84,14 @@ class TelegramNotifier:
             logger.error("Telegram: ошибка отправки: %s", exc)
             return False
 
-    @staticmethod
-    def format_message(tender: Tender, analysis: TenderAnalysis) -> str:
+    @classmethod
+    def platform_name(cls, platform: str) -> str:
+        """Return a human-readable platform name without losing unknown IDs."""
+        value = str(platform or "").strip()
+        return cls.PLATFORM_NAMES.get(value, value or "Не указана")
+
+    @classmethod
+    def format_message(cls, tender: Tender, analysis: TenderAnalysis) -> str:
         score = analysis.relevance_score
         emoji = "🔔" if score >= 70 else "📋"
 
@@ -100,9 +115,11 @@ class TelegramNotifier:
             "review": "🔍 На проверку",
         }
         rec = rec_map.get(analysis.recommendation, analysis.recommendation)
+        platform = cls.platform_name(tender.platform)
 
         return (
             f"{emoji} <b>Новый тендер ({score}/100)</b>\n\n"
+            f"🏷️ <b>Площадка:</b> {platform}\n"
             f"📋 {tender.title}\n"
             f"💰 {price_str} | ⏰ до {deadline_str}\n"
             f"🏢 {tender.customer or 'Заказчик не указан'}\n\n"
