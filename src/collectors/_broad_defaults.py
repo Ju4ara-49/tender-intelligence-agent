@@ -1,7 +1,10 @@
 """Shared broad-discovery defaults for tender collectors."""
 
-DEFAULT_DISCOVERY_MAX_RESULTS = 200
-DEFAULT_DISCOVERY_MAX_PAGES = 10
+# Discovery is intentionally generous: a result page is not the search.
+# Collectors may use a higher explicit value, but a legacy low value should not
+# silently reduce a multi-platform search to a handful of procedures.
+DEFAULT_DISCOVERY_MAX_RESULTS = 500
+DEFAULT_DISCOVERY_MAX_PAGES = 20
 
 
 def broaden_discovery_config(platform_config: dict) -> dict:
