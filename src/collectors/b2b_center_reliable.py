@@ -1,14 +1,15 @@
 """Reliable public B2B-Center discovery adapter.
 
-The current B2B-Center site still exposes a stable public /market/ search
-with f_keyword/searching parameters and offset pagination. This adapter keeps
-that discovery path independent from the JS-heavy modern UI. Details continue
-to use the authenticated modern collector.
+B2B-Center exposes a stable public /market/ search with f_keyword/searching
+parameters and offset pagination. Discovery deliberately uses this public
+endpoint instead of depending on the JS-heavy modern infinite-scroll UI.
+Details continue to use the authenticated modern collector.
 """
 from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -29,38 +30,80 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
     platform = "b2b_center"
 
     def _load_search_page(self, keyword: str) -> str:
-        max_pages = max(1, min(int(self.config.get("max_pages", 10)), 50))
-        page_size = max(1, int(self.config.get("page_size", 20)))
+        """Collect multiple public result pages using offset pagination.
+
+        B2B-Center's ``from`` parameter is an item offset, not a page number.
+        A configured value of 1 must therefore never collapse discovery to one
+        page: the reliable adapter enforces a broad lower bound and stops only
+        on an actually empty/short page or the explicit safety cap.
+        """
+        configured_pages = int(self.config.get("max_pages", 20))
+        max_pages = max(10, min(configured_pages, 50))
+        page_size = max(20, min(int(self.config.get("page_size", 20)), 100))
+        max_results = max(200, min(int(self.config.get("max_results", 500)), 2000))
+
         chunks: list[str] = []
         total_links = 0
+        seen_ids: set[str] = set()
 
         for page_no in range(max_pages):
             offset = page_no * page_size
+            if total_links >= max_results:
+                break
+
             try:
                 response = self._get(
                     LEGACY_SEARCH_URL,
                     params={
                         "f_keyword": keyword,
                         "searching": "1",
+                        "company_type": "2",
+                        "price_currency": "0",
+                        "date": "1",
+                        "trade": "buy",
                         "from": str(offset),
                     },
                 )
                 html = response.text or ""
                 if not html:
+                    logger.warning(
+                        "B2B-Center: empty discovery response keyword=%r page=%d offset=%d",
+                        keyword, page_no + 1, offset,
+                    )
                     break
-                chunks.append(html)
 
                 soup = BeautifulSoup(html, "html.parser")
-                links = soup.select("a[href*='/tender-']")
-                total_links += len(links)
+                links = soup.select("a.search-results-title[href], a[href*='/tender-']")
+                page_ids: set[str] = set()
+                for link in links:
+                    href = str(link.get("href", ""))
+                    match = re.search(r"tender-(\d+)", href, re.I)
+                    if match:
+                        page_ids.add(match.group(1))
+
+                new_ids = page_ids - seen_ids
+                seen_ids.update(page_ids)
+                total_links += len(new_ids)
+                chunks.append(html)
+
                 logger.info(
-                    "B2B-Center: reliable search keyword=%r page=%d offset=%d links=%d",
-                    keyword, page_no + 1, offset, len(links),
+                    "B2B-Center: reliable search keyword=%r page=%d offset=%d links=%d new=%d total_unique_links=%d",
+                    keyword, page_no + 1, offset, len(links), len(new_ids), len(seen_ids),
                 )
 
                 if not links:
                     break
+                # A short page is a strong end-of-pagination signal, but page 1
+                # may be rendered with fewer links because some cards lack URLs.
                 if page_no > 0 and len(links) < page_size:
+                    break
+                # If an entire page contains only IDs already seen, the server
+                # ignored the offset; continuing would just duplicate page 1.
+                if page_no > 0 and not new_ids:
+                    logger.warning(
+                        "B2B-Center: pagination offset=%d returned no new procedures; stopping",
+                        offset,
+                    )
                     break
             except Exception:
                 logger.exception(
@@ -71,12 +114,11 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
 
             delay = float(self.config.get("request_delay_seconds", 0.5))
             if delay > 0:
-                import time
                 time.sleep(delay)
 
         logger.info(
             "B2B-Center: reliable search keyword=%r pages=%d procedure_links=%d",
-            keyword, len(chunks), total_links,
+            keyword, len(chunks), len(seen_ids),
         )
         return "\n".join(chunks)
 
@@ -86,9 +128,9 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
         keyword: str,
         since: datetime | None = None,
     ) -> list[Tender]:
-        # Use the proven modern parser for normalization, but apply an
-        # explicit relevance gate because B2B-Center may return broad/default
-        # rows when a query parameter is ignored or partially applied.
+        # Use the proven parser for normalization, then apply a transparent
+        # relevance gate because the public endpoint can occasionally return
+        # default/broad rows when a query is partially ignored.
         results = super()._parse_search_html(html, keyword, since)
         if not results:
             return results
