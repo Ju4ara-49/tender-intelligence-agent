@@ -20,7 +20,15 @@ class ReliableBrowserSearchMixin:
 
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
-                context = browser.new_context(locale="ru-RU")
+                context = browser.new_context(
+                    locale="ru-RU",
+                    viewport={"width": 1440, "height": 1000},
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/151.0.0.0 Safari/537.36"
+                    ),
+                )
                 page = context.new_page()
                 page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=self.timeout_ms)
                 page.wait_for_timeout(6500)
@@ -33,6 +41,7 @@ class ReliableBrowserSearchMixin:
                         self.platform,
                         query,
                     )
+                    self._log_page_state(page)
                     self._collect_rendered_html(page)
                     browser.close()
                     return []
@@ -67,35 +76,28 @@ class ReliableBrowserSearchMixin:
         return results
 
     @staticmethod
-    def _dismiss_consent(page) -> None:
-        """Dismiss common cookie/consent overlays without bypassing access controls."""
-        labels = (
-            "Принять", "Принять все", "Согласен", "Согласна", "Разрешить",
-            "Accept", "Accept all", "OK",
-        )
-        for frame in [page.main_frame] + [f for f in page.frames if f != page.main_frame]:
-            for label in labels:
-                try:
-                    loc = frame.get_by_role("button", name=label, exact=False).first
-                    if loc.count() and loc.is_visible():
-                        loc.click(timeout=1200)
-                        page.wait_for_timeout(300)
-                        return
-                except Exception:
-                    continue
-                try:
-                    loc = frame.get_by_text(label, exact=True).first
-                    if loc.count() and loc.is_visible():
-                        loc.click(timeout=1200)
-                        page.wait_for_timeout(300)
-                        return
-                except Exception:
-                    continue
+    def _log_page_state(page) -> None:
+        """Log enough DOM state to distinguish a broken adapter from a blocked page."""
+        try:
+            title = page.title()
+        except Exception:
+            title = ""
+        try:
+            url = page.url
+        except Exception:
+            url = ""
+        try:
+            body = " ".join(page.locator("body").inner_text(timeout=1500).split())[:600]
+        except Exception:
+            body = ""
+        logger.warning("browser state: url=%s title=%r body=%r", url, title, body)
 
     def _perform_search(self, page, query: str) -> bool:
-        """Find and explicitly submit the real search form, including SPA forms."""
+        """Find and explicitly submit the real search form, including SPA/shadow-DOM widgets."""
         selectors = (
             "input[type='search']",
+            "input[role='searchbox']",
+            "input[role='textbox']",
             "input[name*='search' i]",
             "input[name*='query' i]",
             "input[name*='keyword' i]",
@@ -106,30 +108,53 @@ class ReliableBrowserSearchMixin:
             "input[placeholder*='наимен' i]",
             "input[placeholder*='ключев' i]",
             "input[placeholder*='слово' i]",
+            "input[placeholder*='найти' i]",
             "input[aria-label*='поиск' i]",
             "input[aria-label*='закуп' i]",
+            "input[aria-label*='найти' i]",
             "textarea[placeholder*='поиск' i]",
-            "textarea[placeholder*='ключев' i]",
-            "[data-testid*='search' i] input",
-            "[class*='search' i] input",
+            "[role='searchbox']",
             "[contenteditable='true']",
+            "[data-testid*='search' i] input",
+            "[data-test*='search' i] input",
+            "[class*='search' i] input",
         )
         search_labels = (
             "Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти",
-            "Показать", "Показать результаты", "Применить", "Применить фильтры",
-            "Искать закупки", "Найти процедуры", "Отправить",
+            "Найти процедуры", "Искать закупки", "Показать результаты",
+            "Показать", "Применить", "Применить фильтры", "Отправить",
+            "Search", "Find",
+        )
+        trigger_selectors = (
+            "button[aria-label*='поиск' i]", "button[title*='поиск' i]",
+            "button[data-testid*='search' i]", "button[data-test*='search' i]",
+            "[role='button'][aria-label*='поиск' i]",
+            "[role='button'][title*='поиск' i]",
+            "[role='button'][data-testid*='search' i]",
+            "[role='button'][data-test*='search' i]",
+            "button[aria-label*='найти' i]", "button[title*='найти' i]",
+            "[role='button'][aria-label*='найти' i]",
         )
 
         frames = [page.main_frame] + [frame for frame in page.frames if frame != page.main_frame]
 
-        # Some portals expose the filter button before the actual input becomes visible.
+        # First try explicit search/filter triggers. Some SPA portals mount the
+        # real textbox only after this click.
         for frame in frames:
-            for label in ("Расширенный поиск", "Показать фильтры", "Фильтры", "Поиск"):
+            for selector in trigger_selectors:
                 try:
-                    loc = frame.get_by_text(label, exact=False).first
+                    loc = frame.locator(selector).first
                     if loc.count() and loc.is_visible():
-                        loc.click(timeout=1500)
-                        page.wait_for_timeout(500)
+                        loc.click(timeout=1800)
+                        page.wait_for_timeout(700)
+                except Exception:
+                    continue
+            for label in search_labels:
+                try:
+                    loc = frame.get_by_role("button", name=label, exact=False).first
+                    if loc.count() and loc.is_visible():
+                        loc.click(timeout=1800)
+                        page.wait_for_timeout(700)
                 except Exception:
                     continue
 
@@ -147,9 +172,7 @@ class ReliableBrowserSearchMixin:
                         pass
 
                     submitted = False
-                    # First try the site's normal submit buttons. This is important for
-                    # portals where Enter only changes the widget state and does not fire
-                    # the search request.
+                    # Prefer the portal's own submit action over Enter.
                     for label in search_labels:
                         try:
                             button = frame.get_by_role("button", name=label, exact=False).first
@@ -161,7 +184,11 @@ class ReliableBrowserSearchMixin:
                             continue
 
                     if not submitted:
-                        for selector_button in ("input[type='submit']", "button[type='submit']"):
+                        for selector_button in (
+                            "button[type='submit']",
+                            "input[type='submit']",
+                            "form button",
+                        ):
                             try:
                                 button = frame.locator(selector_button).last
                                 if button.count() and button.is_visible():
