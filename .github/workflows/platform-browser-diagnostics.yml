@@ -11,7 +11,6 @@ permissions:
 jobs:
   browser-diagnostics:
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 8
     steps:
       - name: Checkout repository
@@ -32,6 +31,7 @@ jobs:
         run: python tests/platform_browser_diagnostics.py
 
       - name: Upload diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: platform-browser-diagnostics
