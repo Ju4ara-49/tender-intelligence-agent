@@ -51,10 +51,10 @@ class ReliableB2BAdapterTests(unittest.TestCase):
     def test_discovery_uses_offset_pagination(self) -> None:
         collector = _FakeCollector([HTML_PAGE_1, HTML_PAGE_2])
         html = collector._load_search_page("станок")
-        self.assertEqual(len(collector.calls), 3)
+        self.assertEqual(len(collector.calls), 2)
         self.assertEqual(
             [c["params"]["from"] for c in collector.calls],
-            ["0", "20", "40"],
+            ["0", "20"],
         )
         self.assertIn("1000003", html)
 
