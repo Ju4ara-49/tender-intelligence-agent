@@ -34,6 +34,7 @@ jobs:
         run: |
           python test_ai_score.py
           python test_b2b_parser.py
+          python tests/test_b2b_reliable_adapter.py
 
       - name: Run real SQLite Excel integration test
         run: python tests/test_excel_export_integration.py
