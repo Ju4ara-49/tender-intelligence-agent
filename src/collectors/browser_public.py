@@ -151,6 +151,8 @@ class _BrowserTenderCollector(BaseCollector):
             "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
             "input[placeholder*='поиск' i]", "input[placeholder*='закуп' i]",
             "input[placeholder*='наимен' i]", "input[placeholder*='ключев' i]",
+            "input[placeholder*='предмет' i]", "input[aria-label*='поиск' i]",
+            "input[aria-label*='закуп' i]", "input[aria-label*='найти' i]",
         ]
         for selector in selectors:
             try:
@@ -158,6 +160,7 @@ class _BrowserTenderCollector(BaseCollector):
                 if locator.count() and locator.is_visible():
                     locator.fill(query)
                     locator.press("Enter")
+                    logger.info("%s: SEARCH_SUBMITTED selector=%s", self.platform, selector)
                     return
             except Exception:
                 continue
@@ -176,6 +179,7 @@ class _BrowserTenderCollector(BaseCollector):
                 if locator.count() and locator.is_visible():
                     locator.fill(query)
                     locator.press("Enter")
+                    logger.info("%s: SEARCH_SUBMITTED selector=%s", self.platform, selector)
                     return
             except Exception:
                 continue
@@ -187,8 +191,6 @@ class _BrowserTenderCollector(BaseCollector):
         seen: set[str] = set()
         base_host = urlparse(self.BASE_URL).netloc.lower()
 
-        # SPA portals do not consistently expose result navigation as <a href>.
-        # Collect common navigation attributes and common inline-JS navigation.
         candidates: list[tuple[object, str]] = []
         nav_attrs = ("href", "data-href", "data-url", "data-link", "routerlink", "data-routerlink")
         onclick_re = re.compile(
@@ -215,7 +217,6 @@ class _BrowserTenderCollector(BaseCollector):
             parsed = urlparse(href)
             if parsed.netloc and parsed.netloc.lower() != base_host:
                 continue
-
             title = " ".join(node.stripped_strings)
             if len(title) < 5 and node.parent is not None:
                 parent_title = " ".join(node.parent.stripped_strings)
@@ -223,11 +224,9 @@ class _BrowserTenderCollector(BaseCollector):
                     title = parent_title
             if not title or len(title) < 5:
                 continue
-
             low = href.lower()
             if not any(hint in low for hint in self.LINK_HINTS) and not re.search(r"\d{6,}", href + " " + title):
                 continue
-
             external_id = self._extract_id(href, title)
             if not external_id or external_id in seen:
                 continue
@@ -291,9 +290,9 @@ class _BrowserTenderCollector(BaseCollector):
 
 class RtsTenderCollector(_BrowserTenderCollector):
     platform = "rts_tender"
-    BASE_URL = "https://www.rts-tender.ru/poisk/"
+    BASE_URL = "https://www.rts-tender.ru/"
     SEARCH_HINTS = ("Поиск", "Поиск закупок", "Закупки")
-    LINK_HINTS = ("/poisk/id/", "/poisk/search", "procedure", "tender")
+    LINK_HINTS = ("/poisk/", "/procedure", "/tender", "zakup")
 
 
 class TmkCollector(_BrowserTenderCollector):
