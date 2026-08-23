@@ -192,11 +192,21 @@ class ReliableBrowserSearchMixin:
             clicked = False
             for label in load_more_labels:
                 try:
-                    loc = page.get_by_text(label, exact=False).filter(visible=True).last
-                    if loc.count():
-                        loc.click(timeout=1500)
-                        page.wait_for_timeout(1500)
-                        clicked = True
+                    # Playwright Python Locator.filter() does not accept a visible= keyword.
+                    # Filter first, then explicitly check visibility before clicking.
+                    candidates = page.get_by_text(label, exact=False)
+                    for index in range(candidates.count() - 1, -1, -1):
+                        loc = candidates.nth(index)
+                        try:
+                            if not loc.is_visible():
+                                continue
+                            loc.click(timeout=1500)
+                            page.wait_for_timeout(1500)
+                            clicked = True
+                            break
+                        except Exception:
+                            continue
+                    if clicked:
                         break
                 except Exception:
                     continue
