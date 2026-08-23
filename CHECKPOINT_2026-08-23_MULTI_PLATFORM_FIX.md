@@ -2,36 +2,32 @@
 
 ## Current main
 
-The working branch contains the multi-platform search diagnostics and the first production-safety fixes for incomplete B2B-Center results.
+The working branch contains the multi-platform search diagnostics and production-safety fixes for incomplete B2B-Center results.
 
-## Confirmed problem
+## Confirmed Telegram selection path
 
-B2B-Center discovery can produce a skeleton Tender containing only external ID/title/URL when authenticated detail loading fails or the fallback parser is used. The orchestrator previously allowed such objects to continue to strict filtering, AI, Telegram and Excel.
+The Telegram-selected platform list is now explicitly bound to the user's chat context before the background search starts. Regression coverage confirms that the selected platform list reaches the collector registry.
 
-Example observed in Telegram: tender `4564558` had a date and URL but no customer, region, price, deadline or law.
+A real run confirmed:
 
-## Fix now in main
+- Telegram selected all six platforms;
+- Orchestrator activated all six collectors;
+- EIS returned results;
+- B2B-Center returned results;
+- RTS-Tender, TMK, Fabrikant and Rosatom returned `raw=0` at discovery.
 
-`src/filters/keyword_filter.py`
+Therefore the current failure is inside individual platform discovery/adapters, not Telegram platform selection.
 
-The strict post-filter now rejects a B2B-Center result when:
+## B2B-Center safety gate
+
+The strict post-filter rejects a B2B-Center result when:
 
 - detail enrichment was not successfully loaded;
 - customer is empty;
 - price is missing;
 - submission deadline is missing.
 
-This is deliberately applied only to `b2b_center`; other platforms keep their existing semantics.
-
-Regression tests:
-
-- `tests/test_b2b_quality_gate.py`
-  - rejects incomplete B2B cards;
-  - rejects B2B cards without loaded details;
-  - keeps complete B2B cards;
-  - does not impose the B2B gate on other platforms.
-
-CI now runs this test.
+This prevents skeleton B2B cards such as tender `4564558` from reaching Telegram/Excel.
 
 ## Browser portal hardening
 
@@ -41,19 +37,35 @@ CI now runs this test.
 - searches across main frame and embedded frames;
 - recognizes more search input variants;
 - verifies that the requested keyword was actually entered;
-- keeps the existing fail-closed behavior when no search control is found.
+- keeps fail-closed behavior when no search control is found.
 
-## External observation
+## New SPA result parsing hardening
 
-The public Rosatom portal is currently returning a WAF block page to automated/public retrieval. The collector must not bypass WAF or other access controls; it reports the outage instead of fabricating results.
+`src/collectors/browser_public.py` now recognizes procurement navigation rendered by modern SPA applications through:
 
-TMK's public portal currently requires JavaScript and cookies, so the browser collector is the correct integration direction.
+- `href`;
+- `data-href`;
+- `data-url`;
+- `data-link`;
+- `routerlink`;
+- `data-routerlink`.
 
-## Next local validation
+This addresses a common case where the result card is not an ordinary `<a href>` element and previously produced a false `raw=0`.
 
-After syncing the local checkout to the latest `main`, run the bot and perform one controlled search for `подшипники` with all desired platforms enabled.
+Regression coverage is in `tests/test_browser_public_parser.py`.
 
-The expected behavior is:
+## External observations
+
+The public Rosatom portal has recently returned a WAF block page to automated/public retrieval. The collector must not bypass WAF, CAPTCHA, authentication or other access controls.
+
+TMK's procurement portal is a JavaScript-driven supplier application and requires browser execution/cookies.
+
+## Next validation
+
+After syncing this main branch locally, run the existing browser/parser tests and then one controlled `подшипники` search with all six platforms enabled.
+
+Expected outcome:
 
 - no incomplete B2B cards in Telegram/Excel;
-- browser platforms either return real procedures or explicitly report a platform search failure in diagnostics rather than silently disappearing.
+- SPA result links are recognized when exposed through data attributes/router links;
+- platforms that remain blocked/unavailable are reported as platform discovery failures rather than silently treated as successful empty searches.
