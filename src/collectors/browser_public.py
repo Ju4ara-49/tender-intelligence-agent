@@ -188,10 +188,13 @@ class _BrowserTenderCollector(BaseCollector):
         base_host = urlparse(self.BASE_URL).netloc.lower()
 
         # SPA portals do not consistently expose result navigation as <a href>.
-        # Collect all common navigation attributes, including onclick URLs.
+        # Collect common navigation attributes and common inline-JS navigation.
         candidates: list[tuple[object, str]] = []
         nav_attrs = ("href", "data-href", "data-url", "data-link", "routerlink", "data-routerlink")
-        onclick_re = re.compile(r"(?:location(?:\.href)?|window\.open)\s*\(?\s*['\"]([^'\"]+)['\"]", re.I)
+        onclick_re = re.compile(
+            r"(?:location(?:\.href)?\s*=|window\.location(?:\.href)?\s*=|window\.open\s*\()\s*['\"]([^'\"]+)['\"]",
+            re.I,
+        )
         for node in soup.find_all(True):
             raw = None
             for attr in nav_attrs:
@@ -213,9 +216,6 @@ class _BrowserTenderCollector(BaseCollector):
             if parsed.netloc and parsed.netloc.lower() != base_host:
                 continue
 
-            # A result card may keep the actual text on its parent while the
-            # navigation attribute is on a tiny icon/button. Prefer a useful
-            # nearby card label over an icon's empty/one-word text.
             title = " ".join(node.stripped_strings)
             if len(title) < 5 and node.parent is not None:
                 parent_title = " ".join(node.parent.stripped_strings)
