@@ -63,9 +63,43 @@ class KeywordFilter:
                 return False
         return True
 
+    @staticmethod
+    def _b2b_details_complete(tender: Tender) -> bool:
+        """Do not publish B2B cards when detail enrichment produced a skeleton.
+
+        Discovery may legitimately create a Tender with only id/title/url. Such
+        objects are useful as candidates, but they are not acceptable as final
+        client results. For B2B-Center the commercial card must have loaded
+        details plus customer, price and submission deadline.
+        """
+        if tender.platform != "b2b_center":
+            return True
+        if not tender.raw_data.get("details_loaded"):
+            logger.warning(
+                "B2B-Center: reject incomplete tender %s: details were not loaded",
+                tender.external_id,
+            )
+            return False
+        missing: list[str] = []
+        if not str(tender.customer or "").strip():
+            missing.append("customer")
+        if tender.price is None:
+            missing.append("price")
+        if tender.deadline is None:
+            missing.append("deadline")
+        if missing:
+            logger.warning(
+                "B2B-Center: reject incomplete tender %s: missing=%s",
+                tender.external_id, ",".join(missing),
+            )
+            return False
+        return True
+
     def matches_strict(self, tender: Tender) -> bool:
-        """Финальный INCLUDE-фильтр по title/description/details/lots/specification."""
+        """Финальный INCLUDE-фильтр по полному тексту тендера."""
         if not self.matches_soft(tender):
+            return False
+        if not self._b2b_details_complete(tender):
             return False
         if not self.include:
             return True
@@ -116,8 +150,6 @@ class KeywordFilter:
         if not words:
             return False
 
-        # For a phrase, every meaningful word must be represented. This avoids
-        # turning a multi-word procurement phrase into an overly broad OR.
         if len(words) > 1:
             return all(cls._contains_word(text, word) for word in words)
         return cls._contains_word(text, words[0])
@@ -129,9 +161,6 @@ class KeywordFilter:
         if len(word) <= 3:
             return False
 
-        # Conservative stem fallback. Two final letters are removed for the
-        # common inflectional endings in Russian; word-boundary matching keeps
-        # arbitrary substrings from becoming matches.
         stem = word[:-2] if len(word) >= 6 else word[:-1]
         if len(stem) < 4:
             return False
