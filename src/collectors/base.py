@@ -5,27 +5,17 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
+from src.collectors._broad_defaults import broaden_discovery_config
 from src.models.tender import Tender
 
 
 class BaseCollector(ABC):
-    """
-    Базовый класс для всех площадок.
-
-    Чтобы добавить новую площадку:
-    1. Создайте файл в collectors/ (например, sberbank_ast.py)
-    2. Унаследуйте BaseCollector
-    3. Зарегистрируйте класс в collectors/registry.py
-    """
+    """Базовый класс для всех площадок."""
 
     platform: str = "unknown"
 
     @abstractmethod
-    def search(
-        self,
-        keywords: list[str],
-        since: datetime | None = None,
-    ) -> list[Tender]:
+    def search(self, keywords: list[str], since: datetime | None = None) -> list[Tender]:
         """Найти тендеры по ключевым словам."""
 
     @abstractmethod
@@ -39,5 +29,7 @@ class BaseCollector(ABC):
         return bool(platform_config.get("enabled", False))
 
     def get_platform_config(self, config: dict) -> dict:
-        """Получить секцию настроек для этой площадки."""
-        return dict(config.get("collectors", {}).get(self.platform, {}))
+        """Получить настройки площадки с безопасными широкими discovery defaults."""
+        return broaden_discovery_config(
+            config.get("collectors", {}).get(self.platform, {})
+        )
