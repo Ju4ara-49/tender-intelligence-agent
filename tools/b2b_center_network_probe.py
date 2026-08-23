@@ -1,8 +1,10 @@
-"""Diagnostic probe for B2B-Center modern search.
+"""Deep diagnostic probe for B2B-Center modern search.
 
-Does not change production collectors. Opens the exact modern search URL,
-records network requests/responses that may contain search data, and reports
-pagination controls and result links. Run locally from the project root:
+Does not change production collectors. Opens the exact modern search URL and
+captures the browser's actual data flow so the search adapter can be rebuilt
+against the real frontend/backend contract instead of guessed DOM selectors.
+
+Run locally from the project root:
 
     python tools/b2b_center_network_probe.py станок
 
@@ -11,6 +13,7 @@ The output is written to output/b2b_network_probe_<timestamp>.txt.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from datetime import datetime
@@ -24,6 +27,16 @@ SEARCH_URL = f"{BASE_URL}/app/next/market-search"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
+INTERESTING_TOKENS = (
+    "/api/", "graphql", "search", "market-search", "purchase",
+    "procurement", "procedure", "tender", "trade", "feed", ".json",
+)
+
+
+def compact(text: str, limit: int = 12000) -> str:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text if len(text) <= limit else text[:limit] + " ...[TRUNCATED]"
+
 
 def main() -> int:
     keyword = " ".join(sys.argv[1:]).strip() or "станок"
@@ -32,122 +45,154 @@ def main() -> int:
         "&company_type=2&include_firm_tree=false&sort=date_desc"
         "&trade=buy&show=actual"
     )
-
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output = OUTPUT_DIR / f"b2b_network_probe_{stamp}.txt"
 
     requests_log: list[str] = []
     responses_log: list[str] = []
+    websocket_log: list[str] = []
+    console_log: list[str] = []
     result_links: list[str] = []
+    script_urls: list[str] = []
+    relevant_scripts: list[str] = []
+    response_bodies: dict[str, str] = {}
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(locale="ru-RU")
         page = context.new_page()
 
+        def is_interesting(url_value: str) -> bool:
+            low = url_value.lower()
+            return any(token in low for token in INTERESTING_TOKENS)
+
         def on_request(request):
             req_type = request.resource_type
-            low = request.url.lower()
-            interesting = any(
-                token in low
-                for token in (
-                    "/api/",
-                    "graphql",
-                    "search",
-                    "market-search",
-                    "tender",
-                    "procedure",
-                    "purchase",
-                    ".json",
-                )
-            )
-            if interesting or req_type in {"xhr", "fetch"}:
+            if is_interesting(request.url) or req_type in {"xhr", "fetch", "websocket"}:
+                headers = request.all_headers()
+                safe_headers = {
+                    k: v for k, v in headers.items()
+                    if k.lower() not in {"cookie", "authorization", "proxy-authorization"}
+                }
                 requests_log.append(
                     f"{req_type.upper()} {request.method} {request.url}\n"
-                    f"  POST={request.post_data or ''}"
+                    f"  POST={request.post_data or ''}\n"
+                    f"  HEADERS={json.dumps(safe_headers, ensure_ascii=False)}"
                 )
 
         def on_response(response):
-            low = response.url.lower()
-            if response.request.resource_type not in {"xhr", "fetch"} and not any(
-                token in low
-                for token in ("/api/", "graphql", "search", "market-search", ".json")
-            ):
+            req_type = response.request.resource_type
+            if not (is_interesting(response.url) or req_type in {"xhr", "fetch"}):
                 return
             content_type = response.headers.get("content-type", "")
             line = f"{response.status} {content_type} {response.url}"
             try:
-                if "json" in content_type.lower():
-                    body = response.text()
-                    body = re.sub(r"\s+", " ", body)
-                    if len(body) > 5000:
-                        body = body[:5000] + " ...[TRUNCATED]"
-                    line += f"\n  BODY={body}"
+                body = response.text()
+                if "json" in content_type.lower() or req_type in {"xhr", "fetch"}:
+                    line += f"\n  BODY={compact(body)}"
+                    if len(response_bodies) < 100:
+                        response_bodies[response.url] = body[:100000]
             except Exception as exc:
                 line += f"\n  BODY_READ_ERROR={exc}"
             responses_log.append(line)
 
+        def on_websocket(ws):
+            websocket_log.append(f"OPEN {ws.url}")
+            ws.on("framereceived", lambda payload: websocket_log.append(
+                f"RECV {ws.url}: {compact(str(payload), 5000)}"
+            ))
+            ws.on("framesent", lambda payload: websocket_log.append(
+                f"SEND {ws.url}: {compact(str(payload), 5000)}"
+            ))
+
         page.on("request", on_request)
         page.on("response", on_response)
+        page.on("websocket", on_websocket)
+        page.on("console", lambda msg: console_log.append(
+            f"{msg.type}: {compact(msg.text, 3000)}"
+        ))
 
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(6000)
         try:
             page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
             pass
 
-        # Trigger one controlled scroll so lazy-loaded result pages/data appear.
-        for _ in range(5):
+        for i in range(page.locator("script").count()):
+            script = page.locator("script").nth(i)
+            src = script.get_attribute("src") or ""
+            if src:
+                script_urls.append(src)
+            else:
+                text = script.inner_text()
+                if any(token in text.lower() for token in INTERESTING_TOKENS):
+                    relevant_scripts.append(compact(text, 20000))
+
+        for _ in range(8):
             page.mouse.wheel(0, 1800)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1200)
 
         links = page.locator("a[href]")
         seen = set()
-        for i in range(min(links.count(), 1000)):
+        for i in range(min(links.count(), 3000)):
             link = links.nth(i)
             href = link.get_attribute("href") or ""
-            text = re.sub(r"\s+", " ", link.inner_text()).strip()
+            text = compact(link.inner_text(), 500)
             if not href or href in seen:
                 continue
             seen.add(href)
             low = href.lower()
             if any(token in low for token in ("tender", "procedure", "purchase", "trade")) or re.search(r"\d{7,}", href):
-                result_links.append(f"{text[:300]} | {href}")
+                result_links.append(f"{text} | {href}")
 
-        body_text = re.sub(r"\s+", " ", page.locator("body").inner_text())
-        buttons = []
-        for i in range(min(page.get_by_role("button").count(), 200)):
-            button = page.get_by_role("button").nth(i)
-            try:
-                txt = re.sub(r"\s+", " ", button.inner_text()).strip()
-                if txt:
-                    buttons.append(txt)
-            except Exception:
-                pass
+        body_text = compact(page.locator("body").inner_text(), 30000)
+        controls: list[str] = []
+        for selector in ("button", "[role='button']", "input", "select", "[aria-label]"):
+            locator = page.locator(selector)
+            for i in range(min(locator.count(), 500)):
+                node = locator.nth(i)
+                try:
+                    controls.append(
+                        f"{selector}: text={compact(node.inner_text(), 500)!r} "
+                        f"aria={node.get_attribute('aria-label')!r} "
+                        f"name={node.get_attribute('name')!r} "
+                        f"value={node.get_attribute('value')!r} "
+                        f"href={node.get_attribute('href')!r}"
+                    )
+                except Exception:
+                    pass
+
+        local_storage = page.evaluate("() => Object.fromEntries(Object.entries(localStorage))")
+        session_storage = page.evaluate("() => Object.fromEntries(Object.entries(sessionStorage))")
 
         with output.open("w", encoding="utf-8") as fh:
-            fh.write(f"URL: {url}\n")
-            fh.write(f"KEYWORD: {keyword}\n")
-            fh.write(f"TIME: {datetime.now().isoformat()}\n\n")
-            fh.write("=== BODY SUMMARY ===\n")
-            fh.write(body_text[:20000] + "\n\n")
-            fh.write("=== BUTTONS ===\n")
-            fh.write("\n".join(buttons) + "\n\n")
-            fh.write("=== RESULT-LIKE LINKS ===\n")
-            fh.write("\n".join(result_links) + "\n\n")
-            fh.write("=== NETWORK REQUESTS ===\n")
-            fh.write("\n\n".join(requests_log) + "\n\n")
-            fh.write("=== NETWORK RESPONSES ===\n")
-            fh.write("\n\n".join(responses_log) + "\n")
+            fh.write(f"URL: {url}\nKEYWORD: {keyword}\nTIME: {datetime.now().isoformat()}\n\n")
+            fh.write("=== BODY SUMMARY ===\n" + body_text + "\n\n")
+            fh.write("=== CONTROLS ===\n" + "\n".join(controls) + "\n\n")
+            fh.write("=== SCRIPT URLS ===\n" + "\n".join(script_urls) + "\n\n")
+            fh.write("=== RELEVANT INLINE SCRIPTS ===\n" + "\n\n".join(relevant_scripts) + "\n\n")
+            fh.write("=== RESULT-LIKE LINKS ===\n" + "\n".join(result_links) + "\n\n")
+            fh.write("=== NETWORK REQUESTS ===\n" + "\n\n".join(requests_log) + "\n\n")
+            fh.write("=== NETWORK RESPONSES ===\n" + "\n\n".join(responses_log) + "\n\n")
+            fh.write("=== WEBSOCKETS ===\n" + "\n".join(websocket_log) + "\n\n")
+            fh.write("=== CONSOLE ===\n" + "\n".join(console_log) + "\n\n")
+            fh.write("=== LOCAL STORAGE ===\n" + json.dumps(local_storage, ensure_ascii=False, indent=2) + "\n\n")
+            fh.write("=== SESSION STORAGE ===\n" + json.dumps(session_storage, ensure_ascii=False, indent=2) + "\n\n")
+            fh.write("=== SAVED RESPONSE BODIES ===\n")
+            for response_url, body in response_bodies.items():
+                fh.write(f"\n--- {response_url} ---\n{body[:100000]}\n")
 
         browser.close()
 
-    print(f"B2B-Center network probe completed: {output}")
+    print(f"B2B-Center deep network probe completed: {output}")
     print(f"Result-like links: {len(result_links)}")
-    print(f"Network requests captured: {len(requests_log)}")
-    print(f"Network responses captured: {len(responses_log)}")
+    print(f"Scripts: {len(script_urls)}")
+    print(f"Network requests: {len(requests_log)}")
+    print(f"Network responses: {len(responses_log)}")
+    print(f"WebSockets: {len(websocket_log)}")
+    print(f"Saved response bodies: {len(response_bodies)}")
     return 0
 
 
