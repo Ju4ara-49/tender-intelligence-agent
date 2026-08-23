@@ -40,58 +40,69 @@ class ModernB2BCenterCollector(AuthenticatedB2BCenterCollector):
         )
 
     def _load_search_page(self, keyword: str) -> str:
-        """Load the current /app/next/market-search page in a browser."""
-        try:
-            if self.authenticated and STORAGE_STATE.exists():
-                return self._authenticated_search_html(keyword)
-        except Exception:
-            logger.exception(
-                "B2B-Center: authenticated modern search failed: %s",
-                keyword,
-            )
-
+        """Load the current search and expand the dynamic result list."""
         try:
             from playwright.sync_api import sync_playwright
 
+            selector = "a.search-results-title[href], a[href*='tender-']"
+            max_results = int(self.config.get("max_results", max(self.max_pages * 20, 100)))
+            max_scrolls = max(1, min(int(self.config.get("max_pages", 10)), 20))
+
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
-                page = browser.new_page(
-                    locale="ru-RU",
-                    user_agent=self.session.headers.get("User-Agent"),
-                )
+                context_kwargs = {
+                    "locale": "ru-RU",
+                    "user_agent": self.session.headers.get("User-Agent"),
+                }
+                if self.authenticated and STORAGE_STATE.exists():
+                    context_kwargs["storage_state"] = str(STORAGE_STATE)
+                context = browser.new_context(**context_kwargs)
+                page = context.new_page()
                 page.goto(
                     self._modern_search_url(keyword),
                     wait_until="domcontentloaded",
                     timeout=self.timeout * 1000,
                 )
 
-                # React/Next renders the result list after the initial HTML.
-                # Wait for the actual procedure links instead of relying only
-                # on a fixed sleep. A short fallback sleep handles slow cards.
                 try:
-                    page.locator(
-                        "a.search-results-title[href], a[href*='tender-']"
-                    ).first.wait_for(state="attached", timeout=15000)
+                    page.locator(selector).first.wait_for(state="attached", timeout=15000)
                 except Exception:
                     page.wait_for_timeout(3500)
 
                 try:
-                    page.wait_for_load_state(
-                        "networkidle",
-                        timeout=7000,
-                    )
+                    page.wait_for_load_state("networkidle", timeout=7000)
                 except Exception:
                     pass
 
+                previous_count = 0
+                stable_rounds = 0
+                for _ in range(max_scrolls):
+                    count = page.locator(selector).count()
+                    if count >= max_results:
+                        break
+                    if count == previous_count:
+                        stable_rounds += 1
+                    else:
+                        stable_rounds = 0
+                    if stable_rounds >= 2:
+                        break
+                    previous_count = count
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(1200)
+
                 page.wait_for_timeout(500)
                 html = page.content()
+                context.close()
                 browser.close()
+                logger.info(
+                    "B2B-Center: modern search keyword=%r DOM links=%d max_results=%d",
+                    keyword,
+                    page.locator(selector).count() if False else -1,
+                    max_results,
+                )
                 return html
         except Exception:
-            logger.exception(
-                "B2B-Center: modern browser search failed: %s",
-                keyword,
-            )
+            logger.exception("B2B-Center: modern browser search failed: %s", keyword)
             return ""
 
     def _parse_search_html(
@@ -104,15 +115,8 @@ class ModernB2BCenterCollector(AuthenticatedB2BCenterCollector):
         soup = BeautifulSoup(html or "", "html.parser")
         results: list[Tender] = []
         seen: set[str] = set()
-        max_results = int(
-            self.config.get(
-                "max_results",
-                max(self.max_pages * 20, 100),
-            )
-        )
+        max_results = int(self.config.get("max_results", max(self.max_pages * 20, 100)))
 
-        # The current UI uses the same semantic class as the legacy search
-        # for procedure links, but some cards are rendered without it.
         links = soup.select(
             "a.search-results-title[href], "
             "a[href*='/tender-'][href]"
@@ -127,44 +131,24 @@ class ModernB2BCenterCollector(AuthenticatedB2BCenterCollector):
             if "b2b-center.ru" not in url.lower():
                 continue
 
-            external_id = self._extract_modern_id(
-                href,
-                link.get_text(" ", strip=True),
-            )
-            if (
-                not external_id
-                or external_id in seen
-                or not self._looks_like_procedure_url(href)
-            ):
+            external_id = self._extract_modern_id(href, link.get_text(" ", strip=True))
+            if not external_id or external_id in seen or not self._looks_like_procedure_url(href):
                 continue
 
             container = self._result_container(link)
-            row_text = self._clean_text(
-                container.get_text(" ", strip=True)
-            )
-            title = self._extract_modern_title(
-                link,
-                container,
-                external_id,
-            )
+            row_text = self._clean_text(container.get_text(" ", strip=True))
+            title = self._extract_modern_title(link, container, external_id)
             if not title:
                 continue
 
-            published = self._extract_date_from_text(
-                row_text,
-                published=True,
-            )
-            deadline = self._extract_date_from_text(
-                row_text,
-                published=False,
-            )
+            published = self._extract_date_from_text(row_text, published=True)
+            deadline = self._extract_date_from_text(row_text, published=False)
             price = self._extract_price(row_text)
 
             if (
                 since is not None
                 and published is not None
-                and self._normalize_datetime(published)
-                < self._normalize_datetime(since)
+                and self._normalize_datetime(published) < self._normalize_datetime(since)
             ):
                 continue
 
@@ -180,10 +164,7 @@ class ModernB2BCenterCollector(AuthenticatedB2BCenterCollector):
                 published_at=published,
                 deadline=deadline,
                 end_date=deadline,
-                customer=self._extract_labeled_value(
-                    row_text,
-                    ("Заказчик", "Организатор"),
-                )[:1000],
+                customer=self._extract_labeled_value(row_text, ("Заказчик", "Организатор"))[:1000],
                 region=self._extract_region(row_text),
                 raw_data={
                     "keyword": keyword,
@@ -210,19 +191,10 @@ class ModernB2BCenterCollector(AuthenticatedB2BCenterCollector):
     @staticmethod
     def _looks_like_procedure_url(href: str) -> bool:
         low = href.lower()
-        return (
-            "/tender-" in low
-            or "/tenders-" in low
-            or "/procedure-" in low
-            or "/purchase-" in low
-            or "/trade-" in low
-        )
+        return "/tender-" in low or "/tenders-" in low or "/procedure-" in low or "/purchase-" in low or "/trade-" in low
 
     @staticmethod
-    def _extract_modern_id(
-        href: str,
-        text: str,
-    ) -> str | None:
+    def _extract_modern_id(href: str, text: str) -> str | None:
         patterns = (
             r"(?:tender|procedure|purchase|trade)[^0-9]{0,40}(\d{6,})",
             r"(?:/|#)(\d{7,})(?:/|[?#]|$)",
@@ -243,96 +215,53 @@ class ModernB2BCenterCollector(AuthenticatedB2BCenterCollector):
             if parent is None:
                 break
             node = parent
-            classes = (
-                " ".join(node.get("class", []))
-                if hasattr(node, "get")
-                else ""
-            )
+            classes = " ".join(node.get("class", [])) if hasattr(node, "get") else ""
             role = node.get("role", "") if hasattr(node, "get") else ""
             if (
                 node.name in {"article", "li", "tr"}
                 or role in {"article", "listitem"}
-                or any(
-                    key in classes.lower()
-                    for key in ("card", "result", "item", "trade")
-                )
+                or any(key in classes.lower() for key in ("card", "result", "item", "trade"))
             ):
                 break
         return node
 
-    def _extract_modern_title(
-        self,
-        link,
-        container,
-        external_id: str,
-    ) -> str:
+    def _extract_modern_title(self, link, container, external_id: str) -> str:
         for selector in (
-            "h1",
-            "h2",
-            "h3",
-            "h4",
+            "h1", "h2", "h3", "h4",
             "[data-testid*='title' i]",
             "[class*='title' i]",
         ):
             node = container.select_one(selector)
             if node is not None:
-                text = self._clean_text(
-                    node.get_text(" ", strip=True)
-                )
+                text = self._clean_text(node.get_text(" ", strip=True))
                 if len(text) >= 5 and not re.fullmatch(r"\d{6,}", text):
-                    cleaned = self._clean_procedure_title(
-                        text,
-                        external_id,
-                    )
+                    cleaned = self._clean_procedure_title(text, external_id)
                     if cleaned:
                         return cleaned
 
-        # In the current B2B-Center response the complete procedure name
-        # is present in anchor text, e.g. "Запрос предложений № 4572889 ...".
         text = self._clean_text(link.get_text(" ", strip=True))
         if not text:
             return ""
         return self._clean_procedure_title(text, external_id)
 
     @classmethod
-    def _extract_date_from_text(
-        cls,
-        text: str,
-        published: bool,
-    ) -> datetime | None:
+    def _extract_date_from_text(cls, text: str, published: bool) -> datetime | None:
         labels = (
             ("опублик", "размещ", "дата публикации", "начало")
             if published
-            else (
-                "окончание",
-                "срок",
-                "прием заявок",
-                "подачи заявок",
-                "до",
-            )
+            else ("окончание", "срок", "прием заявок", "подачи заявок", "до")
         )
         pattern = (
-            r"(?:"
-            + "|".join(labels)
-            + r")[^0-9]{0,80}"
-            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}"
-            r"(?:\s+\d{1,2}:\d{2})?)"
+            r"(?:" + "|".join(labels) + r")[^0-9]{0,80}"
+            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)"
         )
         match = re.search(pattern, text, re.I)
         return cls._parse_date_text(match.group(1)) if match else None
 
     @staticmethod
-    def _extract_labeled_value(
-        text: str,
-        labels: tuple[str, ...],
-    ) -> str:
+    def _extract_labeled_value(text: str, labels: tuple[str, ...]) -> str:
         for label in labels:
-            match = re.search(
-                re.escape(label)
-                + r"\s*[:\-]?\s*([^|;]{3,250})",
-                text,
-                re.I,
-            )
+            match = re.search(re.escape(label) + r"\s*[:\-]?\s*([^|;]{3,250})", text, re.I)
             if match:
                 return match.group(1).strip()
         return ""
