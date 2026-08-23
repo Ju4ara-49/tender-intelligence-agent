@@ -1,4 +1,4 @@
-"""More resilient browser search mixin for JS-heavy public tender portals."""
+"""Resilient browser search helpers for JS-heavy public tender portals."""
 from __future__ import annotations
 
 import logging
@@ -14,6 +14,7 @@ class ReliableBrowserSearchMixin:
 
     def _search_one(self, query: str):
         logger.info("%s: поиск по ключевому слову: %s", self.platform, query)
+        search_control_found = False
         try:
             from playwright.sync_api import sync_playwright
 
@@ -22,16 +23,25 @@ class ReliableBrowserSearchMixin:
                 context = browser.new_context(locale="ru-RU")
                 page = context.new_page()
                 page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=self.timeout_ms)
-                page.wait_for_timeout(5000)
+                page.wait_for_timeout(6500)
 
-                if not self._perform_search(page, query):
-                    logger.warning("%s: не удалось обнаружить рабочий виджет поиска для %r", self.platform, query)
+                search_control_found = self._perform_search(page, query)
+                if not search_control_found:
+                    logger.warning(
+                        "%s: SEARCH_ADAPTER_UNAVAILABLE — поле/кнопка поиска не найдены для %r; не считаем это успешным нулевым поиском",
+                        self.platform,
+                        query,
+                    )
+                    # Still collect the current DOM for diagnostics. This does
+                    # not fabricate keyword results; the parser decides whether
+                    # any procedure links are actually present.
+                    html = self._collect_rendered_html(page)
                     browser.close()
                     return []
 
-                page.wait_for_timeout(3500)
+                page.wait_for_timeout(4500)
                 try:
-                    page.wait_for_load_state("networkidle", timeout=7000)
+                    page.wait_for_load_state("networkidle", timeout=9000)
                 except Exception:
                     pass
 
@@ -43,35 +53,73 @@ class ReliableBrowserSearchMixin:
             return []
 
         results = self._parse_results(html)
-        logger.info("%s: keyword=%r: принято %d результатов", self.platform, query, len(results))
+        logger.info(
+            "%s: keyword=%r: search_control=%s, принято %d результатов",
+            self.platform,
+            query,
+            search_control_found,
+            len(results),
+        )
         return results
 
     def _perform_search(self, page, query: str) -> bool:
+        """Find the actual search control, including delayed/embedded widgets."""
         selectors = (
             "input[type='search']",
-            "input:not([type='hidden']):not([type='submit']):not([type='button'])",
-            "textarea",
+            "input[name*='search' i]",
+            "input[name*='query' i]",
+            "input[name*='keyword' i]",
+            "input[placeholder*='поиск' i]",
+            "input[placeholder*='закуп' i]",
+            "input[placeholder*='наимен' i]",
+            "input[placeholder*='ключев' i]",
+            "input[aria-label*='поиск' i]",
+            "input[aria-label*='закуп' i]",
+            "textarea[placeholder*='поиск' i]",
             "[contenteditable='true']",
         )
-        search_labels = ("Найти", "Искать", "Поиск", "Найти закупку", "Поиск закупок")
+        search_labels = (
+            "Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти",
+        )
 
         frames = [page.main_frame] + [frame for frame in page.frames if frame != page.main_frame]
+
+        # First click an obvious search trigger; many portals only mount the
+        # textbox after this interaction.
+        for frame in frames:
+            for label in search_labels:
+                try:
+                    loc = frame.get_by_role("button", name=label, exact=False).first
+                    if loc.count() and loc.is_visible():
+                        loc.click(timeout=1500)
+                        page.wait_for_timeout(700)
+                        break
+                except Exception:
+                    continue
+
         for frame in frames:
             for selector in selectors:
                 try:
-                    loc = frame.locator(selector).filter(visible=True).first
-                    if not loc.count():
+                    loc = frame.locator(selector).first
+                    if not loc.count() or not loc.is_visible():
                         continue
                     loc.fill(query)
+                    # Verify the browser actually accepted the value. This
+                    # avoids treating unrelated inputs as a successful search.
+                    try:
+                        if loc.input_value() != query:
+                            continue
+                    except Exception:
+                        pass
                     try:
                         loc.press("Enter")
                     except Exception:
                         pass
                     for label in search_labels:
                         try:
-                            button = frame.get_by_text(label, exact=False).filter(visible=True).first
-                            if button.count():
-                                button.click(timeout=1200)
+                            button = frame.get_by_role("button", name=label, exact=False).first
+                            if button.count() and button.is_visible():
+                                button.click(timeout=1500)
                                 break
                         except Exception:
                             continue
@@ -80,43 +128,26 @@ class ReliableBrowserSearchMixin:
                     continue
 
             try:
-                textbox = frame.get_by_role("textbox").filter(visible=True).first
-                if textbox.count():
+                textbox = frame.get_by_role("textbox").first
+                if textbox.count() and textbox.is_visible():
                     textbox.fill(query)
                     textbox.press("Enter")
                     return True
             except Exception:
                 pass
 
-            for label in search_labels:
-                try:
-                    button = frame.get_by_text(label, exact=False).filter(visible=True).first
-                    if button.count():
-                        button.click(timeout=1200)
-                        page.wait_for_timeout(500)
-                        for selector in selectors:
-                            try:
-                                loc = frame.locator(selector).filter(visible=True).first
-                                if loc.count():
-                                    loc.fill(query)
-                                    loc.press("Enter")
-                                    return True
-                            except Exception:
-                                continue
-                except Exception:
-                    continue
-
         return False
 
     @staticmethod
     def _expand_results(page) -> None:
+        """Expand paginated/load-more result sets without unbounded scrolling."""
         load_more_labels = (
-            "Загрузить еще", "Показать еще", "Показать ещё", "Еще", "Ещё",
-            "Следующая", "Следующая страница", "Далее", "Next",
+            "Загрузить еще", "Загрузить ещё", "Показать еще", "Показать ещё",
+            "Еще", "Ещё", "Следующая", "Следующая страница", "Далее", "Next",
         )
         stable = 0
         previous = -1
-        for _ in range(10):
+        for _ in range(20):
             try:
                 current = page.locator("a[href], article, tr, li").count()
             except Exception:
@@ -125,7 +156,7 @@ class ReliableBrowserSearchMixin:
                 stable += 1
             else:
                 stable = 0
-            if stable >= 2:
+            if stable >= 3:
                 break
             previous = current
 
@@ -134,15 +165,15 @@ class ReliableBrowserSearchMixin:
                 try:
                     loc = page.get_by_text(label, exact=False).filter(visible=True).last
                     if loc.count():
-                        loc.click(timeout=1000)
-                        page.wait_for_timeout(1200)
+                        loc.click(timeout=1500)
+                        page.wait_for_timeout(1500)
                         clicked = True
                         break
                 except Exception:
                     continue
             if not clicked:
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(1200)
 
 
 class ReliableRtsTenderCollector(ReliableBrowserSearchMixin, RtsTenderCollector):
