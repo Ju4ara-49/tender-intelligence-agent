@@ -1,14 +1,15 @@
 """Deep diagnostic probe for B2B-Center modern search.
 
-Does not change production collectors. Opens the exact modern search URL and
-captures the browser's actual data flow so the search adapter can be rebuilt
-against the real frontend/backend contract instead of guessed DOM selectors.
+The modern B2B-Center search is server-rendered. This probe captures the
+actual search page, result-link DOM snippets, network requests/responses and
+an intentionally compact diagnostic file so the production collector can be
+rebuilt from observed markup instead of the obsolete /market/ table parser.
 
 Run locally from the project root:
-
     python tools/b2b_center_network_probe.py станок
 
-The output is written to output/b2b_network_probe_<timestamp>.txt.
+Outputs are written to output/b2b_network_probe_<timestamp>.txt and
+output/b2b_search_dom_<timestamp>.html.
 """
 
 from __future__ import annotations
@@ -38,6 +39,11 @@ def compact(text: str, limit: int = 12000) -> str:
     return text if len(text) <= limit else text[:limit] + " ...[TRUNCATED]"
 
 
+def safe_headers(headers: dict[str, str]) -> dict[str, str]:
+    blocked = {"cookie", "authorization", "proxy-authorization", "set-cookie"}
+    return {k: v for k, v in headers.items() if k.lower() not in blocked}
+
+
 def main() -> int:
     keyword = " ".join(sys.argv[1:]).strip() or "станок"
     url = (
@@ -48,12 +54,14 @@ def main() -> int:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output = OUTPUT_DIR / f"b2b_network_probe_{stamp}.txt"
+    dom_output = OUTPUT_DIR / f"b2b_search_dom_{stamp}.html"
 
     requests_log: list[str] = []
     responses_log: list[str] = []
     websocket_log: list[str] = []
     console_log: list[str] = []
     result_links: list[str] = []
+    result_dom: list[str] = []
     script_urls: list[str] = []
     relevant_scripts: list[str] = []
     response_bodies: dict[str, str] = {}
@@ -70,15 +78,10 @@ def main() -> int:
         def on_request(request):
             req_type = request.resource_type
             if is_interesting(request.url) or req_type in {"xhr", "fetch", "websocket"}:
-                headers = request.all_headers()
-                safe_headers = {
-                    k: v for k, v in headers.items()
-                    if k.lower() not in {"cookie", "authorization", "proxy-authorization"}
-                }
                 requests_log.append(
                     f"{req_type.upper()} {request.method} {request.url}\n"
                     f"  POST={request.post_data or ''}\n"
-                    f"  HEADERS={json.dumps(safe_headers, ensure_ascii=False)}"
+                    f"  HEADERS={json.dumps(safe_headers(request.all_headers()), ensure_ascii=False)}"
                 )
 
         def on_response(response):
@@ -114,11 +117,15 @@ def main() -> int:
         ))
 
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(6000)
+        page.wait_for_timeout(5000)
         try:
             page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
             pass
+
+        # Save the real server-rendered DOM. This is the key artifact for
+        # rebuilding the requests/BeautifulSoup collector.
+        dom_output.write_text(page.content(), encoding="utf-8")
 
         for i in range(page.locator("script").count()):
             script = page.locator("script").nth(i)
@@ -130,22 +137,25 @@ def main() -> int:
                 if any(token in text.lower() for token in INTERESTING_TOKENS):
                     relevant_scripts.append(compact(text, 20000))
 
-        for _ in range(8):
-            page.mouse.wheel(0, 1800)
-            page.wait_for_timeout(1200)
-
+        # Capture result anchors and their nearest useful DOM container.
         links = page.locator("a[href]")
         seen = set()
         for i in range(min(links.count(), 3000)):
             link = links.nth(i)
             href = link.get_attribute("href") or ""
-            text = compact(link.inner_text(), 500)
+            text = compact(link.inner_text(), 1000)
             if not href or href in seen:
                 continue
             seen.add(href)
             low = href.lower()
-            if any(token in low for token in ("tender", "procedure", "purchase", "trade")) or re.search(r"\d{7,}", href):
+            if "/tender-" in low or "/tender/" in low or "/procedure" in low or re.search(r"tender-\d{5,}", low):
                 result_links.append(f"{text} | {href}")
+                try:
+                    result_dom.append(compact(link.evaluate(
+                        "el => { let n=el; for(let i=0;i<5 && n;i++,n=n.parentElement){ if((n.innerText||'').length>80) return n.outerHTML; } return el.outerHTML; }"
+                    ), 12000))
+                except Exception:
+                    pass
 
         body_text = compact(page.locator("body").inner_text(), 30000)
         controls: list[str] = []
@@ -167,6 +177,17 @@ def main() -> int:
         local_storage = page.evaluate("() => Object.fromEntries(Object.entries(localStorage))")
         session_storage = page.evaluate("() => Object.fromEntries(Object.entries(sessionStorage))")
 
+        # Compact diagnostic section: easy to inspect without opening the
+        # entire 300-500 KB DOM dump.
+        compact_output = OUTPUT_DIR / f"b2b_search_compact_{stamp}.txt"
+        with compact_output.open("w", encoding="utf-8") as fh:
+            fh.write(f"URL: {url}\nKEYWORD: {keyword}\nTIME: {datetime.now().isoformat()}\n\n")
+            fh.write("=== NETWORK REQUESTS ===\n" + "\n\n".join(requests_log) + "\n\n")
+            fh.write("=== NETWORK RESPONSES ===\n" + "\n\n".join(responses_log) + "\n\n")
+            fh.write("=== RESULT LINKS ===\n" + "\n".join(result_links[:100]) + "\n\n")
+            fh.write("=== RESULT DOM SNIPPETS ===\n" + "\n\n".join(result_dom[:50]) + "\n\n")
+            fh.write("=== BODY SUMMARY ===\n" + body_text + "\n")
+
         with output.open("w", encoding="utf-8") as fh:
             fh.write(f"URL: {url}\nKEYWORD: {keyword}\nTIME: {datetime.now().isoformat()}\n\n")
             fh.write("=== BODY SUMMARY ===\n" + body_text + "\n\n")
@@ -187,7 +208,10 @@ def main() -> int:
         browser.close()
 
     print(f"B2B-Center deep network probe completed: {output}")
+    print(f"DOM saved: {dom_output}")
+    print(f"Compact saved: {compact_output}")
     print(f"Result-like links: {len(result_links)}")
+    print(f"Result DOM snippets: {len(result_dom)}")
     print(f"Scripts: {len(script_urls)}")
     print(f"Network requests: {len(requests_log)}")
     print(f"Network responses: {len(responses_log)}")
