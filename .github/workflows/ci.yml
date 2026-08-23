@@ -36,6 +36,9 @@ jobs:
           python test_b2b_parser.py
           python tests/test_b2b_reliable_adapter.py
 
+      - name: Run search pipeline regression tests
+        run: pytest -q tests/test_b2b_pagination.py
+
       - name: Run real SQLite Excel integration test
         run: python tests/test_excel_export_integration.py
 
