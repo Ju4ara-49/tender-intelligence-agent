@@ -95,12 +95,6 @@ class _BrowserTenderCollector(BaseCollector):
                 browser = pw.chromium.launch(headless=True)
                 page = browser.new_page(locale="ru-RU")
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-
-                # Fabrikant renders important procurement data asynchronously
-                # and, depending on the procedure type, may place it inside
-                # an iframe or behind an information tab. Give the application
-                # time to finish rendering and open the common information tabs
-                # without attempting to bypass authentication/WAF.
                 page.wait_for_timeout(2500)
                 self._open_information_sections(page)
                 page.wait_for_timeout(1200)
@@ -108,7 +102,6 @@ class _BrowserTenderCollector(BaseCollector):
                     page.wait_for_load_state("networkidle", timeout=7000)
                 except Exception:
                     pass
-
                 html = self._collect_rendered_html(page)
                 browser.close()
                 soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
@@ -122,13 +115,7 @@ class _BrowserTenderCollector(BaseCollector):
 
     @staticmethod
     def _collect_rendered_html(page) -> str:
-        """Return the main DOM plus HTML/text from same-origin frames.
-
-        Fabrikant can render procedure information in an iframe. BeautifulSoup
-        cannot see iframe DOM nodes when parsing page.content(), so collecting
-        each frame here prevents the detail parser from seeing only the title
-        and price while missing customer, region and dates.
-        """
+        """Return the main DOM plus HTML/text from same-origin frames."""
         chunks: list[str] = []
         try:
             chunks.append(page.content())
@@ -211,8 +198,23 @@ class _BrowserTenderCollector(BaseCollector):
         seen: set[str] = set()
         base_host = urlparse(self.BASE_URL).netloc.lower()
 
-        for anchor in soup.find_all("a", href=True):
-            href = urljoin(self.BASE_URL, str(anchor.get("href", "")).strip())
+        # Modern SPA portals frequently render result cards as buttons/divs
+        # with data-href/data-url/routerlink instead of ordinary <a href>.
+        # Normalize those navigational attributes into the same parsing path.
+        candidates = []
+        for node in soup.find_all(True):
+            href = node.get("href")
+            if href:
+                candidates.append((node, str(href)))
+                continue
+            for attr in ("data-href", "data-url", "data-link", "routerlink", "data-routerlink"):
+                value = node.get(attr)
+                if value:
+                    candidates.append((node, str(value)))
+                    break
+
+        for anchor, raw_href in candidates:
+            href = urljoin(self.BASE_URL, raw_href.strip())
             parsed = urlparse(href)
             if parsed.netloc and parsed.netloc.lower() != base_host:
                 continue
