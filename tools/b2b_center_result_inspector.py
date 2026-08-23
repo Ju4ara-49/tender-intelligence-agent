@@ -7,6 +7,10 @@ This is a diagnostic only. It does not modify production collectors.
 It captures the visible result anchors from /app/next/market-search and,
 for each result, prints the surrounding DOM hierarchy and text so we can
 identify where B2B-Center exposes the matched lot/item text.
+
+The report is written to both output/ (local diagnostics) and
+
+debug_artifacts/ (so it can be committed and inspected from GitHub).
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ BASE_URL = "https://www.b2b-center.ru"
 SEARCH_URL = f"{BASE_URL}/app/next/market-search"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "output"
+DEBUG_DIR = PROJECT_ROOT / "debug_artifacts"
 
 
 def clean(text: str, limit: int = 5000) -> str:
@@ -39,7 +44,9 @@ def main() -> int:
     )
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     output = OUTPUT_DIR / f"b2b_result_inspector_{stamp}.txt"
+    debug_output = DEBUG_DIR / f"b2b_result_inspector_{stamp}.txt"
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -88,26 +95,36 @@ def main() -> int:
             if len(results) >= 20:
                 break
 
-        with output.open("w", encoding="utf-8") as fh:
-            fh.write(f"URL: {url}\nKEYWORD: {keyword}\nTIME: {datetime.now().isoformat()}\n")
-            fh.write(f"RESULTS: {len(results)}\n\n")
-            for number, (href, chain) in enumerate(results, 1):
-                fh.write(f"===== RESULT {number} =====\n")
-                fh.write(f"HREF: {href}\n")
-                for item in chain:
-                    text = clean(item.get("text", ""))
-                    html = clean(item.get("html", ""), 12000)
-                    marker = "<-- KEYWORD PRESENT" if keyword.lower() in text.lower() else ""
-                    fh.write(
-                        f"DEPTH={item.get('depth')} TAG={item.get('tag')} "
-                        f"ID={item.get('id')!r} CLASS={item.get('cls')!r} {marker}\n"
-                        f"TEXT={text}\n"
-                        f"HTML={html}\n\n"
-                    )
+        report_parts = [
+            f"URL: {url}",
+            f"KEYWORD: {keyword}",
+            f"TIME: {datetime.now().isoformat()}",
+            f"RESULTS: {len(results)}",
+            "",
+        ]
+        for number, (href, chain) in enumerate(results, 1):
+            report_parts.append(f"===== RESULT {number} =====")
+            report_parts.append(f"HREF: {href}")
+            for item in chain:
+                text = clean(item.get("text", ""))
+                html = clean(item.get("html", ""), 12000)
+                marker = "<-- KEYWORD PRESENT" if keyword.lower() in text.lower() else ""
+                report_parts.append(
+                    f"DEPTH={item.get('depth')} TAG={item.get('tag')} "
+                    f"ID={item.get('id')!r} CLASS={item.get('cls')!r} {marker}"
+                )
+                report_parts.append(f"TEXT={text}")
+                report_parts.append(f"HTML={html}")
+                report_parts.append("")
+            report_parts.append("")
 
+        report = "\n".join(report_parts)
+        output.write_text(report, encoding="utf-8")
+        debug_output.write_text(report, encoding="utf-8")
         browser.close()
 
     print(f"B2B-Center result inspector completed: {output}")
+    print(f"GitHub artifact saved: {debug_output}")
     print(f"Results inspected: {len(results)}")
     return 0
 
