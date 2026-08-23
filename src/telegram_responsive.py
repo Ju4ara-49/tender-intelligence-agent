@@ -5,6 +5,8 @@ import logging
 import os
 import time
 
+import httpx
+
 from src.telegram_bot import HELP_TEXT, PLATFORM_NAMES
 from src.telegram_multiuser import MultiUserTelegramBot
 
@@ -25,7 +27,7 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
     """Multi-user bot with interruptible short polling."""
 
     POLL_TIMEOUT_SECONDS = 2
-    REQUEST_TIMEOUT_SECONDS = 6
+    REQUEST_TIMEOUT_SECONDS = 15
 
     def run_polling(self) -> None:
         if not self.bot_token:
@@ -51,6 +53,14 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
             except KeyboardInterrupt:
                 logger.info("Telegram-бот остановлен (Ctrl+C)")
                 break
+            except httpx.ReadTimeout:
+                # Long-polling timeout is a normal transient network event.
+                # Do not emit a full traceback or make it look like the bot crashed.
+                logger.warning("Telegram-бот: timeout getUpdates; повторяем polling")
+                time.sleep(1)
+            except httpx.HTTPError as exc:
+                logger.warning("Telegram-бот: временная HTTP-ошибка polling: %s", exc)
+                time.sleep(2)
             except Exception:
                 logger.exception("Telegram-бот: ошибка polling, продолжаем через 2 сек")
                 time.sleep(2)
@@ -96,8 +106,6 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
             current.remove(platform)
         else:
             current.add(platform)
-        # Все площадки, включая ЕИС и Росатом, являются обычными переключателями.
-        # Никакая площадка не должна принудительно возвращаться после выключения.
         self._call_user(chat_id, self.criteria_store.set_enabled_platforms, sorted(current))
         logger.info("Telegram-бот: площадка изменена chat_id=%s platform=%s before=%s after=%s", chat_id, platform, before, sorted(current))
         self._show_platforms(chat_id)
