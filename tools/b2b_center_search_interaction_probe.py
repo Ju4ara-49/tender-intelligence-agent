@@ -27,7 +27,7 @@ DEBUG_DIR = PROJECT_ROOT / "debug_artifacts"
 
 
 def compact(text: str, limit: int = 12000) -> str:
-    text = re.sub(r"\\s+", " ", text or "").strip()
+    text = re.sub(r"\s+", " ", text or "").strip()
     return text if len(text) <= limit else text[:limit] + " ...[TRUNCATED]"
 
 
@@ -106,10 +106,29 @@ def main() -> int:
             }
             forms.append(item)
 
-        keyword_input = page.locator("input[name='f_keyword']").first
-        if keyword_input.count() == 0:
-            raise RuntimeError("B2B-Center search input input[name=f_keyword] was not found")
+        # B2B-Center renders more than one f_keyword input. The header search
+        # input is present in the DOM but hidden, while the market-search form
+        # contains the actual visible field. Always prefer a visible control.
+        keyword_candidates = page.locator("input[name='f_keyword']:visible")
+        if keyword_candidates.count() == 0:
+            # Fallback for future markup changes: inspect all matching inputs
+            # and choose the first one that is displayed and editable.
+            all_candidates = page.locator("input[name='f_keyword']")
+            visible_indices = []
+            for i in range(all_candidates.count()):
+                candidate = all_candidates.nth(i)
+                try:
+                    if candidate.is_visible() and candidate.is_editable():
+                        visible_indices.append(i)
+                except Exception:
+                    continue
+            if not visible_indices:
+                raise RuntimeError("B2B-Center has no visible/editable input[name=f_keyword]")
+            keyword_input = all_candidates.nth(visible_indices[0])
+        else:
+            keyword_input = keyword_candidates.first
 
+        keyword_input.scroll_into_view_if_needed()
         keyword_input.fill(keyword)
 
         form = keyword_input.locator("xpath=ancestor::form[1]")
@@ -118,8 +137,11 @@ def main() -> int:
 
         # Prefer the real submit control inside the form. If the site handles
         # submission with JS, pressing Enter triggers the same UI path.
-        submit = form.locator("input[type='submit'], button[type='submit'], input[value='Найти']").first
-        if submit.count() > 0:
+        submit_candidates = form.locator(
+            "input[type='submit']:visible, button[type='submit']:visible, input[value='Найти']:visible"
+        )
+        submit = submit_candidates.first
+        if submit_candidates.count() > 0:
             try:
                 with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
                     submit.click()
