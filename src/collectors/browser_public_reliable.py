@@ -24,6 +24,7 @@ class ReliableBrowserSearchMixin:
                 page = context.new_page()
                 page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=self.timeout_ms)
                 page.wait_for_timeout(6500)
+                self._dismiss_consent(page)
 
                 search_control_found = self._perform_search(page, query)
                 if not search_control_found:
@@ -32,10 +33,7 @@ class ReliableBrowserSearchMixin:
                         self.platform,
                         query,
                     )
-                    # Still collect the current DOM for diagnostics. This does
-                    # not fabricate keyword results; the parser decides whether
-                    # any procedure links are actually present.
-                    html = self._collect_rendered_html(page)
+                    self._collect_rendered_html(page)
                     browser.close()
                     return []
 
@@ -62,6 +60,32 @@ class ReliableBrowserSearchMixin:
         )
         return results
 
+    @staticmethod
+    def _dismiss_consent(page) -> None:
+        """Dismiss common cookie/consent overlays without bypassing access controls."""
+        labels = (
+            "Принять", "Принять все", "Согласен", "Согласна", "Разрешить",
+            "Accept", "Accept all", "OK",
+        )
+        for frame in [page.main_frame] + [f for f in page.frames if f != page.main_frame]:
+            for label in labels:
+                try:
+                    loc = frame.get_by_role("button", name=label, exact=False).first
+                    if loc.count() and loc.is_visible():
+                        loc.click(timeout=1200)
+                        page.wait_for_timeout(300)
+                        return
+                except Exception:
+                    continue
+                try:
+                    loc = frame.get_by_text(label, exact=True).first
+                    if loc.count() and loc.is_visible():
+                        loc.click(timeout=1200)
+                        page.wait_for_timeout(300)
+                        return
+                except Exception:
+                    continue
+
     def _perform_search(self, page, query: str) -> bool:
         """Find the actual search control, including delayed/embedded widgets."""
         selectors = (
@@ -73,19 +97,22 @@ class ReliableBrowserSearchMixin:
             "input[placeholder*='закуп' i]",
             "input[placeholder*='наимен' i]",
             "input[placeholder*='ключев' i]",
+            "input[placeholder*='слово' i]",
             "input[aria-label*='поиск' i]",
             "input[aria-label*='закуп' i]",
             "textarea[placeholder*='поиск' i]",
+            "textarea[placeholder*='ключев' i]",
+            "[data-testid*='search' i] input",
+            "[class*='search' i] input",
             "[contenteditable='true']",
         )
         search_labels = (
             "Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти",
+            "Показать", "Показать результаты",
         )
 
         frames = [page.main_frame] + [frame for frame in page.frames if frame != page.main_frame]
 
-        # First click an obvious search trigger; many portals only mount the
-        # textbox after this interaction.
         for frame in frames:
             for label in search_labels:
                 try:
@@ -104,15 +131,15 @@ class ReliableBrowserSearchMixin:
                     if not loc.count() or not loc.is_visible():
                         continue
                     loc.fill(query)
-                    # Verify the browser actually accepted the value. This
-                    # avoids treating unrelated inputs as a successful search.
                     try:
                         if loc.input_value() != query:
                             continue
                     except Exception:
                         pass
+                    submitted = False
                     try:
                         loc.press("Enter")
+                        submitted = True
                     except Exception:
                         pass
                     for label in search_labels:
@@ -120,10 +147,12 @@ class ReliableBrowserSearchMixin:
                             button = frame.get_by_role("button", name=label, exact=False).first
                             if button.count() and button.is_visible():
                                 button.click(timeout=1500)
+                                submitted = True
                                 break
                         except Exception:
                             continue
-                    return True
+                    if submitted:
+                        return True
                 except Exception:
                     continue
 
