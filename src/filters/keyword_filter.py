@@ -95,11 +95,44 @@ class KeywordFilter:
         text = re.sub(r"\s+", " ", text)
         return text.strip()
 
-    @staticmethod
-    def _contains(text: str, pattern: str) -> bool:
-        pattern_lower = KeywordFilter._normalize(pattern)
+    @classmethod
+    def _contains(cls, text: str, pattern: str) -> bool:
+        """Match literal phrases plus conservative Russian word morphology.
+
+        Search discovery is intentionally broad, so the final filter must not
+        reject "станки" when the user entered "станок" or "подшипника" when
+        the user entered "подшипник". Exact matching remains the first choice;
+        the stem fallback is only used for words longer than three characters.
+        """
+        pattern_lower = cls._normalize(pattern)
         if not pattern_lower:
             return False
+        if pattern_lower in text:
+            return True
         if len(pattern_lower) <= 3:
-            return pattern_lower in text
-        return bool(re.search(re.escape(pattern_lower), text))
+            return False
+
+        words = re.findall(r"[\w-]+", pattern_lower, re.UNICODE)
+        if not words:
+            return False
+
+        # For a phrase, every meaningful word must be represented. This avoids
+        # turning a multi-word procurement phrase into an overly broad OR.
+        if len(words) > 1:
+            return all(cls._contains_word(text, word) for word in words)
+        return cls._contains_word(text, words[0])
+
+    @staticmethod
+    def _contains_word(text: str, word: str) -> bool:
+        if word in text:
+            return True
+        if len(word) <= 3:
+            return False
+
+        # Conservative stem fallback. Two final letters are removed for the
+        # common inflectional endings in Russian; word-boundary matching keeps
+        # arbitrary substrings from becoming matches.
+        stem = word[:-2] if len(word) >= 6 else word[:-1]
+        if len(stem) < 4:
+            return False
+        return bool(re.search(rf"\b{re.escape(stem)}[\w-]*", text, re.UNICODE))
