@@ -1,4 +1,4 @@
-﻿# Python
+﻿﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -37,6 +37,9 @@ output/*
 *.tmp
 tmp_*
 debug_*
+!debug_artifacts/
+debug_artifacts/*
+!debug_artifacts/b2b_probe_*.txt
 check_*
 analyzer.py
 run_error.txt
