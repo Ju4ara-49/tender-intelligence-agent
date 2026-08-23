@@ -9,6 +9,13 @@ scheduler:
   interval_minutes: 60
   run_on_start: true
 
+# Global discovery defaults are intentionally broad. Individual collectors may
+# raise these values, but should not silently reduce them to one result page.
+search:
+  max_pages_per_keyword: 20
+  max_results_per_platform: 500
+  concurrency: 6
+
 collectors:
   eis:
     enabled: true
@@ -20,24 +27,26 @@ collectors:
     enabled: true
     lookback_days: 3
     request_delay_seconds: 1
-    max_pages: 1
+    max_pages: 20
+    page_size: 20
+    max_results: 500
     timeout_seconds: 30
   fabrikant:
     enabled: true
     timeout_seconds: 45
-    max_results: 100
+    max_results: 200
   rts_tender:
     enabled: true
     timeout_seconds: 30
-    max_results: 100
+    max_results: 200
   tmk:
     enabled: true
     timeout_seconds: 30
-    max_results: 100
+    max_results: 200
   rosatom:
     enabled: true
     timeout_seconds: 45
-    max_results: 100
+    max_results: 200
 
 filters:
   min_text_length: 10
