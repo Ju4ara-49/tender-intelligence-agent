@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Type
 
 from src.collectors.base import BaseCollector
-from src.collectors.b2b_center_modern import ModernB2BCenterCollector
+from src.collectors.b2b_center_reliable import ReliableB2BCenterCollector
 from src.collectors.browser_public import RtsTenderCollector, TmkCollector
 from src.collectors.eis_zakupki import EisZakupkiCollector
 from src.collectors.fabrikant_v3 import FabrikantV3Collector
@@ -15,7 +15,7 @@ from src.collectors.rosatom import RosatomCollector
 # Все поддерживаемые площадки. Конкретное включение управляется Telegram.
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
     EisZakupkiCollector,
-    ModernB2BCenterCollector,
+    ReliableB2BCenterCollector,
     FabrikantV3Collector,
     RtsTenderCollector,
     TmkCollector,
