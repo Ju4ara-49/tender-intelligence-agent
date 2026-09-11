@@ -187,7 +187,8 @@ class Orchestrator:
                 return False, "min_advance_percent"
 
         if criteria.max_postpayment_days is not None:
-            if tender.postpayment_days is None or tender.postpayment_days > criteria.max_postpayment_days:
+            postpayment_days = tender.postpayment_days or 0
+            if postpayment_days > criteria.max_postpayment_days:
                 return False, "max_postpayment_days"
 
         if criteria.min_application_security_percent > 0:
@@ -197,8 +198,6 @@ class Orchestrator:
             ):
                 return False, "min_application_security_percent"
         if criteria.max_application_security_percent is not None:
-            # Отсутствующее обеспечение трактуем как 0%, поэтому стандартный
-            # диапазон пользователя 0–5% не отбрасывает закупки без обеспечения.
             application_security = tender.application_security_percent or 0.0
             if application_security > criteria.max_application_security_percent:
                 return False, "max_application_security_percent"
@@ -210,7 +209,8 @@ class Orchestrator:
             ):
                 return False, "min_contract_security_percent"
         if criteria.max_contract_security_percent is not None:
-            if tender.contract_security_percent is None or tender.contract_security_percent > criteria.max_contract_security_percent:
+            contract_security = tender.contract_security_percent or 0.0
+            if contract_security > criteria.max_contract_security_percent:
                 return False, "max_contract_security_percent"
 
         if criteria.min_submission_days and tender.deadline is not None:
