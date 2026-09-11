@@ -13,7 +13,7 @@ from src.notifications.telegram import TelegramNotifier
 from src.notifications.email import EmailNotifier
 from src.settings import AppSettings
 from src.storage.database import TenderDatabase
-from src.telegram_settings import CriteriaStore
+from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
 
 logger = logging.getLogger(__name__)
@@ -169,6 +169,66 @@ class Orchestrator:
             result.append((collector, tender))
         return result
 
+    @staticmethod
+    def _passes_criteria(tender: Tender, criteria: TenderCriteria) -> tuple[bool, str]:
+        """Проверить бизнес-критерии пользователя после enrichment.
+
+        Если критерий задан, но площадка не предоставила соответствующее поле,
+        тендер не считается подходящим: иначе фильтр фактически не работает.
+        """
+        if criteria.min_price is not None and (tender.price is None or tender.price < criteria.min_price):
+            return False, "min_price"
+        if criteria.max_price is not None and (tender.price is None or tender.price > criteria.max_price):
+            return False, "max_price"
+
+        if criteria.advance_required:
+            if not tender.advance_required:
+                return False, "advance_required"
+            if tender.advance_percent is None:
+                return False, "advance_percent_missing"
+        if criteria.min_advance_percent > 0:
+            if tender.advance_percent is None or tender.advance_percent < criteria.min_advance_percent:
+                return False, "min_advance_percent"
+
+        if criteria.max_postpayment_days is not None:
+            if tender.postpayment_days is None or tender.postpayment_days > criteria.max_postpayment_days:
+                return False, "max_postpayment_days"
+
+        if criteria.min_application_security_percent > 0:
+            if (
+                tender.application_security_percent is None
+                or tender.application_security_percent < criteria.min_application_security_percent
+            ):
+                return False, "min_application_security_percent"
+        if criteria.max_application_security_percent is not None:
+            if (
+                tender.application_security_percent is None
+                or tender.application_security_percent > criteria.max_application_security_percent
+            ):
+                return False, "max_application_security_percent"
+
+        if criteria.min_contract_security_percent > 0:
+            if (
+                tender.contract_security_percent is None
+                or tender.contract_security_percent < criteria.min_contract_security_percent
+            ):
+                return False, "min_contract_security_percent"
+        if criteria.max_contract_security_percent is not None:
+            if (
+                tender.contract_security_percent is None
+                or tender.contract_security_percent > criteria.max_contract_security_percent
+            ):
+                return False, "max_contract_security_percent"
+
+        if criteria.min_submission_days and tender.deadline is not None:
+            seconds_left = (tender.deadline - datetime.now(timezone.utc)).total_seconds()
+            if seconds_left < criteria.min_submission_days * 86400:
+                return False, "min_submission_days"
+        elif criteria.min_submission_days:
+            return False, "deadline_missing"
+
+        return True, ""
+
     def run_cycle(self) -> dict[str, int]:
         search_number = self._get_next_search_number()
         stats = {
@@ -198,7 +258,6 @@ class Orchestrator:
             return stats
         logger.info("Активные сборщики: %s", [c.platform for c in collectors])
 
-        # 1. DISCOVERY — площадки работают независимо и параллельно.
         all_pairs: list[tuple[object, Tender]] = []
         workers = min(len(collectors), max(1, int(self.settings.config.get("search", {}).get("platform_workers", len(collectors)))))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="collector") as pool:
@@ -214,7 +273,6 @@ class Orchestrator:
         unique_pairs = self._deduplicate_pairs(all_pairs)
         logger.info("Discovery: total_raw=%d global_unique=%d duplicates=%d", len(all_pairs), len(unique_pairs), len(all_pairs) - len(unique_pairs))
 
-        # 2. SOFT PRE-FILTER — только EXCLUDE/min_text/lookback.
         soft_pairs: list[tuple[object, Tender]] = []
         now = datetime.now(timezone.utc)
         for collector, tender in unique_pairs:
@@ -231,7 +289,6 @@ class Orchestrator:
         stats["soft_filtered"] = len(soft_pairs)
         logger.info("Soft pre-filter: %d/%d candidates remain", len(soft_pairs), len(unique_pairs))
 
-        # 3. ENRICH — детали загружаются только после дешёвого soft-filter.
         enriched_pairs: list[tuple[object, Tender]] = []
         for collector, tender in soft_pairs:
             if self.stop_requested:
@@ -243,7 +300,6 @@ class Orchestrator:
                 stats["details_failed"] += 1
             enriched_pairs.append((collector, enriched))
 
-        # 4. STRICT POST-FILTER — INCLUDE по полному тексту после enrichment.
         strict_pairs: list[tuple[object, Tender]] = []
         for collector, tender in enriched_pairs:
             if self.keyword_filter.matches_strict(tender):
@@ -253,23 +309,16 @@ class Orchestrator:
         stats["filtered"] = len(strict_pairs)
         logger.info("Strict keyword filter: kept=%d excluded=%d", len(strict_pairs), stats["keyword_excluded"])
 
-        # 5. USER CRITERIA + DB/notification dedup.
         current_run_tender_ids: list[int] = []
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
 
-            if criteria.min_price is not None and tender.price is not None and tender.price < criteria.min_price:
+            passed, reason = self._passes_criteria(tender, criteria)
+            if not passed:
                 stats["excluded_by_criteria"] += 1
+                logger.debug("Критерии: исключён %s:%s (%s)", tender.platform, tender.external_id, reason)
                 continue
-            if criteria.max_price is not None and tender.price is not None and tender.price > criteria.max_price:
-                stats["excluded_by_criteria"] += 1
-                continue
-            if criteria.min_submission_days and tender.deadline is not None:
-                days_left = (tender.deadline - datetime.now(timezone.utc)).days
-                if days_left < criteria.min_submission_days:
-                    stats["excluded_by_criteria"] += 1
-                    continue
 
             self.last_run_results.append(tender)
             existing = self.db.exists(tender.unique_key)
