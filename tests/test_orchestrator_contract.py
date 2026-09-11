@@ -88,13 +88,13 @@ def test_detail_values_replace_stale_search_values() -> None:
 def test_max_postpayment_rejects_missing_value() -> None:
     tender = _tender(postpayment_days=None)
     criteria = TenderCriteria(max_postpayment_days=30)
-    assert Orchestrator._passes_criteria(tender, criteria) == (False, "postpayment_days_missing")
+    assert Orchestrator._passes_criteria(tender, criteria) == (False, "max_postpayment_days")
 
 
 def test_max_security_rejects_missing_value() -> None:
     tender = _tender(application_security_percent=None, contract_security_percent=None)
     criteria = TenderCriteria(max_application_security_percent=5, max_contract_security_percent=10)
-    assert Orchestrator._passes_criteria(tender, criteria) == (False, "application_security_percent_missing")
+    assert Orchestrator._passes_criteria(tender, criteria) == (False, "max_application_security_percent")
 
 
 def test_max_postpayment_and_security_accept_values_inside_limits() -> None:
