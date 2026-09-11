@@ -1,4 +1,4 @@
-﻿"""Точка входа Tender Intelligence Agent."""
+"""Точка входа Tender Intelligence Agent."""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ from logging.handlers import RotatingFileHandler
 from src.orchestrator import Orchestrator
 from src.scheduler import run_scheduled
 from src.settings import PROJECT_ROOT, load_settings
-# Зарегистрировать дополнительные площадки до создания Orchestrator/Telegram-бота.
-import src.platform_extensions  # noqa: F401,E402
 
 
 def setup_logging(settings) -> None:
@@ -24,14 +22,8 @@ def setup_logging(settings) -> None:
 
     handlers: list[logging.Handler] = [
         logging.StreamHandler(sys.stdout),
-        RotatingFileHandler(
-            log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-        ),
+        RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"),
     ]
-
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -40,16 +32,13 @@ def setup_logging(settings) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Tender Intelligence Agent — мониторинг тендеров",
-    )
+    parser = argparse.ArgumentParser(description="Tender Intelligence Agent — мониторинг тендеров")
     parser.add_argument(
         "command",
         choices=["run", "once", "status", "bot"],
         help=(
             "run — непрерывный режим; once — одна проверка; "
-            "status — статистика БД; "
-            "bot — интерактивный Telegram-бот (/settings, /search)"
+            "status — статистика БД; bot — интерактивный Telegram-бот (/settings, /search)"
         ),
     )
     args = parser.parse_args()
@@ -65,27 +54,13 @@ def main() -> int:
         from src.storage.database import TenderDatabase
 
         db = TenderDatabase(settings.database_path)
-
         print(f"Тендеров в базе:      {db.count_tenders()}")
         print(f"Отправлено уведомлений: {db.count_notifications()}")
-        print(
-            f"Telegram настроен:    "
-            f"{'да' if settings.telegram_bot_token else 'нет (dry-run)'}"
-        )
-
+        print(f"Telegram настроен:    {'да' if settings.telegram_bot_token else 'нет (dry-run)'}")
         if settings.ai_provider.lower() == "ollama":
-            print(
-                f"ИИ настроен:          "
-                f"{'да' if settings.ollama_url else 'нет'} "
-                f"(Ollama / {settings.ai_model})"
-            )
+            print(f"ИИ настроен:          {'да' if settings.ollama_url else 'нет'} (Ollama / {settings.ai_model})")
         else:
-            print(
-                f"ИИ настроен:          "
-                f"{'да' if settings.ai_api_key else 'нет'} "
-                f"({settings.ai_provider} / {settings.ai_model})"
-            )
-
+            print(f"ИИ настроен:          {'да' if settings.ai_api_key else 'нет'} ({settings.ai_provider} / {settings.ai_model})")
         return 0
 
     if args.command == "once":
