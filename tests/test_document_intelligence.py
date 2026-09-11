@@ -85,6 +85,25 @@ def test_archive_uncompressed_limit():
         DocumentIntelligence(max_archive_uncompressed=5).extract_bytes(buffer.getvalue(), "a.zip")
 
 
+def test_custom_office_archive_limit_is_honored():
+    malicious = io.BytesIO()
+    with zipfile.ZipFile(malicious, "w") as archive:
+        archive.writestr("word/document.xml", b"<document>" + b"x" * 100 + b"</document>")
+    with pytest.raises(UnsafeArchiveError):
+        DocumentIntelligence(max_archive_uncompressed=20).extract_bytes(malicious.getvalue(), "bad.docx")
+
+
+def test_nested_archives_share_one_global_uncompressed_budget():
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as archive:
+        archive.writestr("notice.txt", "1234567890")
+    outer = io.BytesIO()
+    with zipfile.ZipFile(outer, "w") as archive:
+        archive.writestr("nested.zip", inner.getvalue())
+    with pytest.raises(UnsafeArchiveError):
+        DocumentIntelligence(max_archive_uncompressed=15).extract_bytes(outer.getvalue(), "outer.zip")
+
+
 def test_office_zip_path_is_validated_before_openpyxl():
     malicious = io.BytesIO()
     with zipfile.ZipFile(malicious, "w") as archive:
