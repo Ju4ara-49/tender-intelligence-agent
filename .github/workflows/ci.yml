@@ -44,6 +44,11 @@ jobs:
           PYTHONPATH: .
         run: pytest -q tests/test_b2b_pagination.py tests/test_keyword_filter_morphology.py
 
+      - name: Run analytics tests
+        env:
+          PYTHONPATH: .
+        run: pytest -q tests/test_market_analytics.py
+
       - name: Run real SQLite Excel integration test
         env:
           PYTHONPATH: .
