@@ -48,8 +48,9 @@ PLATFORM_NAMES = {
     "eis": "ЕИС",
     "b2b_center": "B2B-Center",
     "rts_tender": "РТС-тендер",
+    "fabrikant": "Фабрикант",
     "tmk": "ТМК",
-    "unipro": "UniPro",
+    "rosatom": "Росатом",
 }
 
 
@@ -150,7 +151,7 @@ class TelegramBot:
             if data.startswith("platform:"):
                 self._toggle_platform(chat_id, data.split(":", 1)[1])
             elif data == "keywords:clear":
-                self._call_user(chat_id, self.criteria_store.set_keywords, [])
+                self.criteria_store.set_keywords(chat_id, [])
                 self._answer_callback(callback_id)
                 self._send(chat_id, "Ключевые слова очищены.", self._keyboard())
                 return
@@ -163,16 +164,8 @@ class TelegramBot:
             logger.exception("Telegram-бот: ошибка callback=%s", data)
             self._answer_callback(callback_id)
 
-    @staticmethod
-    def _criteria_call(chat_id: str, func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    def _call_user(self, chat_id: str, func, *args, **kwargs):
-        # CriteriaStore определяет пользователя по chat_id в стеке вызовов.
-        return self._criteria_call(chat_id, func, *args, **kwargs)
-
     def _platform_keyboard(self, chat_id: str) -> dict:
-        enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
+        enabled = set(self.criteria_store.get_enabled_platforms(chat_id))
         rows = []
         for platform, name in PLATFORM_NAMES.items():
             mark = "☑" if platform in enabled else "☐"
@@ -181,29 +174,26 @@ class TelegramBot:
         return {"inline_keyboard": rows}
 
     def _show_platforms(self, chat_id: str) -> None:
-        enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
+        enabled = set(self.criteria_store.get_enabled_platforms(chat_id))
         lines = ["<b>Площадки поиска</b>", "", "Нажмите на площадку, чтобы включить или выключить её.", ""]
         for platform, name in PLATFORM_NAMES.items():
             lines.append(f"{'☑' if platform in enabled else '☐'} {name}")
-        lines += ["", "<i>Сейчас реально подключена только ЕИС.</i>", "<i>Остальные площадки пока можно настраивать, но поиск по ним ещё не выполняется.</i>"]
+        lines += ["", "Поиск использует выбранные площадки. Если сборщик конкретной площадки временно недоступен, остальные площадки продолжают работать."]
         self._send(chat_id, "\n".join(lines), self._platform_keyboard(chat_id))
 
     def _toggle_platform(self, chat_id: str, platform: str) -> None:
         if platform not in PLATFORM_NAMES:
             return
-        current = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
+        current = set(self.criteria_store.get_enabled_platforms(chat_id))
         if platform in current:
             current.remove(platform)
         else:
             current.add(platform)
-        if platform == "eis" and "eis" not in current:
-            current.add("eis")
-            self._send(chat_id, "ЕИС пока нельзя отключить: это единственная подключённая к поиску площадка.", self._keyboard())
-        self._call_user(chat_id, self.criteria_store.set_enabled_platforms, list(current))
+        self.criteria_store.set_enabled_platforms(chat_id, list(current))
         self._show_platforms(chat_id)
 
     def _show_keywords(self, chat_id: str) -> None:
-        keywords = self._call_user(chat_id, self.criteria_store.get_keywords)
+        keywords = self.criteria_store.get_keywords(chat_id)
         if keywords:
             text = "<b>Ключевые слова</b>\n\n" + "\n".join(f"{i}. {v}" for i, v in enumerate(keywords, 1))
         else:
@@ -264,7 +254,7 @@ class TelegramBot:
             if not values:
                 self._send(chat_id, "Введите хотя бы одно ключевое слово через запятую.", self._keyboard())
                 return True
-            self._call_user(chat_id, self.criteria_store.set_keywords, values)
+            self.criteria_store.set_keywords(chat_id, values)
             self._waiting_for.pop(chat_id, None)
             self._send(chat_id, "<b>Ключевые слова сохранены.</b>\n\n" + "\n".join(f"• {x}" for x in values), self._keyboard())
             return True
@@ -278,7 +268,7 @@ class TelegramBot:
         except ValueError:
             self._send(chat_id, "Некорректное значение. Введите число ещё раз.", self._keyboard())
             return True
-        self._call_user(chat_id, self.criteria_store.update, **{field: value})
+        self.criteria_store.update(chat_id, **{field: value})
         self._waiting_for.pop(chat_id, None)
         labels = {"min_price": "Цена от", "max_price": "Цена до", "min_ai_score": "Балл", "min_submission_days": "Срок"}
         display = int(value) if isinstance(value, float) and value.is_integer() else value
@@ -286,13 +276,15 @@ class TelegramBot:
         return True
 
     def _cmd_settings(self, chat_id: str) -> None:
-        c = self._call_user(chat_id, self.criteria_store.get)
-        keywords = self._call_user(chat_id, self.criteria_store.get_keywords)
-        platforms = self._call_user(chat_id, self.criteria_store.get_enabled_platforms)
+        c = self.criteria_store.get(chat_id)
+        keywords = self.criteria_store.get_keywords(chat_id)
+        platforms = self.criteria_store.get_enabled_platforms(chat_id)
+
         def fmt(v):
             if v is None:
                 return "не задано"
             return f"{int(v):,}".replace(",", " ") if float(v).is_integer() else str(v)
+
         keywords_text = ", ".join(keywords) if keywords else "из config/keywords.yaml"
         names = ", ".join(PLATFORM_NAMES.get(p, p) for p in platforms)
         text = (
@@ -305,11 +297,11 @@ class TelegramBot:
         self._send(chat_id, text, self._keyboard())
 
     def _cmd_reset(self, chat_id: str) -> None:
-        self._call_user(chat_id, self.criteria_store.update, min_price=None, max_price=None, min_ai_score=70, min_submission_days=7)
-        self._call_user(chat_id, self.criteria_store.set_keywords, [])
-        self._call_user(chat_id, self.criteria_store.set_enabled_platforms, ["eis"])
+        self.criteria_store.update(chat_id, min_price=None, max_price=None, min_ai_score=70, min_submission_days=7)
+        self.criteria_store.set_keywords(chat_id, [])
+        self.criteria_store.set_enabled_platforms(chat_id, list(PLATFORM_NAMES))
         self._waiting_for.pop(chat_id, None)
-        self._send(chat_id, "<b>Критерии поиска сброшены.</b>\n\nЦена от: не задано\nЦена до: не задано\nБалл: 70\nСрок: 7 дн.\nКлючевые слова: из config/keywords.yaml\nПлощадки: ЕИС", self._keyboard())
+        self._send(chat_id, "<b>Критерии поиска сброшены.</b>\n\nЦена от: не задано\nЦена до: не задано\nБалл: 70\nСрок: 7 дн.\nКлючевые слова: из config/keywords.yaml\nПлощадки: все доступные", self._keyboard())
 
     def _cmd_search(self, chat_id: str) -> None:
         thread = self._search_threads.get(chat_id)
@@ -328,7 +320,7 @@ class TelegramBot:
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.\n\n⏳ Пожалуйста, подождите...", self._keyboard())
         try:
-            stats = search_orchestrator.run_cycle()
+            stats = search_orchestrator.run_cycle(user_id=chat_id)
             elapsed = int(time.monotonic() - started_at)
             elapsed_text = f"{elapsed // 60} мин. {elapsed % 60:02d} сек." if elapsed >= 60 else f"{elapsed} сек."
             state = "остановлен" if search_orchestrator.stop_requested else "завершён"
