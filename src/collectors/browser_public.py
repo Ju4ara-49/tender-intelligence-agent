@@ -43,6 +43,12 @@ class _BrowserTenderCollector(BaseCollector):
         for term in terms:
             results = self._search_one(term)
             for tender in results:
+                if since is not None and tender.published_at is not None:
+                    published = tender.published_at
+                    if published.tzinfo is None:
+                        published = published.astimezone()
+                    if published < since:
+                        continue
                 merged[tender.unique_key] = tender
                 if len(merged) >= self.max_results:
                     break
@@ -249,9 +255,92 @@ class _BrowserTenderCollector(BaseCollector):
         text = " ".join(soup.stripped_strings)
         price = self._extract_price(text)
         deadline = self._extract_date(text)
-        return Tender(platform=self.platform, external_id=external_id, title=title[:1000], url=url,
-                      description=text[:10000], price=price, deadline=deadline,
-                      raw_data={"source": url})
+        published_at = self._extract_datetime(text, ("Дата публикации", "Дата размещения", "Опубликовано", "Размещено"))
+        start_date = self._extract_datetime(text, ("Дата начала", "Начало приема", "Начало подачи"))
+        end_date = deadline or self._extract_datetime(text, ("Дата окончания", "Окончание приема", "Окончание подачи"))
+        customer = self._extract_labeled_value(text, ("Заказчик", "Организатор", "Организация-заказчик"))
+        region = self._extract_labeled_value(text, ("Регион поставки", "Место поставки", "Место выполнения", "Регион"))
+        law_type = self._extract_labeled_value(text, ("Закон", "Вид закона", "Федеральный закон", "Тип закупки"))
+        advance_percent = self._extract_percent(text, ("Аванс", "Предоплата", "Размер аванса"))
+        postpayment_days = self._extract_days(text, ("Отсрочка платежа", "Срок оплаты", "Условия оплаты", "Постоплата"))
+        application_security = self._extract_percent(text, ("Обеспечение заявки", "Обеспечение предложения"))
+        contract_security = self._extract_percent(text, ("Обеспечение исполнения", "Обеспечение контракта", "Обеспечение договора"))
+
+        raw_data = {
+            "source": url,
+            "published_at": published_at.isoformat() if published_at else None,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+        }
+        if advance_percent is not None:
+            raw_data["advance_payment"] = {"percent": advance_percent}
+        if postpayment_days is not None:
+            raw_data["postpayment"] = {"days": postpayment_days}
+        if application_security is not None:
+            raw_data["application_security"] = {"percent": application_security}
+        if contract_security is not None:
+            raw_data["contract_security"] = {"percent": contract_security}
+
+        return Tender(
+            platform=self.platform,
+            external_id=external_id,
+            title=title[:1000],
+            url=url,
+            description=text[:10000],
+            price=price,
+            deadline=end_date,
+            published_at=published_at,
+            start_date=start_date,
+            end_date=end_date,
+            region=region,
+            customer=customer,
+            law_type=law_type,
+            advance_required=advance_percent is not None and advance_percent > 0,
+            advance_percent=advance_percent,
+            postpayment_days=postpayment_days,
+            application_security_percent=application_security,
+            contract_security_percent=contract_security,
+            raw_data=raw_data,
+        )
+
+    @staticmethod
+    def _extract_labeled_value(text: str, labels: tuple[str, ...]) -> str:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(rf"(?:{label_pattern})\s*[:\-]?\s*(.+?)(?=\s+(?:Заказчик|Организатор|Регион|Место|Дата|Срок|Цена|НМЦ|Обеспечение|Аванс|Оплата)\b|$)", text, re.I)
+        return match.group(1).strip(" ;,\t")[:1000] if match else ""
+
+    @staticmethod
+    def _extract_percent(text: str, labels: tuple[str, ...]) -> float | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(rf"(?:{label_pattern})[^%\d]{{0,60}}(\d+(?:[.,]\d+)?)\s*%", text, re.I)
+        if not match:
+            return None
+        try:
+            return float(match.group(1).replace(",", "."))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_days(text: str, labels: tuple[str, ...]) -> int | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(rf"(?:{label_pattern})[^\d]{{0,60}}(\d{{1,4}})\s*(?:дн\w*|сут\w*)", text, re.I)
+        if not match:
+            return None
+        return int(match.group(1))
+
+    @staticmethod
+    def _extract_datetime(text: str, labels: tuple[str, ...]) -> datetime | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(rf"(?:{label_pattern})[^0-9]{{0,60}}(\d{{1,2}})[./](\d{{1,2}})[./](20\d{{2}})(?:[^0-9]{{0,20}}(\d{{1,2}}):([0-9]{{2}}))?", text, re.I)
+        if not match:
+            return None
+        try:
+            return datetime(
+                int(match.group(3)), int(match.group(2)), int(match.group(1)),
+                int(match.group(4) or 0), int(match.group(5) or 0),
+            )
+        except ValueError:
+            return None
 
     @staticmethod
     def _extract_id(href: str, title: str) -> str | None:
