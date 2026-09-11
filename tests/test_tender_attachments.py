@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from src.documents.tender_attachments import TenderAttachmentAnalyzer
 from src.documents.downloader import DownloadedDocument
 from src.documents.intelligence import DocumentHit, DocumentText
