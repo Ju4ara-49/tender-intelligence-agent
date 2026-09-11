@@ -85,6 +85,7 @@ def test_attachment_hit_does_not_bypass_excluded_keyword():
         platform="test",
         external_id="4",
         title="Закупка",
+        description="Подшипники для автомобиля",
         url="https://example.com/tender/4",
         raw_data={
             "document_search_hits": 1,
@@ -92,7 +93,7 @@ def test_attachment_hit_does_not_bypass_excluded_keyword():
                 {
                     "filename": "spec.txt",
                     "keyword": "подшипники",
-                    "snippet": "Подшипники для автомобиля",
+                    "snippet": "Подшипники 6205",
                 }
             ],
         },
