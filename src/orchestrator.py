@@ -133,8 +133,9 @@ class Orchestrator:
     def _analyze_tender_documents(self, tender: Tender, keywords: list[str]) -> bool:
         """Скачать и проиндексировать вложения тендера локально.
 
-        Ошибка одного документа не ломает весь поиск. Результаты сохраняются
-        в raw_data и автоматически попадают в Tender.full_text.
+        В БД сохраняются только имена документов и найденные snippets, а не
+        полное содержимое файлов. Это позволяет искать по документам, не
+        раздувая запись тендера мегабайтами текста.
         """
         if not tender.raw_data or not keywords:
             return False
@@ -146,10 +147,7 @@ class Orchestrator:
             document_search: list[dict[str, object]] = []
             for item in analyses:
                 for document in item.documents:
-                    document_search.append({
-                        "filename": document.path,
-                        "text": document.text,
-                    })
+                    document_search.append({"filename": document.path})
                 for hit in item.hits:
                     document_search.append({
                         "filename": hit.path,
