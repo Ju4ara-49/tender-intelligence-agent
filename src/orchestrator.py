@@ -293,22 +293,11 @@ class Orchestrator:
             if published is not None and published < since:
                 continue
             tender = self._normalize_tender_datetimes(tender)
-            if self.keyword_filter.matches_soft(tender):
+            # Normal cards use the cheap text-length pre-filter. Short cards
+            # are retained when they do not contain an exclusion so they can
+            # be enriched first; their attachments may contain the real item.
+            if self.keyword_filter.matches_soft(tender) or self.keyword_filter.matches_soft(tender, allow_short_text=True):
                 soft_pairs.append((collector, tender))
-                continue
-            # A short/empty card can still be a valid candidate when the
-            # platform exposes attachment metadata already. Enrich it and let
-            # Document Intelligence decide whether the requested keyword is in
-            # the specification, archive or other attachment.
-            try:
-                if self.document_analyzer.discover(tender.raw_data):
-                    if not any(
-                        self.keyword_filter._contains(self.keyword_filter._normalize(tender.full_text), pattern)
-                        for pattern in self.keyword_filter.exclude
-                    ):
-                        soft_pairs.append((collector, tender))
-            except Exception:
-                logger.exception("Document discovery pre-check failed for %s:%s", tender.platform, tender.external_id)
         stats["soft_filtered"] = len(soft_pairs)
 
         enriched_pairs: list[tuple[object, Tender]] = []
