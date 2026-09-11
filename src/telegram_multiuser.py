@@ -223,23 +223,29 @@ class MultiUserTelegramBot(TelegramBot):
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.", self._keyboard())
         try:
+            # Критерии, keywords и площадки передаются в Orchestrator явно.
+            # Никакого общего user context для потока не используется.
             stats = orchestrator.run_cycle(user_id=chat_id)
             self._send_search_results(chat_id, orchestrator)
             elapsed = int(time.monotonic() - started_at)
             elapsed_text = f"{elapsed // 60} мин. {elapsed % 60:02d} сек." if elapsed >= 60 else f"{elapsed} сек."
             state = "остановлен" if orchestrator.stop_requested else "завершён"
-            text = f"{'⛔' if orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\nВремя: {elapsed_text}\nНайдено: {stats['found']}\nПрошло фильтр: {stats['filtered']}\nНовых: {stats['new']}\nAI: {stats['analyzed']}\nИсключено: {stats['excluded_by_criteria']}\nУведомлений: {stats['notified']}\nДублей: {stats['skipped_duplicate']}\n\n📊 <b>Результат сохранён в Excel.</b>"
+            text = f"{'⛔' if orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\nВремя: {elapsed_text}\nНайдено: {stats['found']}\nПрошло фильтр: {stats['filtered']}\nНовых: {stats['new']}\nAI: {stats['analyzed']}\nИсключено: {stats['excluded_by_criteria']}\nДублей: {stats['skipped_duplicate']}\nУведомлений: {stats['notified']}\n\n📊 <b>Результат сохранён в Excel.</b>"
             self._send(chat_id, text, self._keyboard())
         except Exception:
-            logger.exception("Telegram-поиск: ошибка для chat_id=%s", chat_id)
+            logger.exception("Telegram-бот: ошибка выполнения поиска для chat_id=%s", chat_id)
             self._send(chat_id, "❌ <b>Ошибка поиска.</b>\n\nПодробности находятся в logs/agent.log.", self._keyboard())
         finally:
             with self._search_lock:
                 self._search_threads.pop(chat_id, None)
                 self._user_orchestrators.pop(chat_id, None)
 
-    def stop_search(self, chat_id: str) -> None:
+    def _cmd_stop(self, chat_id: str) -> None:
         with self._search_lock:
-            orchestrator = self._user_orchestrators.get(str(chat_id))
-        if orchestrator:
-            orchestrator.request_stop()
+            orchestrator = self._user_orchestrators.get(chat_id)
+            thread = self._search_threads.get(chat_id)
+        if orchestrator is None or thread is None or not thread.is_alive():
+            self._send(chat_id, "Сейчас ваш поиск не выполняется.", self._keyboard())
+            return
+        orchestrator.request_stop()
+        self._send(chat_id, "Получена команда остановки. Текущий этап завершится, после чего ваш поиск будет остановлен.", self._keyboard())
