@@ -39,6 +39,11 @@ jobs:
           python tests/test_b2b_reliable_adapter.py
           python tests/test_b2b_quality_gate.py
 
+      - name: Run full pytest suite
+        env:
+          PYTHONPATH: .
+        run: pytest -q tests
+
       - name: Run search pipeline regression tests
         env:
           PYTHONPATH: .
