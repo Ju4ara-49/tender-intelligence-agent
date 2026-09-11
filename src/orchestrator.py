@@ -76,8 +76,12 @@ class Orchestrator:
         return value.replace(tzinfo=moscow_offset).astimezone(timezone.utc)
 
     def _normalize_tender_datetimes(self, tender: Tender) -> Tender:
+        tender.start_date = self._normalize_datetime(tender.start_date)
+        tender.end_date = self._normalize_datetime(tender.end_date)
         tender.deadline = self._normalize_datetime(tender.deadline)
         tender.published_at = self._normalize_datetime(tender.published_at)
+        if tender.deadline is None and tender.end_date is not None:
+            tender.deadline = tender.end_date
         return tender
 
     def _enrich_tender(self, collector, tender: Tender) -> tuple[Tender, bool]:
@@ -96,6 +100,10 @@ class Orchestrator:
                     tender.price = detailed.price
                 if detailed.currency:
                     tender.currency = detailed.currency
+                if tender.start_date is None and detailed.start_date:
+                    tender.start_date = detailed.start_date
+                if tender.end_date is None and detailed.end_date:
+                    tender.end_date = detailed.end_date
                 if tender.deadline is None and detailed.deadline:
                     tender.deadline = detailed.deadline
                 if tender.published_at is None and detailed.published_at:
@@ -106,6 +114,17 @@ class Orchestrator:
                     tender.customer = detailed.customer
                 if detailed.law_type:
                     tender.law_type = detailed.law_type
+                if detailed.advance_percent is not None:
+                    tender.advance_percent = detailed.advance_percent
+                    tender.advance_required = True
+                elif detailed.advance_required:
+                    tender.advance_required = True
+                if detailed.postpayment_days is not None:
+                    tender.postpayment_days = detailed.postpayment_days
+                if detailed.application_security_percent is not None:
+                    tender.application_security_percent = detailed.application_security_percent
+                if detailed.contract_security_percent is not None:
+                    tender.contract_security_percent = detailed.contract_security_percent
                 if detailed.url:
                     tender.url = detailed.url
                 if detailed.raw_data:
@@ -163,20 +182,29 @@ class Orchestrator:
                 return False, "advance_percent_missing"
         if criteria.min_advance_percent > 0 and (tender.advance_percent is None or tender.advance_percent < criteria.min_advance_percent):
             return False, "min_advance_percent"
-        if criteria.max_postpayment_days is not None and (tender.postpayment_days or 0) > criteria.max_postpayment_days:
-            return False, "max_postpayment_days"
+        if criteria.max_postpayment_days is not None:
+            if tender.postpayment_days is None:
+                return False, "postpayment_days_missing"
+            if tender.postpayment_days > criteria.max_postpayment_days:
+                return False, "max_postpayment_days"
         if criteria.min_application_security_percent > 0 and (
             tender.application_security_percent is None or tender.application_security_percent < criteria.min_application_security_percent
         ):
             return False, "min_application_security_percent"
-        if criteria.max_application_security_percent is not None and (tender.application_security_percent or 0.0) > criteria.max_application_security_percent:
-            return False, "max_application_security_percent"
+        if criteria.max_application_security_percent is not None:
+            if tender.application_security_percent is None:
+                return False, "application_security_percent_missing"
+            if tender.application_security_percent > criteria.max_application_security_percent:
+                return False, "max_application_security_percent"
         if criteria.min_contract_security_percent > 0 and (
             tender.contract_security_percent is None or tender.contract_security_percent < criteria.min_contract_security_percent
         ):
             return False, "min_contract_security_percent"
-        if criteria.max_contract_security_percent is not None and (tender.contract_security_percent or 0.0) > criteria.max_contract_security_percent:
-            return False, "max_contract_security_percent"
+        if criteria.max_contract_security_percent is not None:
+            if tender.contract_security_percent is None:
+                return False, "contract_security_percent_missing"
+            if tender.contract_security_percent > criteria.max_contract_security_percent:
+                return False, "max_contract_security_percent"
         if criteria.min_submission_days and tender.deadline is not None:
             if (tender.deadline - datetime.now(timezone.utc)).total_seconds() < criteria.min_submission_days * 86400:
                 return False, "min_submission_days"
