@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+import re
 from typing import Any
 
 
@@ -38,13 +39,7 @@ class Tender:
     raw_data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Make all tender timestamps comparable across collectors and hosts.
-
-        Public Russian procurement pages commonly omit timezone information.
-        The project treats such values as Moscow time and stores/compares them
-        in UTC. Already-aware values are preserved as instants and converted
-        to UTC as well.
-        """
+        """Normalize timestamps and recover common commercial terms from detail text."""
         moscow = timezone(timedelta(hours=3), name="MSK")
         for field_name in ("start_date", "end_date", "published_at", "deadline"):
             value = getattr(self, field_name)
@@ -53,6 +48,73 @@ class Tender:
             if value.tzinfo is None:
                 value = value.replace(tzinfo=moscow)
             setattr(self, field_name, value.astimezone(timezone.utc))
+
+        self._enrich_commercial_terms()
+
+    def _enrich_commercial_terms(self) -> None:
+        """Fill unified commercial fields from Russian tender detail text.
+
+        Platforms expose these values under different HTML structures. Parsing
+        the normalized description/full text at model construction provides a
+        common safety net for EIS and other collectors without replacing
+        platform-specific parsers when they already extracted a value.
+        """
+        text = " ".join(self._text_from_value(value) for value in [self.description, self.raw_data.get("details", "")]).strip()
+        if not text:
+            return
+        text = re.sub(r"\s+", " ", text)
+
+        if self.advance_percent is None:
+            self.advance_percent = self._extract_percent(
+                text,
+                ("аванс", "предоплата", "авансовый платеж", "авансовый платёж", "размер аванса"),
+            )
+        if self.advance_percent is not None:
+            self.advance_required = self.advance_percent > 0
+
+        if self.postpayment_days is None:
+            self.postpayment_days = self._extract_days(
+                text,
+                ("отсрочка платежа", "срок оплаты", "постоплата", "отсрочка оплаты"),
+            )
+
+        if self.application_security_percent is None:
+            self.application_security_percent = self._extract_percent(
+                text,
+                ("обеспечение заявки", "обеспечение предложения"),
+            )
+
+        if self.contract_security_percent is None:
+            self.contract_security_percent = self._extract_percent(
+                text,
+                ("обеспечение исполнения", "обеспечение контракта", "обеспечение договора"),
+            )
+
+    @staticmethod
+    def _extract_percent(text: str, labels: tuple[str, ...]) -> float | None:
+        label = "|".join(re.escape(item) for item in labels)
+        pattern = rf"(?:{label})[^%\d]{{0,100}}(\d{{1,3}}(?:[.,]\d+)?)\s*%"
+        match = re.search(pattern, text, re.I)
+        if not match:
+            return None
+        try:
+            value = float(match.group(1).replace(",", "."))
+        except ValueError:
+            return None
+        return value if 0 <= value <= 100 else None
+
+    @staticmethod
+    def _extract_days(text: str, labels: tuple[str, ...]) -> int | None:
+        label = "|".join(re.escape(item) for item in labels)
+        pattern = rf"(?:{label})[^0-9]{{0,100}}(\d{{1,3}})\s*(?:календарн\w*|рабоч\w*)?\s*(?:дн\w*|сут\w*)"
+        match = re.search(pattern, text, re.I)
+        if not match:
+            return None
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            return None
+        return value if 0 <= value <= 3650 else None
 
     @property
     def unique_key(self) -> str:
