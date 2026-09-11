@@ -14,6 +14,7 @@ from src.notifications.email import EmailNotifier
 from src.profiles import SearchProfileStore
 from src.settings import AppSettings
 from src.storage.database import TenderDatabase
+from src.storage.notification_delivery import NotificationDeliveryState
 from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
 
@@ -29,6 +30,7 @@ class Orchestrator:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.db = TenderDatabase(settings.database_path)
+        self.notification_state = NotificationDeliveryState(self.db)
         self.criteria_store = CriteriaStore(self.db)
         self.profile_store = SearchProfileStore(self.db)
         self.analyzer = TenderAnalyzer(
@@ -313,7 +315,7 @@ class Orchestrator:
             existing = self.db.exists(tender.unique_key)
             tender_id = self.db.save_tender(tender)
             current_run_tender_ids.append(tender_id)
-            if existing and self.db.was_notified(tender.unique_key):
+            if existing and self.notification_state.was_notified(tender):
                 stats["skipped_duplicate"] += 1
                 continue
             if not existing:
@@ -323,11 +325,11 @@ class Orchestrator:
             stats["analyzed"] += 1
             if analysis.relevance_score < criteria.min_ai_score:
                 continue
-            if self.db.was_notified(tender.unique_key):
+            if self.notification_state.was_notified(tender):
                 stats["skipped_duplicate"] += 1
                 continue
             if self.notifier.send_tender_alert(tender, analysis):
-                self.db.mark_notified(tender_id)
+                self.notification_state.mark_notified(tender)
                 stats["notified"] += 1
 
         try:
