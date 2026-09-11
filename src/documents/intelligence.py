@@ -1,8 +1,10 @@
 """Безопасное извлечение текста из документов тендера без облачного AI."""
 from __future__ import annotations
 
+import codecs
 import html
 import io
+import json
 import re
 import zipfile
 from dataclasses import dataclass
@@ -13,13 +15,15 @@ from openpyxl import load_workbook
 
 try:
     from pypdf import PdfReader
-except ImportError:  # pragma: no cover - dependency is declared in requirements
+except ImportError:  # pragma: no cover
     PdfReader = None
 
 
 MAX_ARCHIVE_FILES = 500
 MAX_ARCHIVE_UNCOMPRESSED = 200 * 1024 * 1024
 MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_PDF_PAGES = 500
+MAX_NESTING_DEPTH = 3
 SUPPORTED_TEXT_EXTENSIONS = {".txt", ".csv", ".xml", ".html", ".htm", ".json"}
 SUPPORTED_OFFICE_EXTENSIONS = {".docx", ".xlsx", ".xlsm"}
 SUPPORTED_ARCHIVES = {".zip"}
@@ -54,18 +58,36 @@ class DocumentIntelligence:
         max_file_bytes: int = MAX_FILE_BYTES,
         max_archive_files: int = MAX_ARCHIVE_FILES,
         max_archive_uncompressed: int = MAX_ARCHIVE_UNCOMPRESSED,
+        max_pdf_pages: int = MAX_PDF_PAGES,
+        max_nesting_depth: int = MAX_NESTING_DEPTH,
     ) -> None:
         self.max_file_bytes = max_file_bytes
         self.max_archive_files = max_archive_files
         self.max_archive_uncompressed = max_archive_uncompressed
+        self.max_pdf_pages = max_pdf_pages
+        self.max_nesting_depth = max_nesting_depth
 
     @staticmethod
     def normalize(text: str) -> str:
         text = html.unescape(text or "")
+        text = re.sub(r"<script\b[^>]*>.*?</script>", " ", text, flags=re.I | re.S)
+        text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
+        text = re.sub(r"<[^>]+>", " ", text)
         text = text.replace("\x00", " ")
         text = re.sub(r"[\t\r ]+", " ", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
+
+    @staticmethod
+    def _decode_text(data: bytes) -> str:
+        if data.startswith(codecs.BOM_UTF8):
+            return data.decode("utf-8-sig")
+        for encoding in ("utf-8", "cp1251", "koi8-r"):
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return data.decode("utf-8", errors="replace")
 
     def extract_file(self, path: Path, virtual_path: str | None = None) -> list[DocumentText]:
         path = Path(path)
@@ -73,37 +95,48 @@ class DocumentIntelligence:
             raise FileNotFoundError(path)
         if path.stat().st_size > self.max_file_bytes:
             raise ValueError(f"Файл слишком большой: {path}")
-        name = virtual_path or path.name
-        ext = path.suffix.lower()
-        if ext in SUPPORTED_ARCHIVES:
-            return self._extract_archive(path.read_bytes(), name)
-        return self._extract_bytes(path.read_bytes(), name, ext)
+        return self._extract_bytes(path.read_bytes(), virtual_path or path.name, path.suffix.lower(), 0)
 
     def extract_bytes(self, data: bytes, filename: str) -> list[DocumentText]:
         if len(data) > self.max_file_bytes:
             raise ValueError(f"Файл слишком большой: {filename}")
-        return self._extract_bytes(data, filename, Path(filename).suffix.lower())
+        return self._extract_bytes(data, filename, Path(filename).suffix.lower(), 0)
 
-    def _extract_bytes(self, data: bytes, name: str, ext: str) -> list[DocumentText]:
+    def _extract_bytes(self, data: bytes, name: str, ext: str, depth: int) -> list[DocumentText]:
+        if len(data) > self.max_file_bytes:
+            raise ValueError(f"Файл слишком большой: {name}")
         if ext in SUPPORTED_TEXT_EXTENSIONS:
-            return [DocumentText(name, self.normalize(data.decode("utf-8", errors="replace")), ext)]
+            text = self._decode_text(data)
+            if ext in {".xml", ".json"}:
+                # XML/JSON остаются семантически читаемыми, но служебная разметка не должна
+                # мешать поиску по документации.
+                try:
+                    if ext == ".xml":
+                        root = ElementTree.fromstring(data)
+                        text = " ".join(part.strip() for part in root.itertext() if part and part.strip())
+                    else:
+                        text = json.dumps(json.loads(text), ensure_ascii=False, indent=1)
+                except (ElementTree.ParseError, ValueError, UnicodeError, json.JSONDecodeError):
+                    pass
+            return [DocumentText(name, self.normalize(text), ext)]
         if ext in SUPPORTED_PDF:
             return [DocumentText(name, self._pdf(data), "application/pdf")]
         if ext in SUPPORTED_OFFICE_EXTENSIONS:
+            self._validate_zip_container(data, name)
             if ext in {".xlsx", ".xlsm"}:
                 return [DocumentText(name, self._xlsx(data), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
             return [DocumentText(name, self._docx(data), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
         if ext in SUPPORTED_ARCHIVES:
-            return self._extract_archive(data, name)
+            return self._extract_archive(data, name, depth)
         return []
 
     def _pdf(self, data: bytes) -> str:
         if PdfReader is None:
             raise RuntimeError("Для PDF нужен пакет pypdf")
-        reader = PdfReader(io.BytesIO(data))
-        pages = []
-        for page in reader.pages:
-            pages.append(page.extract_text() or "")
+        reader = PdfReader(io.BytesIO(data), strict=False)
+        if len(reader.pages) > self.max_pdf_pages:
+            raise ValueError("PDF содержит слишком много страниц")
+        pages = [(page.extract_text() or "") for page in reader.pages]
         return self.normalize("\n\n".join(pages))
 
     def _docx(self, data: bytes) -> str:
@@ -113,7 +146,7 @@ class DocumentIntelligence:
             except KeyError:
                 return ""
         root = ElementTree.fromstring(xml)
-        texts = []
+        texts: list[str] = []
         for node in root.iter():
             if node.tag.endswith("}t") and node.text:
                 texts.append(node.text)
@@ -121,11 +154,13 @@ class DocumentIntelligence:
                 texts.append("\t")
             elif node.tag.endswith("}br"):
                 texts.append("\n")
+            elif node.tag.endswith("}p"):
+                texts.append("\n")
         return self.normalize("".join(texts))
 
     def _xlsx(self, data: bytes) -> str:
         workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        lines = []
+        lines: list[str] = []
         try:
             for sheet in workbook.worksheets:
                 lines.append(f"[Лист: {sheet.title}]")
@@ -137,26 +172,46 @@ class DocumentIntelligence:
             workbook.close()
         return self.normalize("\n".join(lines))
 
-    def _extract_archive(self, data: bytes, name: str) -> list[DocumentText]:
+    @staticmethod
+    def _validate_zip_container(data: bytes, name: str) -> None:
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                infos = [item for item in archive.infolist() if not item.is_dir()]
+                total = sum(item.file_size for item in infos)
+                if total > MAX_ARCHIVE_UNCOMPRESSED:
+                    raise UnsafeArchiveError(f"Распакованный размер {name} превышает лимит")
+                if len(infos) > MAX_ARCHIVE_FILES:
+                    raise UnsafeArchiveError(f"{name} содержит слишком много файлов")
+                for info in infos:
+                    DocumentIntelligence._validate_archive_member(info.filename)
+        except zipfile.BadZipFile as exc:
+            raise ValueError(f"Повреждённый ZIP-контейнер: {name}") from exc
+
+    def _extract_archive(self, data: bytes, name: str, depth: int) -> list[DocumentText]:
+        if depth >= self.max_nesting_depth:
+            raise UnsafeArchiveError("Превышена максимальная глубина вложенных архивов")
         results: list[DocumentText] = []
         total = 0
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            infos = [info for info in archive.infolist() if not info.is_dir()]
-            if len(infos) > self.max_archive_files:
-                raise UnsafeArchiveError("Архив содержит слишком много файлов")
-            for info in infos:
-                self._validate_archive_member(info.filename)
-                total += info.file_size
-                if total > self.max_archive_uncompressed:
-                    raise UnsafeArchiveError("Распакованный размер архива превышает лимит")
-                member = archive.read(info)
-                if len(member) > self.max_file_bytes:
-                    continue
-                virtual = f"{name}!/{info.filename}"
-                try:
-                    results.extend(self._extract_bytes(member, virtual, Path(info.filename).suffix.lower()))
-                except (ValueError, zipfile.BadZipFile, UnicodeError):
-                    continue
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                infos = [info for info in archive.infolist() if not info.is_dir()]
+                if len(infos) > self.max_archive_files:
+                    raise UnsafeArchiveError("Архив содержит слишком много файлов")
+                for info in infos:
+                    self._validate_archive_member(info.filename)
+                    total += info.file_size
+                    if total > self.max_archive_uncompressed:
+                        raise UnsafeArchiveError("Распакованный размер архива превышает лимит")
+                    member = archive.read(info)
+                    if len(member) > self.max_file_bytes:
+                        continue
+                    virtual = f"{name}!/{info.filename}"
+                    try:
+                        results.extend(self._extract_bytes(member, virtual, Path(info.filename).suffix.lower(), depth + 1))
+                    except (ValueError, zipfile.BadZipFile, UnicodeError):
+                        continue
+        except zipfile.BadZipFile as exc:
+            raise ValueError(f"Повреждённый ZIP-архив: {name}") from exc
         return results
 
     @staticmethod
@@ -170,6 +225,7 @@ class DocumentIntelligence:
 
     def search(self, documents: list[DocumentText], keywords: list[str], context: int = 100) -> list[DocumentHit]:
         hits: list[DocumentHit] = []
+        context = max(0, int(context))
         for document in documents:
             text_lower = document.text.casefold()
             for keyword in keywords:
