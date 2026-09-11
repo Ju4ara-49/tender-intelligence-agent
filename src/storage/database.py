@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class TenderDatabase:
-    """SQLite-хранилище тендеров с защитой от дублей и истории изменений."""
+    """SQLite-хранилище тендеров с защитой от дублей и историей изменений."""
 
     SQLITE_TIMEOUT_SECONDS = 15.0
     BUSY_TIMEOUT_MS = 15000
@@ -89,6 +90,17 @@ class TenderDatabase:
                     FOREIGN KEY (tender_id) REFERENCES tenders(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS notification_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tender_id INTEGER NOT NULL,
+                    event_key TEXT NOT NULL,
+                    channel TEXT NOT NULL DEFAULT 'telegram',
+                    sent_at TEXT NOT NULL,
+                    payload TEXT DEFAULT '{}',
+                    UNIQUE(tender_id, event_key, channel),
+                    FOREIGN KEY (tender_id) REFERENCES tenders(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS tender_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tender_id INTEGER NOT NULL,
@@ -110,7 +122,55 @@ class TenderDatabase:
                     ON tenders(first_seen_at);
                 CREATE INDEX IF NOT EXISTS idx_tender_history_tender_changed
                     ON tender_history(tender_id, changed_at);
+                CREATE INDEX IF NOT EXISTS idx_notification_events_tender
+                    ON notification_events(tender_id, sent_at);
                 """
+            )
+            self._migrate_legacy_notifications(conn)
+
+    @staticmethod
+    def _notification_event_key_from_row(row: sqlite3.Row) -> str:
+        """Stable fingerprint of fields whose changes may justify re-notification."""
+        state = {
+            "title": row["title"],
+            "url": row["url"],
+            "price": row["price"],
+            "currency": row["currency"],
+            "deadline": row["deadline"],
+            "published_at": row["published_at"],
+            "region": row["region"],
+            "customer": row["customer"],
+            "law_type": row["law_type"],
+        }
+        encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _migrate_legacy_notifications(self, conn: sqlite3.Connection) -> None:
+        """Перенести старые одноразовые уведомления в event-доставку без дублей."""
+        rows = conn.execute(
+            """
+            SELECT n.tender_id, n.channel, n.sent_at, n.payload,
+                   t.title, t.url, t.price, t.currency, t.deadline,
+                   t.published_at, t.region, t.customer, t.law_type
+            FROM notifications n
+            JOIN tenders t ON t.id = n.tender_id
+            """
+        ).fetchall()
+        for row in rows:
+            event_key = self._notification_event_key_from_row(row)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO notification_events
+                    (tender_id, event_key, channel, sent_at, payload)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    row["tender_id"],
+                    event_key,
+                    row["channel"],
+                    row["sent_at"],
+                    row["payload"],
+                ),
             )
 
     def next_search_number(self) -> int:
@@ -133,15 +193,33 @@ class TenderDatabase:
             row = conn.execute("SELECT id FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return int(row["id"]) if row is not None else None
 
-    def was_notified(self, unique_key: str) -> bool:
+    def _current_notification_event_key(self, unique_key: str) -> tuple[int, str] | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT 1 FROM notifications n
-                JOIN tenders t ON t.id = n.tender_id
-                WHERE t.unique_key = ?
+                SELECT id, title, url, price, currency, deadline,
+                       published_at, region, customer, law_type
+                FROM tenders WHERE unique_key = ?
                 """,
                 (unique_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return int(row["id"]), self._notification_event_key_from_row(row)
+
+    def was_notified(self, unique_key: str, channel: str = "telegram") -> bool:
+        """True only when the current tender state was already delivered on channel."""
+        current = self._current_notification_event_key(unique_key)
+        if current is None:
+            return False
+        tender_id, event_key = current
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM notification_events
+                WHERE tender_id = ? AND event_key = ? AND channel = ?
+                """,
+                (tender_id, event_key, channel),
             ).fetchone()
         return row is not None
 
@@ -236,7 +314,13 @@ class TenderDatabase:
                     INSERT INTO tender_history (tender_id, changed_at, event_type, changed_fields, snapshot)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (tender_id, now, event_type, json.dumps(changed_fields, ensure_ascii=False), json.dumps(snapshot, ensure_ascii=False)),
+                    (
+                        tender_id,
+                        now,
+                        event_type,
+                        json.dumps(changed_fields, ensure_ascii=False),
+                        json.dumps(snapshot, ensure_ascii=False),
+                    ),
                 )
         return tender_id
 
@@ -279,12 +363,50 @@ class TenderDatabase:
     def mark_notified(self, tender_id: int, channel: str = "telegram", payload: dict | None = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
+            tender = conn.execute(
+                """
+                SELECT id, title, url, price, currency, deadline,
+                       published_at, region, customer, law_type
+                FROM tenders WHERE id = ?
+                """,
+                (tender_id,),
+            ).fetchone()
+            if tender is None:
+                raise ValueError(f"Tender not found: {tender_id}")
+            event_key = self._notification_event_key_from_row(tender)
+            conn.execute(
+                """
+                INSERT INTO notification_events
+                    (tender_id, event_key, channel, sent_at, payload)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(tender_id, event_key, channel) DO UPDATE SET
+                    sent_at = excluded.sent_at,
+                    payload = excluded.payload
+                """,
+                (
+                    tender_id,
+                    event_key,
+                    channel,
+                    now,
+                    json.dumps(payload or {}, ensure_ascii=False),
+                ),
+            )
+            # Сохраняем legacy-строку для совместимости со старыми БД/отчётами.
             conn.execute(
                 """
                 INSERT INTO notifications (tender_id, channel, sent_at, payload)
-                VALUES (?, ?, ?, ?) ON CONFLICT(tender_id) DO NOTHING
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(tender_id) DO UPDATE SET
+                    channel = excluded.channel,
+                    sent_at = excluded.sent_at,
+                    payload = excluded.payload
                 """,
-                (tender_id, channel, now, json.dumps(payload or {}, ensure_ascii=False)),
+                (
+                    tender_id,
+                    channel,
+                    now,
+                    json.dumps(payload or {}, ensure_ascii=False),
+                ),
             )
 
     def count_tenders(self) -> int:
@@ -294,5 +416,5 @@ class TenderDatabase:
 
     def count_notifications(self) -> int:
         with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS c FROM notifications").fetchone()
+            row = conn.execute("SELECT COUNT(*) AS c FROM notification_events").fetchone()
         return int(row["c"])
