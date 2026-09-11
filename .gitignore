@@ -1,4 +1,4 @@
-﻿﻿# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -41,26 +41,8 @@ debug_*
 debug_artifacts/*
 !debug_artifacts/b2b_probe_*.txt
 check_*
-analyzer.py
 run_error.txt
 run_once.log
-
-# Accidental temporary files
-/5
-/50
-/None
-/Tender
-/bool
-/datetime
-/float
-/str
-/type
-/src/50
-/src/TenderAnalysis
-/src/bool
-/src/dict
-/src/type
-/src/str
 
 # IDE
 .idea/
@@ -76,4 +58,4 @@ Desktop.ini
 *.backup*
 *.before_*
 *_before_*
-*_backup*
+*_backup_*
