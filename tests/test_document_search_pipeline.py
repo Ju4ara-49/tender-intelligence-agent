@@ -1,6 +1,7 @@
 from src.documents.tender_attachments import TenderAttachmentAnalyzer
 from src.documents.downloader import DownloadedDocument
 from src.documents.intelligence import DocumentHit, DocumentText
+from src.filters.keyword_filter import KeywordFilter
 from src.models.tender import Tender
 from src.orchestrator import Orchestrator
 
@@ -54,3 +55,52 @@ def test_orchestrator_indexes_attachment_hits():
     assert orchestrator._analyze_tender_documents(tender, ["подшипники"])
     assert tender.raw_data["document_search_hits"] == 1
     assert "подшипники" in tender.full_text.casefold()
+
+
+def test_attachment_only_keyword_match_survives_short_card_text():
+    tender = Tender(
+        platform="test",
+        external_id="3",
+        title="Закупка",
+        url="https://example.com/tender/3",
+        raw_data={
+            "document_search_hits": 1,
+            "document_search": [
+                {
+                    "filename": "spec.txt",
+                    "keyword": "подшипники",
+                    "snippet": "Подшипники 6205",
+                }
+            ],
+        },
+    )
+    keyword_filter = KeywordFilter(include=["подшипники"], exclude=[], min_text_length=50)
+
+    assert not keyword_filter.matches_strict(tender)
+    assert keyword_filter.matches_strict(tender, allow_document_match=True)
+
+
+def test_attachment_hit_does_not_bypass_excluded_keyword():
+    tender = Tender(
+        platform="test",
+        external_id="4",
+        title="Закупка",
+        url="https://example.com/tender/4",
+        raw_data={
+            "document_search_hits": 1,
+            "document_search": [
+                {
+                    "filename": "spec.txt",
+                    "keyword": "подшипники",
+                    "snippet": "Подшипники для автомобиля",
+                }
+            ],
+        },
+    )
+    keyword_filter = KeywordFilter(
+        include=["подшипники"],
+        exclude=["автомобиль"],
+        min_text_length=50,
+    )
+
+    assert not keyword_filter.matches_strict(tender, allow_document_match=True)
