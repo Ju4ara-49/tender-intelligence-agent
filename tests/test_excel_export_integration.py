@@ -58,25 +58,25 @@ def main() -> None:
     headers = [cell.value for cell in ws[1]]
     expected = [
         "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
-        "НМЦК", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
+        "Начальная цена", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
-        "Рекомендация", "Краткое резюме", "Риски", "Начальная цена",
-        "Комментарий по срокам", "Ссылка",
+        "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
     ]
 
     assert headers == expected, headers
+    assert "НМЦК" not in headers
     assert "Дата поиска" not in headers
     assert "№ поиска" not in headers
     assert "Статус" not in headers
     assert "W" not in headers
     assert "X" not in headers
     assert "Y" not in headers
+    assert "Комментарий по срокам" not in headers
 
-    assert ws["Q2"].value == 125000.0
+    assert ws["F2"].value == 125000.0
     assert ws["L2"].value == "Запрос предложений"
-    assert ws["R2"].value == "Осталось достаточно времени для подготовки заявки."
 
-    hyperlink = ws["S2"].hyperlink
+    hyperlink = ws["Q2"].hyperlink
     assert hyperlink is not None
     assert hyperlink.target == "https://example.com/tender/GHA-TEST-001"
 
@@ -88,7 +88,7 @@ def main() -> None:
     print(f"Rows: {ws.max_row - 1}")
     print(f"Columns: {ws.max_column}")
     print(f"Clickable tender link: {hyperlink.target}")
-    print(f"Initial price: {ws['Q2'].value}")
+    print(f"Initial price: {ws['F2'].value}")
     print(f"Procurement method: {ws['L2'].value}")
     print("Excel schema checks: PASS")
 
