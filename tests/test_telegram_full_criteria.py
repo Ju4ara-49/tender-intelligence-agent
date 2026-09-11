@@ -1,4 +1,5 @@
 from src.storage.database import TenderDatabase
+from src.telegram_full_criteria import BTN_EXCLUDE, BTN_REGIONS, FullCriteriaTelegramBot
 from src.telegram_settings import CriteriaStore
 
 
@@ -49,3 +50,10 @@ def test_old_criteria_table_migrates_without_regions_or_exclusions(tmp_path):
     assert criteria.max_application_security_percent == 5
     assert store.get_regions("legacy-user") == []
     assert store.get_exclude_keywords("legacy-user") == []
+
+
+def test_full_criteria_keyboard_contains_region_and_exclusion_controls():
+    keyboard = FullCriteriaTelegramBot._keyboard()
+    texts = {button["text"] for row in keyboard["keyboard"] for button in row}
+    assert BTN_REGIONS in texts
+    assert BTN_EXCLUDE in texts
