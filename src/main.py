@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
@@ -35,11 +36,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Tender Intelligence Agent — мониторинг тендеров")
     parser.add_argument(
         "command",
-        choices=["run", "once", "status", "bot"],
+        choices=["run", "once", "status", "platforms", "bot"],
         help=(
-            "run — непрерывный режим; once — одна проверка; "
-            "status — статистика БД; bot — интерактивный Telegram-бот (/settings, /search)"
+            "run — непрерывный режим; once — одна проверка; status — статистика БД; "
+            "platforms — живая проверка подключения и поиска на всех включённых площадках; "
+            "bot — интерактивный Telegram-бот (/settings, /search)"
         ),
+    )
+    parser.add_argument(
+        "--probe",
+        default="подшипники",
+        help="ключевое слово для живой проверки площадок (по умолчанию: подшипники)",
     )
     args = parser.parse_args()
 
@@ -62,6 +69,15 @@ def main() -> int:
         else:
             print(f"ИИ настроен:          {'да' if settings.ai_api_key else 'нет'} ({settings.ai_provider} / {settings.ai_model})")
         return 0
+
+    if args.command == "platforms":
+        from src.collectors.health import check_platforms
+
+        report = check_platforms(settings.config, query=args.probe)
+        print(json.dumps([item.as_dict() for item in report], ensure_ascii=False, indent=2))
+        bad = [item for item in report if item.status != "ok"]
+        print(f"\nПроверено площадок: {len(report)}; OK: {len(report) - len(bad)}; проблемы: {len(bad)}")
+        return 0 if report and not bad else 2
 
     if args.command == "once":
         orchestrator = Orchestrator(settings)
