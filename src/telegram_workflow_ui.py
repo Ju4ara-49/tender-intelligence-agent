@@ -16,19 +16,14 @@ def _keyboard(tender_id: int, current_status: str) -> dict:
             continue
         buttons.append({"text": STATUS_NAMES[status], "callback_data": f"workflow:status:{tender_id}:{status}"})
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-    rows.append([{"text": "↩️ К карточке", "callback_data": f"workflow:show:{tender_id}"}])
     return {"inline_keyboard": rows}
 
 
 def _show(bot, chat_id: str, tender_id: int) -> None:
-    tender = bot.orchestrator.db.get_tender(tender_id)
-    if tender is None:
-        bot._send(chat_id, "Тендер не найден.", bot._keyboard())
-        return
     workflow = bot._workflow_store.get(tender_id, chat_id)
     bot._send(
         chat_id,
-        f"<b>Статус тендера</b>\n\nТендер: {html.escape(tender.title or 'Без названия')}\n"
+        f"<b>Статус тендера #{tender_id}</b>\n\n"
         f"Текущий статус: <b>{html.escape(STATUS_NAMES.get(workflow.status, workflow.status))}</b>",
         _keyboard(tender_id, workflow.status),
     )
@@ -65,7 +60,7 @@ def install(bot_class) -> None:
                 state = self._workflow_store.set_status(tender_id, chat_id, status)
                 self._send(
                     chat_id,
-                    f"✅ Статус изменён на <b>{html.escape(STATUS_NAMES[state.status])}</b>.",
+                    f"✅ Статус тендера #{tender_id} изменён на <b>{html.escape(STATUS_NAMES[state.status])}</b>.",
                     _keyboard(tender_id, state.status),
                 )
                 return
