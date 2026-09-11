@@ -60,6 +60,13 @@ class TenderWorkflowStore:
         return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
+    def _user_id(user_id: str | int) -> str:
+        value = str(user_id).strip()
+        if not value:
+            raise ValueError("user_id обязателен")
+        return value
+
+    @staticmethod
     def _tags(value) -> list[str]:
         if isinstance(value, str):
             try:
@@ -113,11 +120,11 @@ class TenderWorkflowStore:
         with self.db._connect() as conn:
             return conn.execute(
                 "SELECT * FROM tender_workflow WHERE tender_id = ? AND user_id = ?",
-                (int(tender_id), str(user_id).strip()),
+                (int(tender_id), user_id),
             ).fetchone()
 
     def get(self, tender_id: int, user_id: str | int) -> WorkflowState:
-        user_id = str(user_id).strip()
+        user_id = self._user_id(user_id)
         row = self._row(tender_id, user_id)
         if row is None:
             return WorkflowState(int(tender_id), user_id, "new", [], "", "")
@@ -139,9 +146,7 @@ class TenderWorkflowStore:
         status = str(status).strip().lower()
         if status not in STATUSES:
             raise ValueError(f"Неизвестный статус: {status}")
-        user_id = str(user_id).strip()
-        if not user_id:
-            raise ValueError("user_id обязателен")
+        user_id = self._user_id(user_id)
         with self.db._connect() as conn:
             self._ensure_row(tender_id, user_id, conn)
             old = conn.execute(
@@ -161,7 +166,7 @@ class TenderWorkflowStore:
         return self.get(tender_id, user_id)
 
     def set_tags(self, tender_id: int, user_id: str | int, tags: list[str]) -> WorkflowState:
-        user_id = str(user_id).strip()
+        user_id = self._user_id(user_id)
         normalized = self._tags(tags)
         with self.db._connect() as conn:
             self._ensure_row(tender_id, user_id, conn)
@@ -183,7 +188,7 @@ class TenderWorkflowStore:
         return self.get(tender_id, user_id)
 
     def set_comment(self, tender_id: int, user_id: str | int, comment: str) -> WorkflowState:
-        user_id = str(user_id).strip()
+        user_id = self._user_id(user_id)
         comment = str(comment or "").strip()[:4000]
         with self.db._connect() as conn:
             self._ensure_row(tender_id, user_id, conn)
@@ -204,9 +209,10 @@ class TenderWorkflowStore:
         return self.get(tender_id, user_id)
 
     def history(self, tender_id: int, user_id: str | int) -> list[dict]:
+        user_id = self._user_id(user_id)
         with self.db._connect() as conn:
             rows = conn.execute(
                 "SELECT id, changed_at, event_type, old_value, new_value FROM tender_workflow_history WHERE tender_id = ? AND user_id = ? ORDER BY changed_at ASC, id ASC",
-                (int(tender_id), str(user_id).strip()),
+                (int(tender_id), user_id),
             ).fetchall()
         return [dict(row) for row in rows]
