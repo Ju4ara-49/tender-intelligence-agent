@@ -19,7 +19,6 @@ def main() -> None:
         db_path.unlink()
 
     db = TenderDatabase(db_path)
-
     tender = Tender(
         platform="b2b_center",
         external_id="GHA-TEST-001",
@@ -35,9 +34,7 @@ def main() -> None:
         law_type="223-ФЗ",
         raw_data={"procurement_method": "Запрос предложений"},
     )
-
     tender_id = db.save_tender(tender)
-
     db.save_analysis(
         tender_id,
         TenderAnalysis(
@@ -51,7 +48,6 @@ def main() -> None:
     )
 
     export_tenders_to_excel(db, output, tender_ids=[tender_id])
-
     wb = load_workbook(output)
     ws = wb["Тендеры"]
 
@@ -62,26 +58,17 @@ def main() -> None:
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
     ]
-
     assert headers == expected, headers
-    assert "НМЦК" not in headers
-    assert "Дата поиска" not in headers
-    assert "№ поиска" not in headers
-    assert "Статус" not in headers
-    assert "W" not in headers
-    assert "X" not in headers
-    assert "Y" not in headers
-    assert "Комментарий по срокам" not in headers
+    for obsolete in ("НМЦК", "Дата поиска", "№ поиска", "Статус", "W", "X", "Y", "Комментарий по срокам"):
+        assert obsolete not in headers
 
     assert ws["F2"].value == 125000.0
     assert ws["L2"].value == "Запрос предложений"
-
     hyperlink = ws["Q2"].hyperlink
     assert hyperlink is not None
     assert hyperlink.target == "https://example.com/tender/GHA-TEST-001"
-
     assert ws.freeze_panes == "A2"
-    assert ws.auto_filter.ref == ws.dimensions
+    assert ws.auto_filter.ref is None
 
     print("INTEGRATION TEST: PASS")
     print(f"Excel: {output}")
@@ -91,6 +78,7 @@ def main() -> None:
     print(f"Initial price: {ws['F2'].value}")
     print(f"Procurement method: {ws['L2'].value}")
     print("Excel schema checks: PASS")
+    print("Excel filter arrows: DISABLED")
 
 
 if __name__ == "__main__":
