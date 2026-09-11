@@ -9,7 +9,7 @@ def make_db(tmp_path: Path) -> tuple[TenderDatabase, int]:
     db = TenderDatabase(tmp_path / "test.db")
     tender = Tender(
         platform="eis", external_id="1", title="Тест", url="https://example.test/1",
-        unique_key="eis:1", description="", price=1000, currency="RUB",
+        description="", price=1000, currency="RUB",
     )
     return db, db.save_tender(tender)
 
