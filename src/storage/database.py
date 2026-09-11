@@ -57,6 +57,8 @@ class TenderDatabase:
                     description TEXT DEFAULT '',
                     price REAL,
                     currency TEXT DEFAULT 'RUB',
+                    start_date TEXT,
+                    end_date TEXT,
                     deadline TEXT,
                     published_at TEXT,
                     region TEXT DEFAULT '',
@@ -126,7 +128,17 @@ class TenderDatabase:
                     ON notification_events(tender_id, sent_at);
                 """
             )
+            self._migrate_tender_date_columns(conn)
             self._migrate_legacy_notifications(conn)
+
+    @staticmethod
+    def _migrate_tender_date_columns(conn: sqlite3.Connection) -> None:
+        """Add model date columns to existing SQLite databases safely."""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(tenders)").fetchall()}
+        for column in ("start_date", "end_date"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE tenders ADD COLUMN {column} TEXT")
+                logger.info("SQLite migration: added tenders.%s", column)
 
     @staticmethod
     def _notification_event_key_from_row(row: sqlite3.Row) -> str:
@@ -136,6 +148,8 @@ class TenderDatabase:
             "url": row["url"],
             "price": row["price"],
             "currency": row["currency"],
+            "start_date": row["start_date"],
+            "end_date": row["end_date"],
             "deadline": row["deadline"],
             "published_at": row["published_at"],
             "region": row["region"],
@@ -150,8 +164,8 @@ class TenderDatabase:
         rows = conn.execute(
             """
             SELECT n.tender_id, n.channel, n.sent_at, n.payload,
-                   t.title, t.url, t.price, t.currency, t.deadline,
-                   t.published_at, t.region, t.customer, t.law_type
+                   t.title, t.url, t.price, t.currency, t.start_date, t.end_date,
+                   t.deadline, t.published_at, t.region, t.customer, t.law_type
             FROM notifications n
             JOIN tenders t ON t.id = n.tender_id
             """
@@ -197,8 +211,8 @@ class TenderDatabase:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, title, url, price, currency, deadline,
-                       published_at, region, customer, law_type
+                SELECT id, title, url, price, currency, start_date, end_date,
+                       deadline, published_at, region, customer, law_type
                 FROM tenders WHERE unique_key = ?
                 """,
                 (unique_key,),
@@ -234,6 +248,8 @@ class TenderDatabase:
             "description": tender.description,
             "price": tender.price,
             "currency": tender.currency,
+            "start_date": tender.start_date.isoformat() if tender.start_date else None,
+            "end_date": tender.end_date.isoformat() if tender.end_date else None,
             "deadline": tender.deadline.isoformat() if tender.deadline else None,
             "published_at": tender.published_at.isoformat() if tender.published_at else None,
             "region": tender.region,
@@ -246,8 +262,8 @@ class TenderDatabase:
         now = datetime.now(timezone.utc).isoformat()
         snapshot = self._tender_snapshot(tender)
         tracked_fields = (
-            "title", "url", "description", "price", "currency", "deadline",
-            "published_at", "region", "customer", "law_type", "raw_data",
+            "title", "url", "description", "price", "currency", "start_date", "end_date",
+            "deadline", "published_at", "region", "customer", "law_type", "raw_data",
         )
         with self._connect() as conn:
             previous = conn.execute("SELECT * FROM tenders WHERE unique_key = ?", (tender.unique_key,)).fetchone()
@@ -255,9 +271,9 @@ class TenderDatabase:
                 """
                 INSERT INTO tenders (
                     platform, external_id, unique_key, title, url, description,
-                    price, currency, deadline, published_at, region, customer,
-                    law_type, raw_data, first_seen_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    price, currency, start_date, end_date, deadline, published_at,
+                    region, customer, law_type, raw_data, first_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(unique_key) DO UPDATE SET
                     platform = excluded.platform,
                     external_id = excluded.external_id,
@@ -266,6 +282,8 @@ class TenderDatabase:
                     description = excluded.description,
                     price = excluded.price,
                     currency = excluded.currency,
+                    start_date = excluded.start_date,
+                    end_date = excluded.end_date,
                     deadline = excluded.deadline,
                     published_at = excluded.published_at,
                     region = excluded.region,
@@ -277,6 +295,8 @@ class TenderDatabase:
                 (
                     tender.platform, tender.external_id, tender.unique_key, tender.title, tender.url,
                     tender.description, tender.price, tender.currency,
+                    tender.start_date.isoformat() if tender.start_date else None,
+                    tender.end_date.isoformat() if tender.end_date else None,
                     tender.deadline.isoformat() if tender.deadline else None,
                     tender.published_at.isoformat() if tender.published_at else None,
                     tender.region, tender.customer, tender.law_type,
@@ -294,15 +314,19 @@ class TenderDatabase:
             else:
                 previous_values = {
                     "title": previous["title"], "url": previous["url"], "description": previous["description"],
-                    "price": previous["price"], "currency": previous["currency"], "deadline": previous["deadline"],
-                    "published_at": previous["published_at"], "region": previous["region"],
-                    "customer": previous["customer"], "law_type": previous["law_type"], "raw_data": previous["raw_data"],
+                    "price": previous["price"], "currency": previous["currency"],
+                    "start_date": previous["start_date"], "end_date": previous["end_date"],
+                    "deadline": previous["deadline"], "published_at": previous["published_at"],
+                    "region": previous["region"], "customer": previous["customer"],
+                    "law_type": previous["law_type"], "raw_data": previous["raw_data"],
                 }
                 current_values = {
                     "title": snapshot["title"], "url": snapshot["url"], "description": snapshot["description"],
-                    "price": snapshot["price"], "currency": snapshot["currency"], "deadline": snapshot["deadline"],
-                    "published_at": snapshot["published_at"], "region": snapshot["region"],
-                    "customer": snapshot["customer"], "law_type": snapshot["law_type"],
+                    "price": snapshot["price"], "currency": snapshot["currency"],
+                    "start_date": snapshot["start_date"], "end_date": snapshot["end_date"],
+                    "deadline": snapshot["deadline"], "published_at": snapshot["published_at"],
+                    "region": snapshot["region"], "customer": snapshot["customer"],
+                    "law_type": snapshot["law_type"],
                     "raw_data": json.dumps(snapshot["raw_data"], ensure_ascii=False),
                 }
                 changed_fields = [field for field in tracked_fields if previous_values[field] != current_values[field]]
@@ -365,8 +389,8 @@ class TenderDatabase:
         with self._connect() as conn:
             tender = conn.execute(
                 """
-                SELECT id, title, url, price, currency, deadline,
-                       published_at, region, customer, law_type
+                SELECT id, title, url, price, currency, start_date, end_date,
+                       deadline, published_at, region, customer, law_type
                 FROM tenders WHERE id = ?
                 """,
                 (tender_id,),
@@ -391,7 +415,6 @@ class TenderDatabase:
                     json.dumps(payload or {}, ensure_ascii=False),
                 ),
             )
-            # Сохраняем legacy-строку для совместимости со старыми БД/отчётами.
             conn.execute(
                 """
                 INSERT INTO notifications (tender_id, channel, sent_at, payload)
