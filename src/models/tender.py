@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 
@@ -37,6 +37,23 @@ class Tender:
 
     raw_data: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Make all tender timestamps comparable across collectors and hosts.
+
+        Public Russian procurement pages commonly omit timezone information.
+        The project treats such values as Moscow time and stores/compares them
+        in UTC. Already-aware values are preserved as instants and converted
+        to UTC as well.
+        """
+        moscow = timezone(timedelta(hours=3), name="MSK")
+        for field_name in ("start_date", "end_date", "published_at", "deadline"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=moscow)
+            setattr(self, field_name, value.astimezone(timezone.utc))
+
     @property
     def unique_key(self) -> str:
         """Уникальный ключ тендера для защиты от дублей."""
@@ -53,9 +70,6 @@ class Tender:
         if isinstance(value, dict):
             result: list[str] = []
             for key, item in value.items():
-                # Ключи обычно являются техническими именами и создают шум,
-                # поэтому индексируем их только как текст, если они содержат
-                # пользовательские пробелы/русские слова.
                 if isinstance(key, str) and (" " in key or any("а" <= ch.lower() <= "я" for ch in key)):
                     result.extend(cls._text_from_value(key))
                 result.extend(cls._text_from_value(item))
