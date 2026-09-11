@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 class TenderDatabase:
-    """SQLite-хранилище тендеров с защитой от дублей."""
+    """SQLite-хранилище тендеров с защитой от дублей и истории изменений."""
+
+    SQLITE_TIMEOUT_SECONDS = 15.0
+    BUSY_TIMEOUT_MS = 15000
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -25,9 +28,18 @@ class TenderDatabase:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
+        # timeout + busy_timeout защищают параллельные Telegram-поиски от
+        # мгновенного "database is locked". WAL позволяет читателям работать
+        # параллельно с записью.
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=self.SQLITE_TIMEOUT_SECONDS,
+        )
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute(f"PRAGMA busy_timeout = {self.BUSY_TIMEOUT_MS}")
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode = WAL")
             yield conn
             conn.commit()
         except Exception:
@@ -83,10 +95,22 @@ class TenderDatabase:
                     FOREIGN KEY (tender_id) REFERENCES tenders(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS tender_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tender_id INTEGER NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    changed_fields TEXT NOT NULL DEFAULT '[]',
+                    snapshot TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY (tender_id) REFERENCES tenders(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_tenders_platform
                     ON tenders(platform);
                 CREATE INDEX IF NOT EXISTS idx_tenders_first_seen
                     ON tenders(first_seen_at);
+                CREATE INDEX IF NOT EXISTS idx_tender_history_tender_changed
+                    ON tender_history(tender_id, changed_at);
                 """
             )
 
@@ -122,9 +146,38 @@ class TenderDatabase:
             ).fetchone()
         return row is not None
 
+    @staticmethod
+    def _tender_snapshot(tender: Tender) -> dict:
+        return {
+            "platform": tender.platform,
+            "external_id": tender.external_id,
+            "unique_key": tender.unique_key,
+            "title": tender.title,
+            "url": tender.url,
+            "description": tender.description,
+            "price": tender.price,
+            "currency": tender.currency,
+            "deadline": tender.deadline.isoformat() if tender.deadline else None,
+            "published_at": tender.published_at.isoformat() if tender.published_at else None,
+            "region": tender.region,
+            "customer": tender.customer,
+            "law_type": tender.law_type,
+            "raw_data": tender.raw_data,
+        }
+
     def save_tender(self, tender: Tender) -> int:
         now = datetime.now(timezone.utc).isoformat()
+        snapshot = self._tender_snapshot(tender)
+        tracked_fields = (
+            "title", "url", "description", "price", "currency", "deadline",
+            "published_at", "region", "customer", "law_type", "raw_data",
+        )
         with self._connect() as conn:
+            previous = conn.execute(
+                "SELECT * FROM tenders WHERE unique_key = ?",
+                (tender.unique_key,),
+            ).fetchone()
+
             conn.execute(
                 """
                 INSERT INTO tenders (
@@ -133,11 +186,19 @@ class TenderDatabase:
                     law_type, raw_data, first_seen_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(unique_key) DO UPDATE SET
+                    platform = excluded.platform,
+                    external_id = excluded.external_id,
                     title = excluded.title,
                     url = excluded.url,
                     description = excluded.description,
                     price = excluded.price,
+                    currency = excluded.currency,
                     deadline = excluded.deadline,
+                    published_at = excluded.published_at,
+                    region = excluded.region,
+                    customer = excluded.customer,
+                    law_type = excluded.law_type,
+                    raw_data = excluded.raw_data,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -160,10 +221,77 @@ class TenderDatabase:
                 ),
             )
             row = conn.execute(
-                "SELECT id FROM tenders WHERE unique_key = ?",
+                "SELECT * FROM tenders WHERE unique_key = ?",
                 (tender.unique_key,),
             ).fetchone()
-        return int(row["id"])
+            if row is None:
+                raise RuntimeError(f"Tender was not saved: {tender.unique_key}")
+            tender_id = int(row["id"])
+
+            if previous is None:
+                changed_fields = ["created"]
+                event_type = "created"
+            else:
+                previous_values = {
+                    "title": previous["title"],
+                    "url": previous["url"],
+                    "description": previous["description"],
+                    "price": previous["price"],
+                    "currency": previous["currency"],
+                    "deadline": previous["deadline"],
+                    "published_at": previous["published_at"],
+                    "region": previous["region"],
+                    "customer": previous["customer"],
+                    "law_type": previous["law_type"],
+                    "raw_data": previous["raw_data"],
+                }
+                current_values = {
+                    "title": snapshot["title"],
+                    "url": snapshot["url"],
+                    "description": snapshot["description"],
+                    "price": snapshot["price"],
+                    "currency": snapshot["currency"],
+                    "deadline": snapshot["deadline"],
+                    "published_at": snapshot["published_at"],
+                    "region": snapshot["region"],
+                    "customer": snapshot["customer"],
+                    "law_type": snapshot["law_type"],
+                    "raw_data": json.dumps(snapshot["raw_data"], ensure_ascii=False),
+                }
+                changed_fields = [
+                    field for field in tracked_fields
+                    if previous_values[field] != current_values[field]
+                ]
+                event_type = "updated"
+
+            if changed_fields:
+                conn.execute(
+                    """
+                    INSERT INTO tender_history (
+                        tender_id, changed_at, event_type, changed_fields, snapshot
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tender_id,
+                        now,
+                        event_type,
+                        json.dumps(changed_fields, ensure_ascii=False),
+                        json.dumps(snapshot, ensure_ascii=False),
+                    ),
+                )
+        return tender_id
+
+    def get_tender_history(self, tender_id: int) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT id, tender_id, changed_at, event_type, changed_fields, snapshot
+                FROM tender_history
+                WHERE tender_id = ?
+                ORDER BY changed_at ASC, id ASC
+                """,
+                (tender_id,),
+            ).fetchall()
 
     def save_analysis(self, tender_id: int, analysis: TenderAnalysis) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -179,6 +307,9 @@ class TenderDatabase:
                     summary = excluded.summary,
                     recommendation = excluded.recommendation,
                     risks = excluded.risks,
+                    budget_note = excluded.budget_note,
+                    deadline_note = excluded.deadline_note,
+                    is_stub = excluded.is_stub,
                     analyzed_at = excluded.analyzed_at
                 """,
                 (
