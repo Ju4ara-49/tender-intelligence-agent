@@ -115,8 +115,9 @@ def export_tenders_to_excel(
             "eis": "ЕИС",
             "b2b_center": "B2B-Center",
             "rts_tender": "РТС-тендер",
-            "unipro": "Unipro",
+            "fabricant": "Фабрикант",
             "tmk": "ТМК",
+            "rosatom": "Росатом",
         }
         platform = platform_names.get(row["platform"] or "", row["platform"] or "")
 
