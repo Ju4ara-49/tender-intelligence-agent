@@ -26,6 +26,18 @@ class CriteriaAwareResponsiveTelegramBot(ResponsiveMultiUserTelegramBot):
     def _handle_message(self, message: dict) -> None:
         text = (message.get("text") or "").strip()
         chat_id = str(message.get("chat", {}).get("id", ""))
+        if not self._is_allowed(chat_id):
+            self._access_denied(chat_id)
+            return
+        if self._is_owner(chat_id) and (
+            chat_id in self._admin_waiting
+            or text in {BTN_ADMIN_ADD, BTN_ADMIN_REMOVE, BTN_ADMIN_USERS, BTN_ADMIN_BACK, BTN_ADMIN}
+            or text.startswith("/admin")
+            or text.startswith("/users")
+            or text.startswith("/add_user")
+            or text.startswith("/remove_user")
+        ):
+            return super()._handle_message(message)
         if text == BTN_ADVANCE:
             self._ask_value(chat_id, "min_advance_percent", "Введите минимальный аванс в процентах.\n\n<code>30</code> = аванс от 30%.\n<code>0</code> = аванс не требуется.\n<code>нет</code> = отключить фильтр.")
             return
