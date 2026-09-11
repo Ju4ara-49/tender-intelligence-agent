@@ -28,13 +28,7 @@ class TenderDatabase:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        # timeout + busy_timeout защищают параллельные Telegram-поиски от
-        # мгновенного "database is locked". WAL позволяет читателям работать
-        # параллельно с записью.
-        conn = sqlite3.connect(
-            self.db_path,
-            timeout=self.SQLITE_TIMEOUT_SECONDS,
-        )
+        conn = sqlite3.connect(self.db_path, timeout=self.SQLITE_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
         try:
             conn.execute(f"PRAGMA busy_timeout = {self.BUSY_TIMEOUT_MS}")
@@ -105,6 +99,11 @@ class TenderDatabase:
                     FOREIGN KEY (tender_id) REFERENCES tenders(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS search_counter (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    value INTEGER NOT NULL DEFAULT 0
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_tenders_platform
                     ON tenders(platform);
                 CREATE INDEX IF NOT EXISTS idx_tenders_first_seen
@@ -114,25 +113,25 @@ class TenderDatabase:
                 """
             )
 
+    def next_search_number(self) -> int:
+        """Атомарно получить следующий номер поиска в SQLite."""
+        with self._connect() as conn:
+            conn.execute("INSERT OR IGNORE INTO search_counter(id, value) VALUES (1, 0)")
+            conn.execute("UPDATE search_counter SET value = value + 1 WHERE id = 1")
+            row = conn.execute("SELECT value FROM search_counter WHERE id = 1").fetchone()
+            if row is None:
+                raise RuntimeError("Не удалось получить номер поиска")
+            return int(row["value"])
+
     def exists(self, unique_key: str) -> bool:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM tenders WHERE unique_key = ?",
-                (unique_key,),
-            ).fetchone()
+            row = conn.execute("SELECT 1 FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return row is not None
 
     def get_tender_id(self, unique_key: str) -> int | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT id FROM tenders WHERE unique_key = ?",
-                (unique_key,),
-            ).fetchone()
-
-        if row is None:
-            return None
-
-        return int(row["id"])
+            row = conn.execute("SELECT id FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
+        return int(row["id"]) if row is not None else None
 
     def was_notified(self, unique_key: str) -> bool:
         with self._connect() as conn:
@@ -173,11 +172,7 @@ class TenderDatabase:
             "published_at", "region", "customer", "law_type", "raw_data",
         )
         with self._connect() as conn:
-            previous = conn.execute(
-                "SELECT * FROM tenders WHERE unique_key = ?",
-                (tender.unique_key,),
-            ).fetchone()
-
+            previous = conn.execute("SELECT * FROM tenders WHERE unique_key = ?", (tender.unique_key,)).fetchone()
             conn.execute(
                 """
                 INSERT INTO tenders (
@@ -202,28 +197,15 @@ class TenderDatabase:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    tender.platform,
-                    tender.external_id,
-                    tender.unique_key,
-                    tender.title,
-                    tender.url,
-                    tender.description,
-                    tender.price,
-                    tender.currency,
+                    tender.platform, tender.external_id, tender.unique_key, tender.title, tender.url,
+                    tender.description, tender.price, tender.currency,
                     tender.deadline.isoformat() if tender.deadline else None,
                     tender.published_at.isoformat() if tender.published_at else None,
-                    tender.region,
-                    tender.customer,
-                    tender.law_type,
-                    json.dumps(tender.raw_data, ensure_ascii=False),
-                    now,
-                    now,
+                    tender.region, tender.customer, tender.law_type,
+                    json.dumps(tender.raw_data, ensure_ascii=False), now, now,
                 ),
             )
-            row = conn.execute(
-                "SELECT * FROM tenders WHERE unique_key = ?",
-                (tender.unique_key,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM tenders WHERE unique_key = ?", (tender.unique_key,)).fetchone()
             if row is None:
                 raise RuntimeError(f"Tender was not saved: {tender.unique_key}")
             tender_id = int(row["id"])
@@ -233,51 +215,28 @@ class TenderDatabase:
                 event_type = "created"
             else:
                 previous_values = {
-                    "title": previous["title"],
-                    "url": previous["url"],
-                    "description": previous["description"],
-                    "price": previous["price"],
-                    "currency": previous["currency"],
-                    "deadline": previous["deadline"],
-                    "published_at": previous["published_at"],
-                    "region": previous["region"],
-                    "customer": previous["customer"],
-                    "law_type": previous["law_type"],
-                    "raw_data": previous["raw_data"],
+                    "title": previous["title"], "url": previous["url"], "description": previous["description"],
+                    "price": previous["price"], "currency": previous["currency"], "deadline": previous["deadline"],
+                    "published_at": previous["published_at"], "region": previous["region"],
+                    "customer": previous["customer"], "law_type": previous["law_type"], "raw_data": previous["raw_data"],
                 }
                 current_values = {
-                    "title": snapshot["title"],
-                    "url": snapshot["url"],
-                    "description": snapshot["description"],
-                    "price": snapshot["price"],
-                    "currency": snapshot["currency"],
-                    "deadline": snapshot["deadline"],
-                    "published_at": snapshot["published_at"],
-                    "region": snapshot["region"],
-                    "customer": snapshot["customer"],
-                    "law_type": snapshot["law_type"],
+                    "title": snapshot["title"], "url": snapshot["url"], "description": snapshot["description"],
+                    "price": snapshot["price"], "currency": snapshot["currency"], "deadline": snapshot["deadline"],
+                    "published_at": snapshot["published_at"], "region": snapshot["region"],
+                    "customer": snapshot["customer"], "law_type": snapshot["law_type"],
                     "raw_data": json.dumps(snapshot["raw_data"], ensure_ascii=False),
                 }
-                changed_fields = [
-                    field for field in tracked_fields
-                    if previous_values[field] != current_values[field]
-                ]
+                changed_fields = [field for field in tracked_fields if previous_values[field] != current_values[field]]
                 event_type = "updated"
 
             if changed_fields:
                 conn.execute(
                     """
-                    INSERT INTO tender_history (
-                        tender_id, changed_at, event_type, changed_fields, snapshot
-                    ) VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO tender_history (tender_id, changed_at, event_type, changed_fields, snapshot)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (
-                        tender_id,
-                        now,
-                        event_type,
-                        json.dumps(changed_fields, ensure_ascii=False),
-                        json.dumps(snapshot, ensure_ascii=False),
-                    ),
+                    (tender_id, now, event_type, json.dumps(changed_fields, ensure_ascii=False), json.dumps(snapshot, ensure_ascii=False)),
                 )
         return tender_id
 
@@ -286,9 +245,7 @@ class TenderDatabase:
             return conn.execute(
                 """
                 SELECT id, tender_id, changed_at, event_type, changed_fields, snapshot
-                FROM tender_history
-                WHERE tender_id = ?
-                ORDER BY changed_at ASC, id ASC
+                FROM tender_history WHERE tender_id = ? ORDER BY changed_at ASC, id ASC
                 """,
                 (tender_id,),
             ).fetchall()
@@ -313,15 +270,9 @@ class TenderDatabase:
                     analyzed_at = excluded.analyzed_at
                 """,
                 (
-                    tender_id,
-                    analysis.relevance_score,
-                    analysis.summary,
-                    analysis.recommendation,
-                    json.dumps(analysis.risks, ensure_ascii=False),
-                    analysis.budget_note,
-                    analysis.deadline_note,
-                    1 if analysis.is_stub else 0,
-                    now,
+                    tender_id, analysis.relevance_score, analysis.summary, analysis.recommendation,
+                    json.dumps(analysis.risks, ensure_ascii=False), analysis.budget_note,
+                    analysis.deadline_note, 1 if analysis.is_stub else 0, now,
                 ),
             )
 
@@ -331,8 +282,7 @@ class TenderDatabase:
             conn.execute(
                 """
                 INSERT INTO notifications (tender_id, channel, sent_at, payload)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(tender_id) DO NOTHING
+                VALUES (?, ?, ?, ?) ON CONFLICT(tender_id) DO NOTHING
                 """,
                 (tender_id, channel, now, json.dumps(payload or {}, ensure_ascii=False)),
             )
