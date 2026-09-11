@@ -11,6 +11,7 @@ from src.telegram_bot import HELP_TEXT
 from src.telegram_multiuser import MultiUserTelegramBot
 from src.telegram_profiles_runtime import install as install_profiles_runtime
 from src.telegram_profiles_ui import install as install_profiles_ui
+from src.telegram_workflow_ui import install as install_workflow_ui
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +72,4 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
 
 install_profiles_ui(ResponsiveMultiUserTelegramBot)
 install_profiles_runtime(ResponsiveMultiUserTelegramBot)
+install_workflow_ui(ResponsiveMultiUserTelegramBot)
