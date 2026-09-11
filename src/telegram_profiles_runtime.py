@@ -20,10 +20,16 @@ def install(bot_class) -> None:
     def run_search_for_profiles(self, chat_id: str, orchestrator) -> None:
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nЗапускаю все включённые ключи пользователя.", self._keyboard())
+        # Старый Orchestrator очищает stop-флаг в начале каждого run_cycle().
+        # Для пакетного запуска нескольких ключей это опасно: нажатие «Стоп» между
+        # профилями может быть потеряно. На время batch-run делаем clear безопасным no-op,
+        # предварительно снимая старый флаг один раз.
+        original_clear_stop = orchestrator.clear_stop_request
+        original_clear_stop()
+        orchestrator.clear_stop_request = lambda: None
         try:
             runs = orchestrator.run_cycle_for_user(chat_id)
             if not runs:
-                # Защита от неожиданного пустого результата и сохранение старого поведения.
                 original(self, chat_id, orchestrator)
                 return
             aggregate = {key: 0 for key in AGGREGATE_KEYS}
@@ -54,6 +60,7 @@ def install(bot_class) -> None:
             logging.getLogger(__name__).exception("Telegram-профили: ошибка запуска ключей для chat_id=%s", chat_id)
             self._send(chat_id, "❌ <b>Ошибка поиска по ключам.</b>\n\nПодробности находятся в logs/agent.log.", self._keyboard())
         finally:
+            orchestrator.clear_stop_request = original_clear_stop
             with self._search_lock:
                 self._search_threads.pop(chat_id, None)
                 self._user_orchestrators.pop(chat_id, None)
