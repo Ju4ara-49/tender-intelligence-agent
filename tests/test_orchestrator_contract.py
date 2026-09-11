@@ -69,6 +69,22 @@ def test_enrichment_copies_all_common_detail_fields() -> None:
     assert enriched.region == "Санкт-Петербург"
 
 
+def test_detail_values_replace_stale_search_values() -> None:
+    base = _tender(
+        start_date=datetime(2026, 9, 10, 9, 0),
+        end_date=datetime(2026, 9, 18, 18, 0),
+        deadline=datetime(2026, 9, 18, 18, 0),
+        region="Москва",
+        customer="Старый заказчик",
+    )
+    enriched, _ = Orchestrator.__new__(Orchestrator)._enrich_tender(_DetailCollector(), base)
+
+    assert enriched.end_date == datetime(2026, 9, 20, 15, 0, tzinfo=timezone.utc)
+    assert enriched.deadline == enriched.end_date
+    assert enriched.region == "Санкт-Петербург"
+    assert enriched.customer == "ООО Ромашка"
+
+
 def test_max_postpayment_rejects_missing_value() -> None:
     tender = _tender(postpayment_days=None)
     criteria = TenderCriteria(max_postpayment_days=30)
