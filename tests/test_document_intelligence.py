@@ -22,7 +22,7 @@ def test_cp1251_text_is_decoded():
 
 
 def test_html_markup_is_not_returned_as_document_text():
-    data = b"<html><script>secret()</script><body><h1>Подшипники</h1></body></html>"
+    data = "<html><script>secret()</script><body><h1>Подшипники</h1></body></html>".encode("utf-8")
     docs = DocumentIntelligence().extract_bytes(data, "notice.html")
     assert docs[0].text == "Подшипники"
     assert "script" not in docs[0].text.lower()
@@ -36,7 +36,6 @@ def test_xlsx_extraction():
     sheet.append(["Подшипник 6205", 12])
     buffer = io.BytesIO()
     workbook.save(buffer)
-
     docs = DocumentIntelligence().extract_bytes(buffer.getvalue(), "spec.xlsx")
     assert "Подшипник 6205" in docs[0].text
     assert "Количество" in docs[0].text
@@ -69,14 +68,11 @@ def test_nested_archive_is_processed_with_depth_limit():
     inner = io.BytesIO()
     with zipfile.ZipFile(inner, "w") as archive:
         archive.writestr("notice.txt", "Глубокий документ")
-
     outer = io.BytesIO()
     with zipfile.ZipFile(outer, "w") as archive:
         archive.writestr("nested.zip", inner.getvalue())
-
     docs = DocumentIntelligence(max_nesting_depth=2).extract_bytes(outer.getvalue(), "outer.zip")
     assert any("Глубокий документ" in doc.text for doc in docs)
-
     with pytest.raises(UnsafeArchiveError):
         DocumentIntelligence(max_nesting_depth=1).extract_bytes(outer.getvalue(), "outer.zip")
 
