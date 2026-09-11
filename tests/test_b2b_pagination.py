@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 from src.collectors.b2b_center_reliable import ReliableB2BCenterCollector
@@ -35,7 +36,7 @@ def test_b2b_reliable_search_requests_offset_pages(monkeypatch):
     html = collector._load_search_page("Станок")
 
     assert calls == [0, 20, 40, 60]
-    assert html.count("search-results-title") == 60
+    assert len(re.findall(r"class=['\"]search-results-title['\"]", html)) == 60
 
 
 def test_b2b_configured_one_page_does_not_disable_broad_discovery(monkeypatch):
