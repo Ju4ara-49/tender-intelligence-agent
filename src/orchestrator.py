@@ -321,6 +321,8 @@ class Orchestrator:
         if not profiles:
             profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
         results: list[dict[str, int]] = []
+        aggregate_results: list[Tender] = []
+        seen_keys: set[str] = set()
         for profile in profiles:
             if self.stop_requested:
                 break
@@ -333,6 +335,11 @@ class Orchestrator:
                 exclude_keywords=profile.exclusions or None,
                 regions=profile.regions or None,
             )
+            for tender in self.last_run_results:
+                if tender.unique_key not in seen_keys:
+                    seen_keys.add(tender.unique_key)
+                    aggregate_results.append(tender)
             self.profile_store.record_run(user_id, profile.id, stats, started_at=started_at)
             results.append(stats)
+        self.last_run_results = aggregate_results
         return results
