@@ -28,6 +28,7 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Probe public tender portals
+        continue-on-error: true
         run: python tests/platform_browser_diagnostics.py
 
       - name: Upload diagnostics
