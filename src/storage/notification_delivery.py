@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 
 from src.models.tender import Tender
 from src.storage.database import TenderDatabase
@@ -42,12 +41,7 @@ class NotificationDeliveryState:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def was_notified(self, tender: Tender) -> bool:
-        """Return True only when this exact tender state was delivered.
-
-        Legacy notification rows are migrated by TenderDatabase when the DB is
-        initialized. They must not be copied to a new fingerprint here: doing
-        so would incorrectly suppress a notification after a tender changed.
-        """
+        """Return True only when this exact rich tender state was delivered."""
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             return False
@@ -60,21 +54,13 @@ class NotificationDeliveryState:
         return row is not None
 
     def mark_notified(self, tender: Tender, payload: dict | None = None) -> None:
+        """Record the rich tender fingerprint as the delivered notification event."""
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             raise ValueError(f"Tender not found: {tender.unique_key}")
-        self.db.mark_notified(tender_id, channel=self.CHANNEL, payload=payload)
-        key = self.event_key(tender)
-        now = datetime.now(timezone.utc).isoformat()
-        with self.db._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO notification_events
-                    (tender_id, event_key, channel, sent_at, payload)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(tender_id, event_key, channel) DO UPDATE SET
-                    sent_at = excluded.sent_at,
-                    payload = excluded.payload
-                """,
-                (tender_id, key, self.CHANNEL, now, json.dumps(payload or {}, ensure_ascii=False)),
-            )
+        self.db.mark_notified(
+            tender_id,
+            channel=self.CHANNEL,
+            payload=payload,
+            event_key=self.event_key(tender),
+        )
