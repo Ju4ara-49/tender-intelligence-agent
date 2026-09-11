@@ -7,6 +7,7 @@ from pathlib import Path
 
 from src.ai.analyzer import TenderAnalyzer
 from src.collectors.registry import get_enabled_collectors
+from src.documents.tender_attachments import TenderAttachmentAnalyzer
 from src.filters.keyword_filter import KeywordFilter
 from src.models.tender import Tender
 from src.notifications.telegram import TelegramNotifier
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
-    """Широкий multi-platform pipeline: discovery → dedup → enrich → filters → AI."""
+    """Широкий multi-platform pipeline: discovery → dedup → enrich → documents → filters → AI."""
 
     def _get_next_search_number(self) -> int:
         return self.db.next_search_number()
@@ -31,6 +32,9 @@ class Orchestrator:
         self.db = TenderDatabase(settings.database_path)
         self.criteria_store = CriteriaStore(self.db)
         self.profile_store = SearchProfileStore(self.db)
+        self.document_analyzer = TenderAttachmentAnalyzer(
+            max_attachments=int(settings.config.get("documents", {}).get("max_attachments", 30)),
+        )
         self.analyzer = TenderAnalyzer(
             model=settings.ai_model,
             ai_context=settings.ai_context,
@@ -126,6 +130,49 @@ class Orchestrator:
             logger.exception("%s: ошибка загрузки деталей %s", getattr(collector, "platform", "unknown"), tender.external_id)
             return self._normalize_tender_datetimes(tender), False
 
+    def _analyze_tender_documents(self, tender: Tender, keywords: list[str]) -> bool:
+        """Скачать и проиндексировать вложения тендера локально.
+
+        Ошибка одного документа не ломает весь поиск. Результаты сохраняются
+        в raw_data и автоматически попадают в Tender.full_text.
+        """
+        if not tender.raw_data or not keywords:
+            return False
+        try:
+            attachments = self.document_analyzer.discover(tender.raw_data)
+            if not attachments:
+                return False
+            analyses = self.document_analyzer.analyze(tender.raw_data, keywords)
+            document_search: list[dict[str, object]] = []
+            for item in analyses:
+                for document in item.documents:
+                    document_search.append({
+                        "filename": document.path,
+                        "text": document.text,
+                    })
+                for hit in item.hits:
+                    document_search.append({
+                        "filename": hit.path,
+                        "keyword": hit.keyword,
+                        "snippet": hit.snippet,
+                        "start": hit.start,
+                        "end": hit.end,
+                    })
+            tender.raw_data["document_search"] = document_search
+            tender.raw_data["document_search_attachments"] = len(analyses)
+            tender.raw_data["document_search_hits"] = sum(len(item.hits) for item in analyses)
+            logger.info(
+                "%s:%s: документы проанализированы | attachments=%d | hits=%d",
+                tender.platform,
+                tender.external_id,
+                len(analyses),
+                tender.raw_data["document_search_hits"],
+            )
+            return bool(document_search)
+        except Exception:
+            logger.exception("%s:%s: ошибка анализа вложений; продолжаем без документов", tender.platform, tender.external_id)
+            return False
+
     def _search_platform(self, collector, keywords: list[str]) -> tuple[str, list[Tender]]:
         platform = getattr(collector, "platform", "unknown")
         try:
@@ -207,7 +254,7 @@ class Orchestrator:
             "search_number": search_number, "found": 0, "soft_filtered": 0, "filtered": 0,
             "keyword_excluded": 0, "new": 0, "analyzed": 0, "notified": 0,
             "skipped_duplicate": 0, "excluded_by_criteria": 0, "excluded_by_region": 0,
-            "details_loaded": 0, "details_failed": 0,
+            "details_loaded": 0, "details_failed": 0, "document_hits": 0,
         }
         self.clear_stop_request()
         self.last_run_results = []
@@ -259,6 +306,8 @@ class Orchestrator:
             enriched, loaded = self._enrich_tender(collector, tender)
             stats["details_loaded"] += int(loaded)
             stats["details_failed"] += int(not loaded and callable(getattr(collector, "get_details", None)))
+            if self._analyze_tender_documents(enriched, search_keywords):
+                stats["document_hits"] += int(enriched.raw_data.get("document_search_hits", 0))
             enriched_pairs.append((collector, enriched))
 
         strict_pairs: list[tuple[object, Tender]] = []
