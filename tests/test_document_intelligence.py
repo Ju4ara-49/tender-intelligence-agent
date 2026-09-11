@@ -41,6 +41,27 @@ def test_xlsx_extraction():
     assert "Количество" in docs[0].text
 
 
+def test_custom_xlsx_row_limit_is_honored():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["one"])
+    sheet.append(["two"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    with pytest.raises(ValueError, match="слишком много строк"):
+        DocumentIntelligence(max_xlsx_rows=1).extract_bytes(buffer.getvalue(), "rows.xlsx")
+
+
+def test_custom_xlsx_cell_limit_is_honored():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["one", "two"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    with pytest.raises(ValueError, match="слишком много ячеек"):
+        DocumentIntelligence(max_xlsx_cells=1).extract_bytes(buffer.getvalue(), "cells.xlsx")
+
+
 def test_archive_extraction_and_path_traversal_block():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
