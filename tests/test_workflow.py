@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from src.models.tender import Tender
 from src.storage.database import TenderDatabase
 from src.workflow import STATUSES, TenderWorkflowStore
@@ -48,3 +50,16 @@ def test_workflow_history_and_status_validation(tmp_path: Path):
         pass
     else:
         raise AssertionError("invalid status must raise ValueError")
+
+
+def test_workflow_rejects_blank_user_id(tmp_path: Path):
+    db, tender_id = make_db(tmp_path)
+    store = TenderWorkflowStore(db)
+    with pytest.raises(ValueError, match="user_id обязателен"):
+        store.set_status(tender_id, "", "review")
+    with pytest.raises(ValueError, match="user_id обязателен"):
+        store.set_tags(tender_id, "   ", ["tag"])
+    with pytest.raises(ValueError, match="user_id обязателен"):
+        store.set_comment(tender_id, "", "comment")
+    with pytest.raises(ValueError, match="user_id обязателен"):
+        store.history(tender_id, "   ")
