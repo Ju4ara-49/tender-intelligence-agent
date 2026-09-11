@@ -11,12 +11,7 @@ from src.storage.database import TenderDatabase
 
 
 class NotificationDeliveryState:
-    """Tracks notification delivery by a meaningful Tender state fingerprint.
-
-    The legacy database keeps a one-row-per-tender compatibility table. This
-    service adds a richer event fingerprint without requiring a destructive
-    migration of the existing SQLite schema.
-    """
+    """Tracks notification delivery by a meaningful Tender state fingerprint."""
 
     CHANNEL = "telegram"
 
@@ -47,6 +42,12 @@ class NotificationDeliveryState:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def was_notified(self, tender: Tender) -> bool:
+        """Return True only when this exact tender state was delivered.
+
+        Legacy notification rows are migrated by TenderDatabase when the DB is
+        initialized. They must not be copied to a new fingerprint here: doing
+        so would incorrectly suppress a notification after a tender changed.
+        """
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             return False
@@ -56,27 +57,7 @@ class NotificationDeliveryState:
                 "SELECT 1 FROM notification_events WHERE tender_id = ? AND event_key = ? AND channel = ?",
                 (tender_id, key, self.CHANNEL),
             ).fetchone()
-            if row is not None:
-                return True
-
-            # Upgrade bridge: old installations may have only the legacy row.
-            # Treat the current state as the already-delivered baseline once,
-            # then future changes will be detected by the richer fingerprint.
-            legacy = conn.execute(
-                "SELECT sent_at, payload, channel FROM notifications WHERE tender_id = ? ORDER BY id DESC LIMIT 1",
-                (tender_id,),
-            ).fetchone()
-            if legacy is None:
-                return False
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO notification_events
-                    (tender_id, event_key, channel, sent_at, payload)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (tender_id, key, legacy["channel"] or self.CHANNEL, legacy["sent_at"], legacy["payload"] or "{}"),
-            )
-            return True
+        return row is not None
 
     def mark_notified(self, tender: Tender, payload: dict | None = None) -> None:
         tender_id = self.db.get_tender_id(tender.unique_key)
