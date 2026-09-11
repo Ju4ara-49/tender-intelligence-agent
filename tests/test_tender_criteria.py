@@ -39,13 +39,20 @@ def test_all_business_criteria_pass():
     assert Orchestrator._passes_criteria(_tender(), criteria) == (True, "")
 
 
-def test_missing_required_commercial_data_is_rejected():
-    criteria = TenderCriteria(max_postpayment_days=45, min_application_security_percent=1)
-    ok, reason = Orchestrator._passes_criteria(
-        _tender(postpayment_days=None, application_security_percent=None), criteria
-    )
+def test_postpayment_limit_is_enforced_when_value_is_known():
+    criteria = TenderCriteria(max_postpayment_days=45, min_submission_days=7)
+    ok, reason = Orchestrator._passes_criteria(_tender(postpayment_days=60), criteria)
     assert not ok
     assert reason == "max_postpayment_days"
+
+
+def test_missing_required_minimum_security_data_is_rejected():
+    criteria = TenderCriteria(min_application_security_percent=1)
+    ok, reason = Orchestrator._passes_criteria(
+        _tender(application_security_percent=None), criteria
+    )
+    assert not ok
+    assert reason == "min_application_security_percent"
 
 
 def test_advance_and_security_limits_are_enforced():
