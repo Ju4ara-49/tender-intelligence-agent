@@ -9,8 +9,10 @@ import threading
 import time
 from pathlib import Path
 
+from src.decision_card import render_decision_card
 from src.orchestrator import Orchestrator
 from src.telegram_bot import TelegramBot
+from src.workflow import TenderWorkflowStore
 
 logger = logging.getLogger(__name__)
 OWNER_TELEGRAM_ID = "838120236"
@@ -33,6 +35,7 @@ class MultiUserTelegramBot(TelegramBot):
         self._whitelist_lock = threading.Lock()
         self._admin_waiting: dict[str, str] = {}
         self._allowed_user_ids = self._load_allowed_user_ids()
+        self._workflow_store = TenderWorkflowStore(orchestrator.db)
         logger.info("Telegram-доступ: whitelist включён; разрешённых пользователей=%d", len(self._allowed_user_ids))
 
     def _load_allowed_user_ids(self) -> set[str]:
@@ -186,6 +189,24 @@ class MultiUserTelegramBot(TelegramBot):
             self._search_threads[chat_id] = thread
             thread.start()
 
+    def _result_keyboard(self, tender_id: int) -> dict:
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "🔎 Рассмотреть", "callback_data": f"workflow:status:{tender_id}:review"},
+                    {"text": "⏭ Игнорировать", "callback_data": f"workflow:status:{tender_id}:ignored"},
+                ],
+                [
+                    {"text": "📄 Документы", "callback_data": f"workflow:status:{tender_id}:documents"},
+                    {"text": "📤 Подать заявку", "callback_data": f"workflow:status:{tender_id}:submitted"},
+                ],
+                [
+                    {"text": "🏆 Выигран", "callback_data": f"workflow:status:{tender_id}:won"},
+                    {"text": "❌ Проигран", "callback_data": f"workflow:status:{tender_id}:lost"},
+                ],
+            ]
+        }
+
     def _send_search_results(self, chat_id: str, orchestrator: Orchestrator) -> None:
         results = orchestrator.last_run_results
         if not results:
@@ -193,25 +214,15 @@ class MultiUserTelegramBot(TelegramBot):
             return
         self._send(chat_id, f"📋 <b>Результаты поиска: {len(results)}</b>", self._keyboard())
         for index, tender in enumerate(results, 1):
-            price = f"{tender.price:,.0f} {tender.currency}".replace(",", " ") if tender.price is not None else "не указана"
-            published = tender.published_at or tender.start_date
-            published_date = published.strftime("%d.%m.%Y") if published else "не указана"
-            deadline = tender.deadline.strftime("%d.%m.%Y") if tender.deadline else "не указан"
-            title = html.escape(tender.title or "Без названия")
-            customer = html.escape(tender.customer or "не указан")
-            region = html.escape(tender.region or "не указан")
-            url = html.escape(tender.url or "")
-            text = f"<b>{index}. {title}</b>\n📅 дата закупки: {published_date}\n🏢 {customer}\n📍 регион: {region}\n💰 {price}\n⏰ до {deadline}"
-            if url:
-                text += f'\n🔗 <a href="{url}">Открыть тендер</a>'
-            self._send(chat_id, text, self._keyboard())
+            workflow = self._workflow_store.get(tender.id, chat_id)
+            analysis = getattr(tender, "analysis", None)
+            card = f"<b>{index}.</b> " + render_decision_card(tender, analysis, workflow)
+            self._send(chat_id, card, self._result_keyboard(tender.id))
 
     def _run_search_for_user(self, chat_id: str, orchestrator: Orchestrator) -> None:
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.", self._keyboard())
         try:
-            # Критерии, keywords и площадки передаются в Orchestrator явно.
-            # Никакого общего user context для потока не используется.
             stats = orchestrator.run_cycle(user_id=chat_id)
             self._send_search_results(chat_id, orchestrator)
             elapsed = int(time.monotonic() - started_at)
@@ -220,19 +231,15 @@ class MultiUserTelegramBot(TelegramBot):
             text = f"{'⛔' if orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\nВремя: {elapsed_text}\nНайдено: {stats['found']}\nПрошло фильтр: {stats['filtered']}\nНовых: {stats['new']}\nAI: {stats['analyzed']}\nИсключено: {stats['excluded_by_criteria']}\nУведомлений: {stats['notified']}\nДублей: {stats['skipped_duplicate']}\n\n📊 <b>Результат сохранён в Excel.</b>"
             self._send(chat_id, text, self._keyboard())
         except Exception:
-            logger.exception("Telegram-бот: ошибка выполнения поиска для chat_id=%s", chat_id)
+            logger.exception("Telegram-поиск: ошибка для chat_id=%s", chat_id)
             self._send(chat_id, "❌ <b>Ошибка поиска.</b>\n\nПодробности находятся в logs/agent.log.", self._keyboard())
         finally:
             with self._search_lock:
                 self._search_threads.pop(chat_id, None)
                 self._user_orchestrators.pop(chat_id, None)
 
-    def _cmd_stop(self, chat_id: str) -> None:
+    def stop_search(self, chat_id: str) -> None:
         with self._search_lock:
-            orchestrator = self._user_orchestrators.get(chat_id)
-            thread = self._search_threads.get(chat_id)
-        if orchestrator is None or thread is None or not thread.is_alive():
-            self._send(chat_id, "Сейчас ваш поиск не выполняется.", self._keyboard())
-            return
-        orchestrator.request_stop()
-        self._send(chat_id, "Получена команда остановки. Текущий этап завершится, после чего ваш поиск будет остановлен.", self._keyboard())
+            orchestrator = self._user_orchestrators.get(str(chat_id))
+        if orchestrator:
+            orchestrator.request_stop()
