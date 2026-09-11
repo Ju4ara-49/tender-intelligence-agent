@@ -102,17 +102,21 @@ class Orchestrator:
                     tender.price = detailed.price
                 if detailed.currency:
                     tender.currency = detailed.currency
-                if tender.start_date is None and detailed.start_date:
+                # Detail pages are the authoritative source when available.
+                # Do not keep stale search-card values after a tender changes.
+                if detailed.start_date:
                     tender.start_date = detailed.start_date
-                if tender.end_date is None and detailed.end_date:
+                if detailed.end_date:
                     tender.end_date = detailed.end_date
-                if tender.deadline is None and detailed.deadline:
+                if detailed.deadline:
                     tender.deadline = detailed.deadline
-                if tender.published_at is None and detailed.published_at:
+                elif detailed.end_date:
+                    tender.deadline = detailed.end_date
+                if detailed.published_at:
                     tender.published_at = detailed.published_at
-                if not tender.region and detailed.region:
+                if detailed.region:
                     tender.region = detailed.region
-                if not tender.customer and detailed.customer:
+                if detailed.customer:
                     tender.customer = detailed.customer
                 if detailed.law_type:
                     tender.law_type = detailed.law_type
