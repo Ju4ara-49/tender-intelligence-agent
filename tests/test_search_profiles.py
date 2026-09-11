@@ -36,6 +36,27 @@ def test_profile_validation_rejects_invalid_business_ranges(tmp_path):
         store.create("user-a", name="bad", min_submission_days=-1)
 
 
+def test_profile_update_validates_merged_state_before_writing(tmp_path):
+    store = SearchProfileStore(TenderDatabase(tmp_path / "profiles.sqlite3"))
+    profile = store.create("user-a", name="Диапазон", min_price=100, max_price=1000)
+
+    with pytest.raises(ValueError):
+        store.update("user-a", profile.id, min_price=2000)
+    unchanged = store.get("user-a", profile.id)
+    assert unchanged.min_price == 100
+    assert unchanged.max_price == 1000
+
+    with pytest.raises(ValueError):
+        store.update("user-a", profile.id, min_application_security_percent=6)
+    unchanged = store.get("user-a", profile.id)
+    assert unchanged.min_application_security_percent == 0
+    assert unchanged.max_application_security_percent == 5
+
+    with pytest.raises(ValueError):
+        store.update("user-a", profile.id, min_ai_score=101)
+    assert store.get("user-a", profile.id).min_ai_score == 70
+
+
 def test_default_profile_migrates_real_criteria(tmp_path):
     db = TenderDatabase(tmp_path / "profiles.sqlite3")
     criteria = CriteriaStore(db)
