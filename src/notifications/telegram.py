@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 
 import httpx
@@ -14,27 +15,18 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
 
 class TelegramNotifier:
-    """
-    Telegram-бот для уведомлений о тендерах.
-
-    Если токен не задан — работает в dry-run режиме (только лог).
-    """
+    """Telegram-бот для уведомлений о тендерах."""
 
     PLATFORM_NAMES = {
         "eis": "ЕИС",
         "b2b_center": "B2B-Center",
-        "fabrikant": "Фабрикант",
+        "fabricant": "Фабрикант",
         "rts_tender": "РТС-тендер",
         "tmk": "ТМК",
         "rosatom": "Росатом",
     }
 
-    def __init__(
-        self,
-        bot_token: str = "",
-        chat_id: str = "",
-        dry_run_when_no_token: bool = True,
-    ) -> None:
+    def __init__(self, bot_token: str = "", chat_id: str = "", dry_run_when_no_token: bool = True) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.dry_run_when_no_token = dry_run_when_no_token
@@ -45,7 +37,6 @@ class TelegramNotifier:
 
     def send_tender_alert(self, tender: Tender, analysis: TenderAnalysis) -> bool:
         message = self.format_message(tender, analysis)
-
         if not self.is_configured:
             if self.dry_run_when_no_token:
                 logger.info(
@@ -53,10 +44,7 @@ class TelegramNotifier:
                     message,
                 )
                 return False
-            raise RuntimeError(
-                "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы в .env"
-            )
-
+            raise RuntimeError("TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы в .env")
         return self._send(message)
 
     def send_text(self, text: str) -> bool:
@@ -73,7 +61,6 @@ class TelegramNotifier:
             "parse_mode": "HTML",
             "disable_web_page_preview": False,
         }
-
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, json=payload)
@@ -86,7 +73,6 @@ class TelegramNotifier:
 
     @classmethod
     def platform_name(cls, platform: str) -> str:
-        """Return a human-readable platform name without losing unknown IDs."""
         value = str(platform or "").strip()
         return cls.PLATFORM_NAMES.get(value, value or "Не указана")
 
@@ -94,38 +80,39 @@ class TelegramNotifier:
     def format_message(cls, tender: Tender, analysis: TenderAnalysis) -> str:
         score = analysis.relevance_score
         emoji = "🔔" if score >= 70 else "📋"
+        title = html.escape(str(tender.title or "Без названия"))
+        customer = html.escape(str(tender.customer or "Заказчик не указан"))
+        summary = html.escape(str(analysis.summary or ""))
+        url = html.escape(str(tender.url or ""), quote=True)
 
         price_str = "не указан"
         if tender.price is not None:
             price_str = f"{tender.price:,.0f} {tender.currency}".replace(",", " ")
-
-        deadline_str = "не указан"
-        if tender.deadline:
-            deadline_str = tender.deadline.strftime("%d.%m.%Y")
+        deadline_str = tender.deadline.strftime("%d.%m.%Y") if tender.deadline else "не указан"
 
         risks = ""
         if analysis.risks:
-            risks = "\n⚠️ <b>Риски:</b> " + "; ".join(analysis.risks[:3])
+            safe_risks = [html.escape(str(r)) for r in analysis.risks[:3]]
+            risks = "\n⚠️ <b>Риски:</b> " + "; ".join(safe_risks)
 
-        stub_note = "\n<i>(ИИ-заглушка — подключите API-ключ)</i>" if analysis.is_stub else ""
-
+        stub_note = "\n<i>(ИИ-заглушка — используется вместо локального Ollama)</i>" if analysis.is_stub else ""
         rec_map = {
             "participate": "✅ Участвовать",
             "skip": "❌ Пропустить",
             "review": "🔍 На проверку",
         }
-        rec = rec_map.get(analysis.recommendation, analysis.recommendation)
-        platform = cls.platform_name(tender.platform)
+        rec = html.escape(str(rec_map.get(analysis.recommendation, analysis.recommendation or "")))
+        platform = html.escape(cls.platform_name(tender.platform))
 
         return (
             f"{emoji} <b>Новый тендер ({score}/100)</b>\n\n"
             f"🏷️ <b>Площадка:</b> {platform}\n"
-            f"📋 {tender.title}\n"
+            f"📋 {title}\n"
             f"💰 {price_str} | ⏰ до {deadline_str}\n"
-            f"🏢 {tender.customer or 'Заказчик не указан'}\n\n"
-            f"📝 {analysis.summary}\n"
+            f"🏢 {customer}\n\n"
+            f"📝 {summary}\n"
             f"{risks}\n"
             f"💡 <b>Рекомендация:</b> {rec}"
             f"{stub_note}\n\n"
-            f"🔗 <a href=\"{tender.url}\">Открыть тендер</a>"
+            f"🔗 <a href=\"{url}\">Открыть тендер</a>"
         )
