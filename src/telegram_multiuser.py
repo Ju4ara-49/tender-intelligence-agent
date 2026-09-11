@@ -214,17 +214,19 @@ class MultiUserTelegramBot(TelegramBot):
             return
         self._send(chat_id, f"📋 <b>Результаты поиска: {len(results)}</b>", self._keyboard())
         for index, tender in enumerate(results, 1):
-            workflow = self._workflow_store.get(tender.id, chat_id)
-            analysis = getattr(tender, "analysis", None)
+            tender_id = self.orchestrator.db.get_tender_id(tender.unique_key)
+            if tender_id is None:
+                logger.warning("Telegram: не найден сохранённый tender_id для %s", tender.unique_key)
+                continue
+            workflow = self._workflow_store.get(tender_id, chat_id)
+            analysis = self.orchestrator.db.get_analysis(tender_id)
             card = f"<b>{index}.</b> " + render_decision_card(tender, analysis, workflow)
-            self._send(chat_id, card, self._result_keyboard(tender.id))
+            self._send(chat_id, card, self._result_keyboard(tender_id))
 
     def _run_search_for_user(self, chat_id: str, orchestrator: Orchestrator) -> None:
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.", self._keyboard())
         try:
-            # Критерии, keywords и площадки передаются в Orchestrator явно.
-            # Никакого общего user context для потока не используется.
             stats = orchestrator.run_cycle(user_id=chat_id)
             self._send_search_results(chat_id, orchestrator)
             elapsed = int(time.monotonic() - started_at)
