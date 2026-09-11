@@ -1,9 +1,4 @@
-"""UI для сохранённых поисковых профилей ("Ключей") в Telegram.
-
-Модуль устанавливает небольшой слой над существующим Telegram runtime, не меняя
-его polling и многопользовательскую изоляцию. Вся работа с профилями идёт через
-SearchProfileStore и всегда ограничена chat_id текущего пользователя.
-"""
+"""UI для сохранённых поисковых профилей ("Ключей") в Telegram."""
 from __future__ import annotations
 
 import html
@@ -40,6 +35,7 @@ def _detail_keyboard(profile: SearchProfile) -> dict:
     return {
         "inline_keyboard": [
             [{"text": enabled_text, "callback_data": f"profile:toggle:{profile.id}"}],
+            [{"text": "🔄 Обновить из текущих критериев", "callback_data": f"profile:update:{profile.id}"}],
             [{"text": "📊 Статистика", "callback_data": f"profile:stats:{profile.id}"}],
             [{"text": "📋 Сделать копию", "callback_data": f"profile:duplicate:{profile.id}"}],
             [{"text": "🗑 Удалить", "callback_data": f"profile:delete:{profile.id}"}],
@@ -58,6 +54,20 @@ def _format_profile(profile: SearchProfile) -> str:
     exclusions = ", ".join(profile.exclusions) if profile.exclusions else "нет"
     platforms = ", ".join(profile.platforms) if profile.platforms else "все доступные"
     regions = ", ".join(profile.regions) if profile.regions else "все"
+    postpayment = (
+        f"до {profile.max_postpayment_days} дн."
+        if profile.max_postpayment_days is not None else "без ограничения"
+    )
+    application_security = (
+        f"{profile.min_application_security_percent:g}–{profile.max_application_security_percent:g}%"
+        if profile.max_application_security_percent is not None
+        else f"от {profile.min_application_security_percent:g}%"
+    )
+    contract_security = (
+        f"{profile.min_contract_security_percent:g}–{profile.max_contract_security_percent:g}%"
+        if profile.max_contract_security_percent is not None
+        else f"от {profile.min_contract_security_percent:g}%"
+    )
     return (
         f"<b>🔑 {html.escape(profile.name)}</b>\n\n"
         f"Статус: {'включён' if profile.enabled else 'выключен'}\n"
@@ -66,14 +76,11 @@ def _format_profile(profile: SearchProfile) -> str:
         f"Площадки: {html.escape(platforms)}\n"
         f"Регионы: {html.escape(regions)}\n"
         f"Цена: {money(profile.min_price)} — {money(profile.max_price)} ₽\n"
-        f"Аванс: {'требуется' if profile.advance_required else 'не обязателен'}\n"
-        f"Постоплата: до {profile.max_postpayment_days} дн." if profile.max_postpayment_days is not None else
-        f"Постоплата: без ограничения\n"
-    ) + (
-        f"Обеспечение заявки: {profile.min_application_security_percent:g}–{profile.max_application_security_percent:g}%\n"
-        if profile.max_application_security_percent is not None else
-        f"Обеспечение заявки: от {profile.min_application_security_percent:g}%\n"
-    ) + (
+        f"Аванс: {'требуется' if profile.advance_required else 'не обязателен'}"
+        f"{f', от {profile.min_advance_percent:g}%' if profile.advance_required else ''}\n"
+        f"Постоплата: {postpayment}\n"
+        f"Обеспечение заявки: {application_security}\n"
+        f"Обеспечение контракта: {contract_security}\n"
         f"Минимум до дедлайна: {profile.min_submission_days} дн.\n"
         f"Минимальный AI-балл: {profile.min_ai_score}"
     )
@@ -99,11 +106,11 @@ def _create_from_current(bot, chat_id: str) -> None:
     criteria = bot.criteria_store.get(chat_id)
     keywords = bot.criteria_store.get_keywords(chat_id)
     platforms = bot.criteria_store.get_enabled_platforms(chat_id)
-    existing = {p.name.lower() for p in store.list(chat_id)}
+    existing = {p.name.casefold() for p in store.list(chat_id)}
     base = "Ключ"
     name = base
     index = 2
-    while name.lower() in existing:
+    while name.casefold() in existing:
         name = f"{base} {index}"
         index += 1
     profile = SearchProfile(
@@ -116,6 +123,21 @@ def _create_from_current(bot, chat_id: str) -> None:
     store.create(chat_id, profile)
     bot._send(chat_id, f"✅ <b>Сохранён новый ключ:</b> {html.escape(name)}", bot._keyboard())
     _show_profiles(bot, chat_id)
+
+
+def _update_from_current(bot, chat_id: str, profile_id: int) -> None:
+    store = _store(bot)
+    profile = store.get(chat_id, profile_id)
+    if profile is None:
+        bot._send(chat_id, "Профиль не найден или недоступен.", bot._keyboard())
+        return
+    criteria = bot.criteria_store.get(chat_id)
+    values = asdict(criteria)
+    values["keywords"] = bot.criteria_store.get_keywords(chat_id)
+    values["platforms"] = bot.criteria_store.get_enabled_platforms(chat_id)
+    updated = store.update(chat_id, profile_id, **values)
+    bot._send(chat_id, f"✅ Ключ <b>{html.escape(updated.name)}</b> обновлён текущими критериями.", bot._keyboard())
+    _show_profile(bot, chat_id, profile_id)
 
 
 def _show_profile(bot, chat_id: str, profile_id: int) -> None:
@@ -155,10 +177,10 @@ def _duplicate_profile(bot, chat_id: str, profile_id: int) -> None:
     if source is None:
         bot._send(chat_id, "Профиль не найден или недоступен.", bot._keyboard())
         return
-    existing = {p.name.lower() for p in store.list(chat_id)}
+    existing = {p.name.casefold() for p in store.list(chat_id)}
     name = f"{source.name} копия"
     index = 2
-    while name.lower() in existing:
+    while name.casefold() in existing:
         name = f"{source.name} копия {index}"
         index += 1
     store.duplicate(chat_id, profile_id, name)
@@ -235,6 +257,8 @@ def install(bot_class) -> None:
                 self._send(chat_id, "Некорректный идентификатор профиля.", self._keyboard())
             elif action == "view":
                 _show_profile(self, chat_id, profile_id)
+            elif action == "update":
+                _update_from_current(self, chat_id, profile_id)
             elif action == "stats":
                 _show_stats(self, chat_id, profile_id)
             elif action == "toggle":
