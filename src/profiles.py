@@ -46,6 +46,8 @@ class SearchProfile:
             min_contract_security_percent=self.min_contract_security_percent,
             max_contract_security_percent=self.max_contract_security_percent,
             min_ai_score=self.min_ai_score,
+            exclude_keywords=list(self.exclusions),
+            regions=list(self.regions),
         )
 
 
@@ -257,8 +259,20 @@ class SearchProfileStore:
                 user_id=user_id,
                 name="Основной",
                 keywords=criteria_store.get_keywords(user_id) or [],
+                exclusions=list(criteria.exclude_keywords),
                 platforms=criteria_store.get_enabled_platforms(user_id),
-                **asdict(criteria),
+                regions=list(criteria.regions),
+                min_price=criteria.min_price,
+                max_price=criteria.max_price,
+                advance_required=criteria.advance_required,
+                min_advance_percent=criteria.min_advance_percent,
+                max_postpayment_days=criteria.max_postpayment_days,
+                min_submission_days=criteria.min_submission_days,
+                min_application_security_percent=criteria.min_application_security_percent,
+                max_application_security_percent=criteria.max_application_security_percent,
+                min_contract_security_percent=criteria.min_contract_security_percent,
+                max_contract_security_percent=criteria.max_contract_security_percent,
+                min_ai_score=criteria.min_ai_score,
             ),
         )
 
