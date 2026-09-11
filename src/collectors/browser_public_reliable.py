@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import logging
+import re
+
+from bs4 import BeautifulSoup
 
 from src.collectors.browser_public import RtsTenderCollector, TmkCollector
 from src.collectors.rosatom import RosatomCollector
@@ -64,6 +67,42 @@ class ReliableBrowserSearchMixin:
             logger.warning("%s: RESULT_PARSER_ZERO — поиск был отправлен, но парсер не нашёл процедур для %r", self.platform, query)
         return results
 
+    def _parse_detail(self, html: str, external_id: str, url: str):
+        """Run the platform parser, then recover common labels missed by HTML layout."""
+        tender = super()._parse_detail(html, external_id, url)
+        soup = BeautifulSoup(html or "", "html.parser")
+        text = " ".join(soup.stripped_strings)
+
+        if not tender.region:
+            region_patterns = (
+                r"(?:Регион поставки|Регион заказчика|Место поставки|Место выполнения|Регион)\s*[:\-]\s*(.+?)(?=\s+(?:Закон|Федеральный закон|НМЦ|Цена|Дата|Срок|Аванс|Оплата|Обеспечение)\b|$)",
+                r"(?:Регион поставки|Место поставки)\s+(.+?)(?=\s+(?:Закон|НМЦ|Цена|Дата|Срок|Аванс|Оплата|Обеспечение)\b|$)",
+            )
+            for pattern in region_patterns:
+                match = re.search(pattern, text, re.I)
+                if match:
+                    candidate = re.sub(r"\s+", " ", match.group(1)).strip(" ;,\t")
+                    if candidate and len(candidate) <= 500:
+                        tender.region = candidate
+                        break
+
+        if not tender.customer:
+            match = re.search(
+                r"(?:Заказчик|Организатор|Организация-заказчик)\s*[:\-]\s*(.+?)(?=\s+(?:Регион|Место|Закон|Дата|НМЦ|Цена|Срок|Аванс|Оплата|Обеспечение)\b|$)",
+                text,
+                re.I,
+            )
+            if match:
+                tender.customer = re.sub(r"\s+", " ", match.group(1)).strip(" ;,")[:1000]
+
+        if not tender.law_type:
+            match = re.search(r"\b(44\s*-?\s*ФЗ|223\s*-?\s*ФЗ)\b", text, re.I)
+            if match:
+                normalized = re.sub(r"\s+", "", match.group(1)).replace("-", "-").upper()
+                tender.law_type = "44-ФЗ" if normalized.startswith("44") else "223-ФЗ"
+
+        return tender
+
     @staticmethod
     def _log_page_state(page) -> None:
         try:
@@ -116,7 +155,6 @@ class ReliableBrowserSearchMixin:
         )
 
         frames = [page.main_frame] + [frame for frame in page.frames if frame != page.main_frame]
-        # Search triggers can reveal a hidden/late-mounted field.
         for frame in frames:
             for selector in trigger_selectors:
                 try:
@@ -192,9 +230,6 @@ class ReliableBrowserSearchMixin:
             except Exception:
                 pass
 
-        # Last-resort SPA fallback: inspect visible text and click an obvious search
-        # action, then retry the field discovery. This helps portals where the form
-        # is mounted only after a navigation/menu action.
         for frame in frames:
             for label in ("Закупки", "Процедуры", "Поиск закупок", "Поиск процедур"):
                 try:
