@@ -1,4 +1,4 @@
-from src.collectors.browser_public import RtsTenderCollector
+from src.collectors.browser_public_reliable import ReliableRtsTenderCollector
 
 
 def test_browser_detail_populates_common_tender_contract_fields():
@@ -19,7 +19,7 @@ def test_browser_detail_populates_common_tender_contract_fields():
     </body></html>
     """
 
-    tender = RtsTenderCollector()._parse_detail(
+    tender = ReliableRtsTenderCollector()._parse_detail(
         html,
         "1234567",
         "https://www.rts-tender.ru/procedure/1234567",
