@@ -1,18 +1,39 @@
 """Адаптер вложений тендера -> локальный Document Intelligence.
 
 Коллекторы проекта пока не имеют единого attachment API, поэтому этот слой
-работает поверх raw_data и не зависит от конкретной площадки. Он только
-извлекает HTTP(S)-ссылки из структурированных данных; загрузка проходит через
+работает поверх raw_data и не зависит от конкретной площадки. Он извлекает
+ссылки только из полей, похожих на вложения; загрузка проходит через
 SSRF-защищённый DocumentDownloader, а анализ — полностью локально.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlparse
 
 from src.documents.downloader import DocumentDownloader, DownloadedDocument
 from src.documents.intelligence import DocumentHit, DocumentIntelligence, DocumentText
+
+
+_ATTACHMENT_KEYS = {
+    "attachment",
+    "attachments",
+    "attachment_url",
+    "attachment_urls",
+    "document",
+    "documents",
+    "document_url",
+    "document_urls",
+    "file",
+    "files",
+    "file_url",
+    "file_urls",
+    "download",
+    "download_url",
+    "download_urls",
+    "download_link",
+    "download_links",
+}
 
 
 @dataclass(frozen=True)
@@ -46,7 +67,16 @@ class TenderAttachmentAnalyzer:
         self.max_attachments = max_attachments
 
     @staticmethod
-    def _walk(value: Any, seen: set[int] | None = None):
+    def _key_name(key: Any) -> str:
+        return str(key).strip().casefold().replace("-", "_").replace(" ", "_")
+
+    @classmethod
+    def _walk_attachment_values(
+        cls,
+        value: Any,
+        attachment_context: bool = False,
+        seen: set[int] | None = None,
+    ) -> Iterator[str]:
         if seen is None:
             seen = set()
         marker = id(value)
@@ -56,12 +86,12 @@ class TenderAttachmentAnalyzer:
             seen.add(marker)
         if isinstance(value, dict):
             for key, item in value.items():
-                yield from TenderAttachmentAnalyzer._walk(key, seen)
-                yield from TenderAttachmentAnalyzer._walk(item, seen)
+                is_attachment_field = cls._key_name(key) in _ATTACHMENT_KEYS
+                yield from cls._walk_attachment_values(item, attachment_context or is_attachment_field, seen)
         elif isinstance(value, (list, tuple, set)):
             for item in value:
-                yield from TenderAttachmentAnalyzer._walk(item, seen)
-        elif isinstance(value, str):
+                yield from cls._walk_attachment_values(item, attachment_context, seen)
+        elif attachment_context and isinstance(value, str):
             yield value
 
     @staticmethod
@@ -70,7 +100,7 @@ class TenderAttachmentAnalyzer:
             return []
         result: list[TenderAttachment] = []
         seen: set[str] = set()
-        for value in TenderAttachmentAnalyzer._walk(raw_data):
+        for value in TenderAttachmentAnalyzer._walk_attachment_values(raw_data):
             candidate = value.strip()
             if not candidate or len(candidate) > 4096:
                 continue
