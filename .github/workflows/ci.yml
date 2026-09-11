@@ -31,6 +31,8 @@ jobs:
           python -m pip install pytest
 
       - name: Run deterministic tests
+        env:
+          PYTHONPATH: .
         run: |
           python -m unittest discover -s tests
           python test_b2b_parser.py
@@ -38,9 +40,13 @@ jobs:
           python tests/test_b2b_quality_gate.py
 
       - name: Run search pipeline regression tests
+        env:
+          PYTHONPATH: .
         run: pytest -q tests/test_b2b_pagination.py tests/test_keyword_filter_morphology.py
 
       - name: Run real SQLite Excel integration test
+        env:
+          PYTHONPATH: .
         run: python tests/test_excel_export_integration.py
 
       - name: Verify generated Excel file exists
