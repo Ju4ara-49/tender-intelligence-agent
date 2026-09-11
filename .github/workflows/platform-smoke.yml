@@ -8,8 +8,6 @@ on:
         required: true
         default: "подшипники"
 
-actions:
-
 permissions:
   contents: read
 
