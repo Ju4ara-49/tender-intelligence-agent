@@ -171,11 +171,7 @@ class Orchestrator:
 
     @staticmethod
     def _passes_criteria(tender: Tender, criteria: TenderCriteria) -> tuple[bool, str]:
-        """Проверить бизнес-критерии пользователя после enrichment.
-
-        Если критерий задан, но площадка не предоставила соответствующее поле,
-        тендер не считается подходящим: иначе фильтр фактически не работает.
-        """
+        """Проверить бизнес-критерии пользователя после enrichment."""
         if criteria.min_price is not None and (tender.price is None or tender.price < criteria.min_price):
             return False, "min_price"
         if criteria.max_price is not None and (tender.price is None or tender.price > criteria.max_price):
@@ -201,10 +197,10 @@ class Orchestrator:
             ):
                 return False, "min_application_security_percent"
         if criteria.max_application_security_percent is not None:
-            if (
-                tender.application_security_percent is None
-                or tender.application_security_percent > criteria.max_application_security_percent
-            ):
+            # Отсутствующее обеспечение трактуем как 0%, поэтому стандартный
+            # диапазон пользователя 0–5% не отбрасывает закупки без обеспечения.
+            application_security = tender.application_security_percent or 0.0
+            if application_security > criteria.max_application_security_percent:
                 return False, "max_application_security_percent"
 
         if criteria.min_contract_security_percent > 0:
@@ -214,10 +210,7 @@ class Orchestrator:
             ):
                 return False, "min_contract_security_percent"
         if criteria.max_contract_security_percent is not None:
-            if (
-                tender.contract_security_percent is None
-                or tender.contract_security_percent > criteria.max_contract_security_percent
-            ):
+            if tender.contract_security_percent is None or tender.contract_security_percent > criteria.max_contract_security_percent:
                 return False, "max_contract_security_percent"
 
         if criteria.min_submission_days and tender.deadline is not None:
