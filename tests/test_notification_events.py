@@ -28,7 +28,6 @@ def test_same_tender_state_is_not_notified_twice(tmp_path):
     db.mark_notified(tender_id)
     assert db.was_notified(tender.unique_key) is True
 
-    # Повторная доставка того же состояния запрещена.
     db.mark_notified(tender_id)
     assert db.count_notifications() == 1
 
@@ -39,7 +38,6 @@ def test_changed_price_creates_new_notification_event(tmp_path):
     db.mark_notified(tender_id)
     assert db.was_notified(tender.unique_key) is True
 
-    # Изменение НМЦК должно считаться новым событием.
     tender.price = 1_200_000.0
     same_id = db.save_tender(tender)
     assert same_id == tender_id
@@ -56,6 +54,19 @@ def test_changed_deadline_creates_new_notification_event(tmp_path):
     db.mark_notified(tender_id)
 
     tender.deadline = datetime.now(timezone.utc) + timedelta(days=20)
+    db.save_tender(tender)
+
+    assert db.was_notified(tender.unique_key) is False
+
+
+def test_changed_start_date_creates_new_notification_event(tmp_path):
+    db, tender = make_tender(tmp_path)
+    tender.start_date = datetime.now(timezone.utc) + timedelta(days=1)
+    tender.end_date = tender.deadline
+    tender_id = db.save_tender(tender)
+    db.mark_notified(tender_id)
+
+    tender.start_date = tender.start_date + timedelta(days=1)
     db.save_tender(tender)
 
     assert db.was_notified(tender.unique_key) is False
