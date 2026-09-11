@@ -34,6 +34,15 @@ class KeywordFilter:
         "система видеонаблюдения", "оборудование для дск", "дск",
     )
 
+    # Suffixes that commonly represent Russian noun declension/number.
+    # Keeping the list explicit prevents short stems such as "стан" from
+    # matching unrelated words such as "станция".
+    RUSSIAN_NOUN_SUFFIXES = (
+        "ами", "ями", "ами", "ями", "ов", "ев", "ей", "ах", "ях",
+        "ам", "ям", "ом", "ем", "ою", "ею", "ой", "ей", "ью", "у", "ю",
+        "а", "я", "ы", "и", "е", "о", "у", "ю",
+    )
+
     def __init__(self, include: list[str], exclude: list[str], min_text_length: int = 10) -> None:
         self.include = [k.strip() for k in include if k and k.strip()]
         self.exclude = [k.strip() for k in exclude if k and k.strip()]
@@ -65,13 +74,7 @@ class KeywordFilter:
 
     @staticmethod
     def _b2b_details_complete(tender: Tender) -> bool:
-        """Do not publish B2B cards when detail enrichment produced a skeleton.
-
-        Discovery may legitimately create a Tender with only id/title/url. Such
-        objects are useful as candidates, but they are not acceptable as final
-        client results. For B2B-Center the commercial card must have loaded
-        details plus customer, price and submission deadline.
-        """
+        """Do not publish B2B cards when detail enrichment produced a skeleton."""
         if tender.platform != "b2b_center":
             return True
         if not tender.raw_data.get("details_loaded"):
@@ -131,13 +134,7 @@ class KeywordFilter:
 
     @classmethod
     def _contains(cls, text: str, pattern: str) -> bool:
-        """Match literal phrases plus conservative Russian word morphology.
-
-        Search discovery is intentionally broad, so the final filter must not
-        reject "станки" when the user entered "станок" or "подшипника" when
-        the user entered "подшипник". Exact matching remains the first choice;
-        the stem fallback is only used for words longer than three characters.
-        """
+        """Match literal phrases plus conservative Russian word morphology."""
         pattern_lower = cls._normalize(pattern)
         if not pattern_lower:
             return False
@@ -154,8 +151,8 @@ class KeywordFilter:
             return all(cls._contains_word(text, word) for word in words)
         return cls._contains_word(text, words[0])
 
-    @staticmethod
-    def _contains_word(text: str, word: str) -> bool:
+    @classmethod
+    def _contains_word(cls, text: str, word: str) -> bool:
         if word in text:
             return True
         if len(word) <= 3:
@@ -164,4 +161,12 @@ class KeywordFilter:
         stem = word[:-2] if len(word) >= 6 else word[:-1]
         if len(stem) < 4:
             return False
-        return bool(re.search(rf"\b{re.escape(stem)}[\w-]*", text, re.UNICODE))
+
+        pattern = rf"\b{re.escape(stem)}(?P<suffix>[\w-]*)\b"
+        for match in re.finditer(pattern, text, re.UNICODE):
+            suffix = match.group("suffix")
+            if not suffix:
+                return True
+            if suffix in cls.RUSSIAN_NOUN_SUFFIXES:
+                return True
+        return False
