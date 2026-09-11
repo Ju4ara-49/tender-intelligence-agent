@@ -18,24 +18,23 @@ try:
 except ImportError:  # pragma: no cover
     PdfReader = None
 
-
 MAX_ARCHIVE_FILES = 500
 MAX_ARCHIVE_UNCOMPRESSED = 200 * 1024 * 1024
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_PDF_PAGES = 500
 MAX_NESTING_DEPTH = 3
+MAX_XLSX_ROWS = 100_000
+MAX_XLSX_CELLS = 500_000
 SUPPORTED_TEXT_EXTENSIONS = {".txt", ".csv", ".xml", ".html", ".htm", ".json"}
 SUPPORTED_OFFICE_EXTENSIONS = {".docx", ".xlsx", ".xlsm"}
 SUPPORTED_ARCHIVES = {".zip"}
 SUPPORTED_PDF = {".pdf"}
-
 
 @dataclass(frozen=True)
 class DocumentText:
     path: str
     text: str
     mime_hint: str = ""
-
 
 @dataclass(frozen=True)
 class DocumentHit:
@@ -45,10 +44,13 @@ class DocumentHit:
     start: int
     end: int
 
-
 class UnsafeArchiveError(ValueError):
     """Архив содержит опасный путь или превышает лимиты."""
 
+@dataclass
+class _ExtractionBudget:
+    uncompressed_bytes: int = 0
+    files: int = 0
 
 class DocumentIntelligence:
     """Извлечение, нормализация и локальный поиск по документам и архивам."""
@@ -56,6 +58,10 @@ class DocumentIntelligence:
     def __init__(self, max_file_bytes: int = MAX_FILE_BYTES, max_archive_files: int = MAX_ARCHIVE_FILES,
                  max_archive_uncompressed: int = MAX_ARCHIVE_UNCOMPRESSED, max_pdf_pages: int = MAX_PDF_PAGES,
                  max_nesting_depth: int = MAX_NESTING_DEPTH) -> None:
+        if min(max_file_bytes, max_archive_files, max_archive_uncompressed, max_pdf_pages) <= 0:
+            raise ValueError("Лимиты обработки документов должны быть положительными")
+        if max_nesting_depth < 0:
+            raise ValueError("max_nesting_depth не может быть отрицательным")
         self.max_file_bytes = max_file_bytes
         self.max_archive_files = max_archive_files
         self.max_archive_uncompressed = max_archive_uncompressed
@@ -90,14 +96,14 @@ class DocumentIntelligence:
             raise FileNotFoundError(path)
         if path.stat().st_size > self.max_file_bytes:
             raise ValueError(f"Файл слишком большой: {path}")
-        return self._extract_bytes(path.read_bytes(), virtual_path or path.name, path.suffix.lower(), 0)
+        return self._extract_bytes(path.read_bytes(), virtual_path or path.name, path.suffix.lower(), 0, _ExtractionBudget())
 
     def extract_bytes(self, data: bytes, filename: str) -> list[DocumentText]:
         if len(data) > self.max_file_bytes:
             raise ValueError(f"Файл слишком большой: {filename}")
-        return self._extract_bytes(data, filename, Path(filename).suffix.lower(), 0)
+        return self._extract_bytes(data, filename, Path(filename).suffix.lower(), 0, _ExtractionBudget())
 
-    def _extract_bytes(self, data: bytes, name: str, ext: str, depth: int) -> list[DocumentText]:
+    def _extract_bytes(self, data: bytes, name: str, ext: str, depth: int, budget: _ExtractionBudget) -> list[DocumentText]:
         if len(data) > self.max_file_bytes:
             raise ValueError(f"Файл слишком большой: {name}")
         if ext in SUPPORTED_TEXT_EXTENSIONS:
@@ -119,7 +125,7 @@ class DocumentIntelligence:
                 return [DocumentText(name, self._xlsx(data), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
             return [DocumentText(name, self._docx(data), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
         if ext in SUPPORTED_ARCHIVES:
-            return self._extract_archive(data, name, depth)
+            return self._extract_archive(data, name, depth, budget)
         return []
 
     def _pdf(self, data: bytes) -> str:
@@ -150,34 +156,40 @@ class DocumentIntelligence:
     def _xlsx(self, data: bytes) -> str:
         workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         lines: list[str] = []
+        rows = cells = 0
         try:
             for sheet in workbook.worksheets:
                 lines.append(f"[Лист: {sheet.title}]")
                 for row in sheet.iter_rows(values_only=True):
+                    rows += 1
+                    if rows > MAX_XLSX_ROWS:
+                        raise ValueError("XLSX содержит слишком много строк")
                     values = [str(value).strip() for value in row if value is not None and str(value).strip()]
+                    cells += len(row)
+                    if cells > MAX_XLSX_CELLS:
+                        raise ValueError("XLSX содержит слишком много ячеек")
                     if values:
                         lines.append(" | ".join(values))
         finally:
             workbook.close()
         return self.normalize("\n".join(lines))
 
-    @staticmethod
-    def _validate_zip_container(data: bytes, name: str) -> None:
+    def _validate_zip_container(self, data: bytes, name: str) -> None:
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 infos = [item for item in archive.infolist() if not item.is_dir()]
-                if len(infos) > MAX_ARCHIVE_FILES or sum(item.file_size for item in infos) > MAX_ARCHIVE_UNCOMPRESSED:
+                total = sum(item.file_size for item in infos)
+                if len(infos) > self.max_archive_files or total > self.max_archive_uncompressed:
                     raise UnsafeArchiveError(f"ZIP-контейнер {name} превышает безопасные лимиты")
                 for info in infos:
-                    DocumentIntelligence._validate_archive_member(info.filename)
+                    self._validate_archive_member(info.filename)
         except zipfile.BadZipFile as exc:
             raise ValueError(f"Повреждённый ZIP-контейнер: {name}") from exc
 
-    def _extract_archive(self, data: bytes, name: str, depth: int) -> list[DocumentText]:
+    def _extract_archive(self, data: bytes, name: str, depth: int, budget: _ExtractionBudget) -> list[DocumentText]:
         if depth >= self.max_nesting_depth:
             raise UnsafeArchiveError("Превышена максимальная глубина вложенных архивов")
         results: list[DocumentText] = []
-        total = 0
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 infos = [info for info in archive.infolist() if not info.is_dir()]
@@ -185,15 +197,18 @@ class DocumentIntelligence:
                     raise UnsafeArchiveError("Архив содержит слишком много файлов")
                 for info in infos:
                     self._validate_archive_member(info.filename)
-                    total += info.file_size
-                    if total > self.max_archive_uncompressed:
-                        raise UnsafeArchiveError("Распакованный размер архива превышает лимит")
-                    member = archive.read(info)
-                    if len(member) > self.max_file_bytes:
+                    budget.files += 1
+                    budget.uncompressed_bytes += info.file_size
+                    if budget.files > self.max_archive_files:
+                        raise UnsafeArchiveError("Общее число файлов в архивном дереве превышает лимит")
+                    if budget.uncompressed_bytes > self.max_archive_uncompressed:
+                        raise UnsafeArchiveError("Общий распакованный размер архивного дерева превышает лимит")
+                    if info.file_size > self.max_file_bytes:
                         continue
+                    member = archive.read(info)
                     virtual = f"{name}!/{info.filename}"
                     try:
-                        results.extend(self._extract_bytes(member, virtual, Path(info.filename).suffix.lower(), depth + 1))
+                        results.extend(self._extract_bytes(member, virtual, Path(info.filename).suffix.lower(), depth + 1, budget))
                     except UnsafeArchiveError:
                         raise
                     except (ValueError, zipfile.BadZipFile, UnicodeError):
