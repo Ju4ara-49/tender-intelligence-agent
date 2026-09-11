@@ -104,6 +104,38 @@ class SearchProfileStore:
             return []
         return [str(item).strip() for item in data if str(item).strip()] if isinstance(data, list) else []
 
+    @classmethod
+    def _normalize_and_validate(cls, profile: SearchProfile) -> SearchProfile:
+        profile.name = cls._clean_name(profile.name)
+        for attr in ("keywords", "exclusions", "platforms", "regions"):
+            setattr(profile, attr, cls._clean_list(getattr(profile, attr)))
+
+        numeric_nonnegative = (
+            "min_price", "max_price", "min_advance_percent",
+            "min_application_security_percent", "max_application_security_percent",
+            "min_contract_security_percent", "max_contract_security_percent",
+        )
+        for attr in numeric_nonnegative:
+            value = getattr(profile, attr)
+            if value is not None and float(value) < 0:
+                raise ValueError(f"{attr} не может быть отрицательным")
+
+        if profile.min_price is not None and profile.max_price is not None and float(profile.min_price) > float(profile.max_price):
+            raise ValueError("min_price не может быть больше max_price")
+        if profile.min_advance_percent > 100:
+            raise ValueError("min_advance_percent не может быть больше 100")
+        if profile.max_application_security_percent is not None and profile.min_application_security_percent > profile.max_application_security_percent:
+            raise ValueError("min_application_security_percent не может быть больше max_application_security_percent")
+        if profile.max_contract_security_percent is not None and profile.min_contract_security_percent > profile.max_contract_security_percent:
+            raise ValueError("min_contract_security_percent не может быть больше max_contract_security_percent")
+        if not 0 <= int(profile.min_ai_score) <= 100:
+            raise ValueError("min_ai_score должен быть от 0 до 100")
+        if int(profile.min_submission_days) < 0:
+            raise ValueError("min_submission_days не может быть отрицательным")
+        if profile.max_postpayment_days is not None and int(profile.max_postpayment_days) < 0:
+            raise ValueError("max_postpayment_days не может быть отрицательным")
+        return profile
+
     def _ensure_schema(self) -> None:
         with self.db._connect() as conn:
             conn.executescript(f"""
@@ -159,15 +191,7 @@ class SearchProfileStore:
             for key, value in values.items():
                 if hasattr(profile, key):
                     setattr(profile, key, value)
-        profile.name = self._clean_name(profile.name)
-        for attr in ("keywords", "exclusions", "platforms", "regions"):
-            setattr(profile, attr, self._clean_list(getattr(profile, attr)))
-        if profile.min_price is not None and profile.max_price is not None and profile.min_price > profile.max_price:
-            raise ValueError("min_price не может быть больше max_price")
-        if not 0 <= int(profile.min_ai_score) <= 100:
-            raise ValueError("min_ai_score должен быть от 0 до 100")
-        if profile.min_submission_days < 0 or profile.max_postpayment_days is not None and profile.max_postpayment_days < 0:
-            raise ValueError("Сроки не могут быть отрицательными")
+        self._normalize_and_validate(profile)
         now = self._now()
         profile.created_at = profile.created_at or now
         profile.updated_at = now
@@ -204,32 +228,51 @@ class SearchProfileStore:
         return self._from_row(row) if row else None
 
     def update(self, user_id: str | int, profile_id: int, **values) -> SearchProfile:
+        user_id = self._clean_user_id(user_id)
         allowed = {field.name for field in SearchProfile.__dataclass_fields__.values()} - {"id", "user_id", "created_at", "updated_at"}
         values = {key: value for key, value in values.items() if key in allowed}
-        if "name" in values:
-            values["name"] = self._clean_name(values["name"])
-        for key in {"keywords", "exclusions", "platforms", "regions"} & values.keys():
-            values[key] = self._clean_list(values[key])
-            values[key] = self._json(values[key])
-        if "min_ai_score" in values and not 0 <= int(values["min_ai_score"]) <= 100:
-            raise ValueError("min_ai_score должен быть от 0 до 100")
+        current = self.get(user_id, profile_id)
+        if current is None:
+            raise KeyError(profile_id)
         if not values:
-            result = self.get(user_id, profile_id)
-            if result is None:
-                raise KeyError(profile_id)
-            return result
-        values["updated_at"] = self._now()
+            return current
+
+        # Валидация выполняется на полном объединённом объекте ДО SQL UPDATE.
+        # Поэтому ошибочное min_price/max_price или security range не может
+        # частично записаться в БД.
+        candidate = SearchProfile(**asdict(current))
+        for key, value in values.items():
+            setattr(candidate, key, value)
+        self._normalize_and_validate(candidate)
+
+        updates = {
+            "name": candidate.name,
+            "keywords": self._json(candidate.keywords),
+            "exclusions": self._json(candidate.exclusions),
+            "platforms": self._json(candidate.platforms),
+            "regions": self._json(candidate.regions),
+            "min_price": candidate.min_price,
+            "max_price": candidate.max_price,
+            "advance_required": int(candidate.advance_required),
+            "min_advance_percent": candidate.min_advance_percent,
+            "max_postpayment_days": candidate.max_postpayment_days,
+            "min_submission_days": candidate.min_submission_days,
+            "min_application_security_percent": candidate.min_application_security_percent,
+            "max_application_security_percent": candidate.max_application_security_percent,
+            "min_contract_security_percent": candidate.min_contract_security_percent,
+            "max_contract_security_percent": candidate.max_contract_security_percent,
+            "min_ai_score": candidate.min_ai_score,
+            "enabled": int(candidate.enabled),
+            "updated_at": self._now(),
+        }
         with self.db._connect() as conn:
-            cursor = conn.execute(f"UPDATE {self.PROFILES_TABLE} SET {', '.join(f'{key} = ?' for key in values)} WHERE id = ? AND user_id = ?",
-                                  (*values.values(), profile_id, self._clean_user_id(user_id)))
+            cursor = conn.execute(
+                f"UPDATE {self.PROFILES_TABLE} SET {', '.join(f'{key} = ?' for key in updates)} WHERE id = ? AND user_id = ?",
+                (*updates.values(), profile_id, user_id),
+            )
             if cursor.rowcount != 1:
                 raise KeyError(profile_id)
-        result = self.get(user_id, profile_id)
-        if result is None:
-            raise KeyError(profile_id)
-        if result.min_price is not None and result.max_price is not None and result.min_price > result.max_price:
-            raise ValueError("min_price не может быть больше max_price")
-        return result
+        return self.get(user_id, profile_id) or candidate
 
     def delete(self, user_id: str | int, profile_id: int) -> None:
         with self.db._connect() as conn:
