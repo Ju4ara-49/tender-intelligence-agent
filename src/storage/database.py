@@ -384,7 +384,14 @@ class TenderDatabase:
                 ),
             )
 
-    def mark_notified(self, tender_id: int, channel: str = "telegram", payload: dict | None = None) -> None:
+    def mark_notified(
+        self,
+        tender_id: int,
+        channel: str = "telegram",
+        payload: dict | None = None,
+        event_key: str | None = None,
+    ) -> None:
+        """Record delivery; callers with richer state may supply their own fingerprint."""
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             tender = conn.execute(
@@ -397,7 +404,7 @@ class TenderDatabase:
             ).fetchone()
             if tender is None:
                 raise ValueError(f"Tender not found: {tender_id}")
-            event_key = self._notification_event_key_from_row(tender)
+            event_key = event_key or self._notification_event_key_from_row(tender)
             conn.execute(
                 """
                 INSERT INTO notification_events
