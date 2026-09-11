@@ -25,6 +25,7 @@ class FakeIntelligence:
 
 def test_discover_finds_nested_http_links_and_deduplicates():
     raw = {
+        "url": "https://example.com/tender/123",
         "details": {
             "attachments": [
                 {"url": "https://example.com/docs/spec.pdf"},
@@ -32,7 +33,7 @@ def test_discover_finds_nested_http_links_and_deduplicates():
                 "https://example.com/docs/requirements.docx",
                 "not-a-url",
             ]
-        }
+        },
     }
     result = TenderAttachmentAnalyzer.discover(raw)
     assert [item.url for item in result] == [
@@ -43,7 +44,7 @@ def test_discover_finds_nested_http_links_and_deduplicates():
 
 
 def test_discover_ignores_non_http_schemes():
-    raw = {"a": ["file:///tmp/secret.pdf", "javascript:alert(1)", "ftp://example.com/a.pdf"]}
+    raw = {"attachments": ["file:///tmp/secret.pdf", "javascript:alert(1)", "ftp://example.com/a.pdf"]}
     assert TenderAttachmentAnalyzer.discover(raw) == []
 
 
@@ -60,6 +61,6 @@ def test_analyze_downloads_and_searches_locally():
 
 
 def test_attachment_limit_is_enforced():
-    raw = {"urls": [f"https://example.com/{index}.txt" for index in range(10)]}
+    raw = {"attachments": [f"https://example.com/{index}.txt" for index in range(10)]}
     result = TenderAttachmentAnalyzer.discover(raw, max_attachments=3)
     assert len(result) == 3
