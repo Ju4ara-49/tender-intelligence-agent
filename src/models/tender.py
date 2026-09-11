@@ -53,9 +53,6 @@ class Tender:
         if isinstance(value, dict):
             result: list[str] = []
             for key, item in value.items():
-                # Ключи обычно являются техническими именами и создают шум,
-                # поэтому индексируем их только как текст, если они содержат
-                # пользовательские пробелы/русские слова.
                 if isinstance(key, str) and (" " in key or any("а" <= ch.lower() <= "я" for ch in key)):
                     result.extend(cls._text_from_value(key))
                 result.extend(cls._text_from_value(item))
@@ -69,10 +66,13 @@ class Tender:
 
     @property
     def full_text(self) -> str:
-        """Полный поисковый текст, включая детали, лоты и спецификации."""
+        """Полный поисковый текст, включая детали, лоты и локально извлечённые документы."""
         parts = [self.title, self.description, self.customer, self.region]
         raw = self.raw_data or {}
-        for key in ("details", "lots", "lot", "specification", "specifications", "items", "products"):
+        for key in (
+            "details", "lots", "lot", "specification", "specifications",
+            "items", "products", "document_search",
+        ):
             if key in raw:
                 parts.extend(self._text_from_value(raw.get(key)))
 

@@ -35,12 +35,13 @@ class KeywordFilter:
     )
 
     # Suffixes that commonly represent Russian noun declension/number.
-    # Keeping the list explicit prevents short stems such as "стан" from
-    # matching unrelated words such as "станция".
+    # The soft-sign family is included explicitly so words such as
+    # "автомобиль" also match "автомобиля", "автомобилем", etc.
     RUSSIAN_NOUN_SUFFIXES = (
         "ками", "ками", "ках", "ков", "кев", "ки", "ка", "ку", "ке", "ко",
-        "ами", "ями", "ами", "ями", "ов", "ев", "ей", "ах", "ях",
+        "ами", "ями", "ов", "ев", "ей", "ах", "ях",
         "ам", "ям", "ом", "ем", "ою", "ею", "ой", "ей", "ью", "у", "ю",
+        "ля", "лю", "ле", "лем", "ли", "лей", "лям", "лях", "лями",
         "а", "я", "ы", "и", "е", "о",
     )
 
@@ -56,10 +57,14 @@ class KeywordFilter:
         normalized = cls._normalize(pattern)
         return normalized in {cls._normalize(item) for item in cls.GENERIC_INCLUDE_PATTERNS}
 
-    def matches_soft(self, tender: Tender) -> bool:
-        """Дешёвый pre-filter: исключения + минимальный объём текста."""
+    def matches_soft(self, tender: Tender, allow_short_text: bool = False) -> bool:
+        """Дешёвый pre-filter: исключения + минимальный объём текста.
+
+        Для document intelligence короткий заголовок допустим: вложение может
+        содержать весь предмет закупки, которого нет в карточке тендера.
+        """
         full_text = tender.full_text or ""
-        if len(full_text) < self.min_text_length:
+        if len(full_text) < self.min_text_length and not allow_short_text:
             logger.debug("Пропуск %s: слишком короткий текст", tender.unique_key)
             return False
         normalized = self._normalize(full_text)
@@ -95,9 +100,10 @@ class KeywordFilter:
             return False
         return True
 
-    def matches_strict(self, tender: Tender) -> bool:
-        """Финальный INCLUDE-фильтр по полному тексту тендера."""
-        if not self.matches_soft(tender):
+    def matches_strict(self, tender: Tender, allow_document_match: bool = False) -> bool:
+        """Финальный INCLUDE-фильтр по карточке и, при наличии, вложениям."""
+        has_document_hit = int(tender.raw_data.get("document_search_hits", 0) or 0) > 0
+        if not self.matches_soft(tender, allow_short_text=allow_document_match and has_document_hit):
             return False
         if not self._b2b_details_complete(tender):
             return False

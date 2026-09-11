@@ -9,17 +9,15 @@ import httpx
 
 from src.telegram_bot import HELP_TEXT
 from src.telegram_multiuser import MultiUserTelegramBot
+from src.telegram_profiles_runtime import install as install_profiles_runtime
+from src.telegram_profiles_ui import install as install_profiles_ui
+from src.telegram_workflow_ui import install as install_workflow_ui
 
 logger = logging.getLogger(__name__)
 
 
 class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
-    """Multi-user bot with interruptible short polling.
-
-    Площадки и пользовательские критерии берутся из базового TelegramBot;
-    этот класс отвечает только за сетевой polling и не делает monkey-patch
-    глобальных словарей.
-    """
+    """Multi-user bot with interruptible short polling."""
 
     POLL_TIMEOUT_SECONDS = 2
     REQUEST_TIMEOUT_SECONDS = 15
@@ -70,3 +68,8 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
                 self._handle_callback(update["callback_query"])
             elif update.get("message"):
                 self._handle_message(update["message"])
+
+
+install_profiles_ui(ResponsiveMultiUserTelegramBot)
+install_profiles_runtime(ResponsiveMultiUserTelegramBot)
+install_workflow_ui(ResponsiveMultiUserTelegramBot)
