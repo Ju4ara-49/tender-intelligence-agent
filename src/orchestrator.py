@@ -23,15 +23,8 @@ class Orchestrator:
     """Широкий multi-platform pipeline: discovery → dedup → enrich → filters → AI."""
 
     def _get_next_search_number(self) -> int:
-        counter_path = Path(__file__).resolve().parent.parent / "data" / "search_counter.txt"
-        counter_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            current = int(counter_path.read_text(encoding="utf-8").strip())
-        except (FileNotFoundError, ValueError):
-            current = 0
-        next_number = current + 1
-        counter_path.write_text(str(next_number), encoding="utf-8")
-        return next_number
+        """Атомарный номер поиска; файл search_counter.txt больше не используется."""
+        return self.db.next_search_number()
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -92,10 +85,7 @@ class Orchestrator:
         if not callable(get_details) or not tender.external_id:
             return self._normalize_tender_datetimes(tender), False
         try:
-            logger.info(
-                "%s: загружаем детали тендера %s",
-                getattr(collector, "platform", "unknown"), tender.external_id,
-            )
+            logger.info("%s: загружаем детали тендера %s", getattr(collector, "platform", "unknown"), tender.external_id)
             detailed = get_details(tender.external_id)
             if detailed:
                 if detailed.title:
@@ -137,10 +127,7 @@ class Orchestrator:
             )
             return tender, loaded
         except Exception:
-            logger.exception(
-                "%s: ошибка загрузки деталей %s",
-                getattr(collector, "platform", "unknown"), tender.external_id,
-            )
+            logger.exception("%s: ошибка загрузки деталей %s", getattr(collector, "platform", "unknown"), tender.external_id)
             return self._normalize_tender_datetimes(tender), False
 
     def _search_platform(self, collector, keywords: list[str]) -> tuple[str, list[Tender]]:
@@ -176,7 +163,6 @@ class Orchestrator:
             return False, "min_price"
         if criteria.max_price is not None and (tender.price is None or tender.price > criteria.max_price):
             return False, "max_price"
-
         if criteria.advance_required:
             if not tender.advance_required:
                 return False, "advance_required"
@@ -185,44 +171,39 @@ class Orchestrator:
         if criteria.min_advance_percent > 0:
             if tender.advance_percent is None or tender.advance_percent < criteria.min_advance_percent:
                 return False, "min_advance_percent"
-
         if criteria.max_postpayment_days is not None:
             postpayment_days = tender.postpayment_days or 0
             if postpayment_days > criteria.max_postpayment_days:
                 return False, "max_postpayment_days"
-
         if criteria.min_application_security_percent > 0:
-            if (
-                tender.application_security_percent is None
-                or tender.application_security_percent < criteria.min_application_security_percent
-            ):
+            if tender.application_security_percent is None or tender.application_security_percent < criteria.min_application_security_percent:
                 return False, "min_application_security_percent"
         if criteria.max_application_security_percent is not None:
             application_security = tender.application_security_percent or 0.0
             if application_security > criteria.max_application_security_percent:
                 return False, "max_application_security_percent"
-
         if criteria.min_contract_security_percent > 0:
-            if (
-                tender.contract_security_percent is None
-                or tender.contract_security_percent < criteria.min_contract_security_percent
-            ):
+            if tender.contract_security_percent is None or tender.contract_security_percent < criteria.min_contract_security_percent:
                 return False, "min_contract_security_percent"
         if criteria.max_contract_security_percent is not None:
             contract_security = tender.contract_security_percent or 0.0
             if contract_security > criteria.max_contract_security_percent:
                 return False, "max_contract_security_percent"
-
         if criteria.min_submission_days and tender.deadline is not None:
             seconds_left = (tender.deadline - datetime.now(timezone.utc)).total_seconds()
             if seconds_left < criteria.min_submission_days * 86400:
                 return False, "min_submission_days"
         elif criteria.min_submission_days:
             return False, "deadline_missing"
-
         return True, ""
 
-    def run_cycle(self) -> dict[str, int]:
+    def run_cycle(
+        self,
+        user_id: str | int | None = None,
+        criteria: TenderCriteria | None = None,
+        keywords: list[str] | None = None,
+        platforms: list[str] | None = None,
+    ) -> dict[str, int]:
         search_number = self._get_next_search_number()
         stats = {
             "search_number": search_number, "found": 0, "soft_filtered": 0,
@@ -233,18 +214,14 @@ class Orchestrator:
         self.clear_stop_request()
         self.last_run_results = []
 
-        criteria = self.criteria_store.get()
+        criteria = criteria if criteria is not None else self.criteria_store.get(user_id)
         min_text = int(self.settings.config.get("filters", {}).get("min_text_length", 10))
-        search_keywords = self.criteria_store.get_keywords() or self.settings.include_keywords
-        enabled_platforms = self.criteria_store.get_enabled_platforms()
-        logger.info("Поиск: используются ключевые слова: %s", search_keywords)
-        logger.info("Поиск: включённые площадки из Telegram: %s", enabled_platforms)
+        search_keywords = keywords if keywords is not None else (self.criteria_store.get_keywords(user_id) or self.settings.include_keywords)
+        enabled_platforms = platforms if platforms is not None else self.criteria_store.get_enabled_platforms(user_id)
+        logger.info("Поиск: user_id=%s | используются ключевые слова: %s", user_id, search_keywords)
+        logger.info("Поиск: включённые площадки: %s", enabled_platforms)
 
-        self.keyword_filter = KeywordFilter(
-            include=search_keywords,
-            exclude=self.settings.exclude_keywords,
-            min_text_length=min_text,
-        )
+        self.keyword_filter = KeywordFilter(include=search_keywords, exclude=self.settings.exclude_keywords, min_text_length=min_text)
         collectors = get_enabled_collectors(self.settings.config, enabled_platforms=enabled_platforms)
         if not collectors:
             logger.warning("Нет включённых сборщиков. Проверьте config.yaml и настройки площадок.")
@@ -306,24 +283,20 @@ class Orchestrator:
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
-
             passed, reason = self._passes_criteria(tender, criteria)
             if not passed:
                 stats["excluded_by_criteria"] += 1
                 logger.debug("Критерии: исключён %s:%s (%s)", tender.platform, tender.external_id, reason)
                 continue
-
             self.last_run_results.append(tender)
             existing = self.db.exists(tender.unique_key)
             tender_id = self.db.save_tender(tender)
             current_run_tender_ids.append(tender_id)
-
             if existing and self.db.was_notified(tender.unique_key):
                 stats["skipped_duplicate"] += 1
                 continue
             if not existing:
                 stats["new"] += 1
-
             analysis = self.analyzer.analyze(tender)
             self.db.save_analysis(tender_id, analysis)
             stats["analyzed"] += 1
@@ -348,9 +321,7 @@ class Orchestrator:
             output_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             excel_path = output_dir / f"search_{search_number:03d}_{timestamp}.xlsx"
-            export_path = export_tenders_to_excel(
-                self.db, excel_path, tender_ids=current_run_tender_ids, search_number=search_number
-            )
+            export_path = export_tenders_to_excel(self.db, excel_path, tender_ids=current_run_tender_ids, search_number=search_number)
             logger.info("Excel: создан новый файл текущего прогона: %s", export_path)
             self.email_notifier.send_excel(export_path, search_number)
         except Exception:
