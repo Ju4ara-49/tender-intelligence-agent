@@ -53,14 +53,9 @@ class UnsafeArchiveError(ValueError):
 class DocumentIntelligence:
     """Извлечение, нормализация и локальный поиск по документам и архивам."""
 
-    def __init__(
-        self,
-        max_file_bytes: int = MAX_FILE_BYTES,
-        max_archive_files: int = MAX_ARCHIVE_FILES,
-        max_archive_uncompressed: int = MAX_ARCHIVE_UNCOMPRESSED,
-        max_pdf_pages: int = MAX_PDF_PAGES,
-        max_nesting_depth: int = MAX_NESTING_DEPTH,
-    ) -> None:
+    def __init__(self, max_file_bytes: int = MAX_FILE_BYTES, max_archive_files: int = MAX_ARCHIVE_FILES,
+                 max_archive_uncompressed: int = MAX_ARCHIVE_UNCOMPRESSED, max_pdf_pages: int = MAX_PDF_PAGES,
+                 max_nesting_depth: int = MAX_NESTING_DEPTH) -> None:
         self.max_file_bytes = max_file_bytes
         self.max_archive_files = max_archive_files
         self.max_archive_uncompressed = max_archive_uncompressed
@@ -107,17 +102,14 @@ class DocumentIntelligence:
             raise ValueError(f"Файл слишком большой: {name}")
         if ext in SUPPORTED_TEXT_EXTENSIONS:
             text = self._decode_text(data)
-            if ext in {".xml", ".json"}:
-                # XML/JSON остаются семантически читаемыми, но служебная разметка не должна
-                # мешать поиску по документации.
-                try:
-                    if ext == ".xml":
-                        root = ElementTree.fromstring(data)
-                        text = " ".join(part.strip() for part in root.itertext() if part and part.strip())
-                    else:
-                        text = json.dumps(json.loads(text), ensure_ascii=False, indent=1)
-                except (ElementTree.ParseError, ValueError, UnicodeError, json.JSONDecodeError):
-                    pass
+            try:
+                if ext == ".xml":
+                    root = ElementTree.fromstring(data)
+                    text = " ".join(part.strip() for part in root.itertext() if part and part.strip())
+                elif ext == ".json":
+                    text = json.dumps(json.loads(text), ensure_ascii=False, indent=1)
+            except (ElementTree.ParseError, ValueError, UnicodeError, json.JSONDecodeError):
+                pass
             return [DocumentText(name, self.normalize(text), ext)]
         if ext in SUPPORTED_PDF:
             return [DocumentText(name, self._pdf(data), "application/pdf")]
@@ -136,8 +128,7 @@ class DocumentIntelligence:
         reader = PdfReader(io.BytesIO(data), strict=False)
         if len(reader.pages) > self.max_pdf_pages:
             raise ValueError("PDF содержит слишком много страниц")
-        pages = [(page.extract_text() or "") for page in reader.pages]
-        return self.normalize("\n\n".join(pages))
+        return self.normalize("\n\n".join(page.extract_text() or "" for page in reader.pages))
 
     def _docx(self, data: bytes) -> str:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -152,9 +143,7 @@ class DocumentIntelligence:
                 texts.append(node.text)
             elif node.tag.endswith("}tab"):
                 texts.append("\t")
-            elif node.tag.endswith("}br"):
-                texts.append("\n")
-            elif node.tag.endswith("}p"):
+            elif node.tag.endswith("}br") or node.tag.endswith("}p"):
                 texts.append("\n")
         return self.normalize("".join(texts))
 
@@ -177,11 +166,8 @@ class DocumentIntelligence:
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 infos = [item for item in archive.infolist() if not item.is_dir()]
-                total = sum(item.file_size for item in infos)
-                if total > MAX_ARCHIVE_UNCOMPRESSED:
-                    raise UnsafeArchiveError(f"Распакованный размер {name} превышает лимит")
-                if len(infos) > MAX_ARCHIVE_FILES:
-                    raise UnsafeArchiveError(f"{name} содержит слишком много файлов")
+                if len(infos) > MAX_ARCHIVE_FILES or sum(item.file_size for item in infos) > MAX_ARCHIVE_UNCOMPRESSED:
+                    raise UnsafeArchiveError(f"ZIP-контейнер {name} превышает безопасные лимиты")
                 for info in infos:
                     DocumentIntelligence._validate_archive_member(info.filename)
         except zipfile.BadZipFile as exc:
@@ -208,6 +194,8 @@ class DocumentIntelligence:
                     virtual = f"{name}!/{info.filename}"
                     try:
                         results.extend(self._extract_bytes(member, virtual, Path(info.filename).suffix.lower(), depth + 1))
+                    except UnsafeArchiveError:
+                        raise
                     except (ValueError, zipfile.BadZipFile, UnicodeError):
                         continue
         except zipfile.BadZipFile as exc:
@@ -218,10 +206,8 @@ class DocumentIntelligence:
     def _validate_archive_member(name: str) -> None:
         normalized = name.replace("\\", "/")
         path = PurePosixPath(normalized)
-        if path.is_absolute() or ".." in path.parts:
+        if path.is_absolute() or ".." in path.parts or re.match(r"^[A-Za-z]:", normalized):
             raise UnsafeArchiveError(f"Опасный путь в архиве: {name}")
-        if re.match(r"^[A-Za-z]:", normalized):
-            raise UnsafeArchiveError(f"Абсолютный путь в архиве: {name}")
 
     def search(self, documents: list[DocumentText], keywords: list[str], context: int = 100) -> list[DocumentHit]:
         hits: list[DocumentHit] = []
