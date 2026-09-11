@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
 from src.collectors.browser_public import _BrowserTenderCollector
@@ -106,15 +105,43 @@ class RosatomCollector(_BrowserTenderCollector):
 
         price = self._extract_price(text)
         deadline = self._extract_date(text)
-        customer = ""
-        match = re.search(r"Организатор\s*[:\-]\s*(.+?)(?:\s+Контактное лицо|\s+Дата|$)", text, re.I)
-        if match:
-            customer = match.group(1).strip()[:1000]
+        published_at = self._extract_datetime(text, ("Дата публикации", "Дата размещения", "Опубликовано", "Размещено"))
+        start_date = self._extract_datetime(text, ("Дата начала", "Начало приема", "Начало подачи"))
+        end_date = deadline or self._extract_datetime(text, ("Дата окончания", "Окончание приема", "Окончание подачи"))
+        customer = self._extract_labeled_value(text, ("Организатор", "Заказчик", "Организация-заказчик"))
+        if not customer:
+            match = re.search(r"Организатор\s*[:\-]\s*(.+?)(?:\s+Контактное лицо|\s+Дата|$)", text, re.I)
+            if match:
+                customer = match.group(1).strip()[:1000]
+
+        region = self._extract_labeled_value(text, ("Регион поставки", "Место поставки", "Место выполнения", "Регион"))
+        law_type = self._extract_labeled_value(text, ("Закон", "Вид закона", "Федеральный закон", "Тип закупки"))
+        advance_percent = self._extract_percent(text, ("Аванс", "Предоплата", "Размер аванса"))
+        postpayment_days = self._extract_days(text, ("Отсрочка платежа", "Срок оплаты", "Условия оплаты", "Постоплата"))
+        application_security = self._extract_percent(text, ("Обеспечение заявки", "Обеспечение предложения"))
+        contract_security = self._extract_percent(text, ("Обеспечение исполнения", "Обеспечение контракта", "Обеспечение договора"))
 
         official_number = ""
         match = re.search(r"Номер закупки на официальном сайте ГК «Росатом»\s*[:\-]?\s*(\d+)", text, re.I)
         if match:
             official_number = match.group(1)
+
+        raw_data = {
+            "source": url,
+            "obj_id": external_id,
+            "official_number": official_number,
+            "published_at": published_at.isoformat() if published_at else None,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+        }
+        if advance_percent is not None:
+            raw_data["advance_payment"] = {"percent": advance_percent}
+        if postpayment_days is not None:
+            raw_data["postpayment"] = {"days": postpayment_days}
+        if application_security is not None:
+            raw_data["application_security"] = {"percent": application_security}
+        if contract_security is not None:
+            raw_data["contract_security"] = {"percent": contract_security}
 
         return Tender(
             platform=self.platform,
@@ -123,11 +150,17 @@ class RosatomCollector(_BrowserTenderCollector):
             url=url,
             description=text[:10000],
             price=price,
-            deadline=deadline,
+            deadline=end_date,
+            published_at=published_at,
+            start_date=start_date,
+            end_date=end_date,
             customer=customer,
-            raw_data={
-                "source": url,
-                "obj_id": external_id,
-                "official_number": official_number,
-            },
+            region=region,
+            law_type=law_type,
+            advance_required=advance_percent is not None and advance_percent > 0,
+            advance_percent=advance_percent,
+            postpayment_days=postpayment_days,
+            application_security_percent=application_security,
+            contract_security_percent=contract_security,
+            raw_data=raw_data,
         )
