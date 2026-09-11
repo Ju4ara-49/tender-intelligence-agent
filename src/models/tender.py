@@ -55,14 +55,17 @@ class Tender:
         """Fill unified commercial fields from Russian tender detail text.
 
         Platforms expose these values under different HTML structures. Parsing
-        the normalized description/full text at model construction provides a
-        common safety net for EIS and other collectors without replacing
-        platform-specific parsers when they already extracted a value.
+        normalized text at model construction provides a common safety net for
+        EIS and other collectors without replacing platform-specific parsers
+        when they already extracted a value.
         """
-        text = " ".join(self._text_from_value(value) for value in [self.description, self.raw_data.get("details", "")]).strip()
+        raw = self.raw_data if isinstance(self.raw_data, dict) else {}
+        text_parts: list[str] = []
+        for value in (self.description, raw.get("details", "")):
+            text_parts.extend(self._text_from_value(value))
+        text = re.sub(r"\s+", " ", " ".join(text_parts)).strip()
         if not text:
             return
-        text = re.sub(r"\s+", " ", text)
 
         if self.advance_percent is None:
             self.advance_percent = self._extract_percent(
