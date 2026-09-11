@@ -1,0 +1,441 @@
+From 3ef345793b91e2b46f6daf4d87642fa85d3c3065 Mon Sep 17 00:00:00 2001
+From: Tender Bot Audit <audit@example.com>
+Date: Fri, 11 Sep 2026 07:20:14 +0000
+Subject: [PATCH] fix: restore missing src/ai/analyzer.py and stop .gitignore
+ from hiding it
+
+- src/ai/analyzer.py was never committed: .gitignore contained a bare
+  'analyzer.py' rule that silently excluded it from every git add,
+  so the AI module referenced by src/orchestrator.py and
+  src/ai/__init__.py never existed in the repository. This broke
+  every import of the orchestrator (main.py once/run/status all
+  failed before reaching collectors).
+- Implemented TenderAnalyzer: calls local Ollama /api/chat with
+  qwen3:8b, strips qwen3 <think> blocks before JSON parsing, retries
+  once on transient failures, and raises clearly-labeled errors for
+  connection refused / 404 model-not-found / timeout / malformed
+  JSON instead of silently stubbing. Falls back to a labeled stub
+  only when ai.use_stub_when_no_key is enabled in config.
+- Also removed ~15 garbage .gitignore entries (/None, /Tender, /bool,
+  /src/TenderAnalysis, etc.) left over from a prior broken script run.
+- requirements.txt was missing truststore, which eis_zakupki.py
+  imports unconditionally; pip install -r requirements.txt on a
+  clean machine raised ModuleNotFoundError before any collector ran.
+- README: documented that 'playwright install chromium' is required
+  after pip install, since Fabrikant/RTS/TMK/Rosatom are
+  browser-based collectors and fail with a clear (non-fatal) log
+  message without it.
+- tests/test_ai_analyzer.py: 7 new tests covering success parsing,
+  <think>-block stripping, 404 model-not-found (raises, no stub),
+  connection error with/without stub fallback, and malformed JSON.
+---
+ .gitignore                |  15 ---
+ README.md                 |   6 ++
+ requirements.txt          |   1 +
+ src/ai/analyzer.py        | 195 ++++++++++++++++++++++++++++++++++++++
+ tests/test_ai_analyzer.py | 132 ++++++++++++++++++++++++++
+ 5 files changed, 334 insertions(+), 15 deletions(-)
+ create mode 100644 src/ai/analyzer.py
+ create mode 100644 tests/test_ai_analyzer.py
+
+diff --git a/.gitignore b/.gitignore
+index e69c5a9..0c0b134 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -41,23 +41,8 @@ debug_*
+ debug_artifacts/*
+ !debug_artifacts/b2b_probe_*.txt
+ check_*
+-analyzer.py
+ run_error.txt
+ run_once.log
+-
+-# Accidental temporary files
+-/5
+-/50
+-/None
+-/Tender
+-/bool
+-/datetime
+-/float
+-/str
+-/type
+-/src/50
+-/src/TenderAnalysis
+-/src/bool
+ /src/dict
+ /src/type
+ /src/str
+diff --git a/README.md b/README.md
+index 6882372..acb6566 100644
+--- a/README.md
++++ b/README.md
+@@ -41,8 +41,14 @@ C:\Users\Ju4ara\Projects\tender-intelligence-agent
+ python -m venv .venv
+ .venv\Scripts\Activate.ps1
+ pip install -r requirements.txt
++playwright install chromium
+ ```
+ 
++`playwright install chromium` обязателен: без скачанного браузера сборщики
++Фабрикант, РТС-Тендер, ТМК и Росатом (работают через headless-браузер) не
++смогут искать и будут явно писать в лог ошибку запуска браузера, не падая
++при этом с traceback.
++
+ ### Шаг 3. Создайте файлы настроек
+ 
+ ```powershell
+diff --git a/requirements.txt b/requirements.txt
+index 35a6491..01054b4 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -2,6 +2,7 @@
+ # Установка: pip install -r requirements.txt
+ 
+ requests>=2.31.0
++truststore>=0.9.0
+ beautifulsoup4>=4.12.0
+ lxml>=5.0.0
+ pyyaml>=6.0.0
+diff --git a/src/ai/analyzer.py b/src/ai/analyzer.py
+new file mode 100644
+index 0000000..7c330b7
+--- /dev/null
++++ b/src/ai/analyzer.py
+@@ -0,0 +1,195 @@
++"""AI-анализ тендеров через локальный Ollama (без облачных API)."""
++
++from __future__ import annotations
++
++import json
++import logging
++import re
++from dataclasses import dataclass
++
++import requests
++
++from src.ai.prompts import SYSTEM_PROMPT, build_user_prompt
++from src.models.tender import Tender, TenderAnalysis
++
++logger = logging.getLogger(__name__)
++
++_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
++_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
++
++_REQUEST_TIMEOUT_SECONDS = 120
++_MAX_ATTEMPTS = 2
++
++
++class OllamaUnavailableError(RuntimeError):
++    """Ollama недоступен по сети (сервис не запущен / хост не отвечает)."""
++
++
++class OllamaModelNotFoundError(RuntimeError):
++    """Указанная модель не установлена в Ollama."""
++
++
++class OllamaResponseError(RuntimeError):
++    """Ollama ответил, но ответ пустой/некорректный/не парсится как JSON."""
++
++
++class TenderAnalyzer:
++    """Анализирует тендеры локальной моделью Ollama (qwen3:8b по умолчанию)."""
++
++    def __init__(
++        self,
++        model: str,
++        ai_context: str = "",
++        use_stub_when_no_key: bool = False,
++        ollama_url: str = "http://localhost:11434",
++    ) -> None:
++        self.model = model
++        self.ai_context = ai_context or ""
++        self.use_stub_when_no_key = use_stub_when_no_key
++        self.ollama_url = (ollama_url or "http://localhost:11434").rstrip("/")
++
++    @property
++    def is_configured(self) -> bool:
++        """Локальный Ollama не требует ключа — «настроен», если заданы url и модель."""
++        return bool(self.model) and bool(self.ollama_url)
++
++    def _build_tender_text(self, tender: Tender) -> str:
++        lines = [
++            f"Площадка: {tender.platform}",
++            f"Название: {tender.title}",
++        ]
++        if tender.customer:
++            lines.append(f"Заказчик: {tender.customer}")
++        if tender.region:
++            lines.append(f"Регион: {tender.region}")
++        if tender.price is not None:
++            lines.append(f"Начальная цена: {tender.price} {tender.currency}")
++        if tender.deadline is not None:
++            lines.append(f"Срок подачи: {tender.deadline.isoformat()}")
++        if tender.law_type:
++            lines.append(f"Тип закупки: {tender.law_type}")
++        if tender.advance_required:
++            lines.append(f"Аванс: да ({tender.advance_percent or '?'}%)")
++        description = tender.full_text or tender.description
++        if description:
++            lines.append(f"Описание/предмет закупки: {description}")
++        return "\n".join(lines)
++
++    def _call_ollama(self, user_prompt: str) -> str:
++        """Один HTTP-запрос к /api/chat. Бросает понятные исключения при ошибках."""
++        url = f"{self.ollama_url}/api/chat"
++        payload = {
++            "model": self.model,
++            "messages": [
++                {"role": "system", "content": SYSTEM_PROMPT},
++                {"role": "user", "content": user_prompt},
++            ],
++            "stream": False,
++            "format": "json",
++            # Отключаем "размышления" qwen3, если Ollama поддерживает этот параметр,
++            # чтобы content содержал только итоговый JSON. Игнорируется старыми версиями.
++            "think": False,
++            "options": {"temperature": 0.2},
++        }
++
++        try:
++            response = requests.post(url, json=payload, timeout=_REQUEST_TIMEOUT_SECONDS)
++        except requests.exceptions.ConnectionError as exc:
++            raise OllamaUnavailableError(
++                f"Не удалось подключиться к Ollama по адресу {self.ollama_url}. "
++                "Проверьте, что Ollama запущен (`ollama serve`)."
++            ) from exc
++        except requests.exceptions.Timeout as exc:
++            raise OllamaUnavailableError(
++                f"Ollama не ответил за {_REQUEST_TIMEOUT_SECONDS} сек. "
++                "Возможно, модель ещё загружается или сервис перегружен."
++            ) from exc
++
++        if response.status_code == 404:
++            raise OllamaModelNotFoundError(
++                f"Ollama вернул 404 для модели '{self.model}' по адресу {url}. "
++                f"Убедитесь, что модель установлена: `ollama pull {self.model}`, "
++                "и что используется endpoint /api/chat (не устаревший /api/generate)."
++            )
++        if response.status_code >= 400:
++            raise OllamaResponseError(
++                f"Ollama вернул HTTP {response.status_code}: {response.text[:300]}"
++            )
++
++        try:
++            data = response.json()
++        except ValueError as exc:
++            raise OllamaResponseError(
++                f"Ollama вернул не-JSON ответ: {response.text[:300]}"
++            ) from exc
++
++        message = data.get("message") or {}
++        content = message.get("content")
++        if not content or not str(content).strip():
++            raise OllamaResponseError("Ollama вернул пустой ответ (message.content пуст).")
++        return str(content)
++
++    def _parse_model_output(self, content: str) -> dict:
++        cleaned = _THINK_BLOCK_RE.sub("", content).strip()
++        try:
++            return json.loads(cleaned)
++        except ValueError:
++            pass
++
++        match = _JSON_OBJECT_RE.search(cleaned)
++        if match:
++            try:
++                return json.loads(match.group(0))
++            except ValueError:
++                pass
++
++        raise OllamaResponseError(
++            f"Не удалось разобрать JSON в ответе модели: {cleaned[:300]}"
++        )
++
++    def _stub_analysis(self, reason: str) -> TenderAnalysis:
++        logger.warning("AI: используется stub-анализ. Причина: %s", reason)
++        return TenderAnalysis(
++            relevance_score=50,
++            summary=f"AI недоступен, использован stub-анализ. Причина: {reason}",
++            recommendation="review",
++            risks=["AI-анализ не выполнен, требуется ручная проверка"],
++            budget_note="",
++            deadline_note="",
++            is_stub=True,
++        )
++
++    def analyze(self, tender: Tender) -> TenderAnalysis:
++        """Анализирует тендер. При недоступности Ollama либо явно падает,
++        либо (если разрешено конфигом) возвращает помеченный stub — но не молча."""
++        user_prompt = build_user_prompt(self._build_tender_text(tender), self.ai_context)
++
++        last_error: Exception | None = None
++        for attempt in range(1, _MAX_ATTEMPTS + 1):
++            try:
++                content = self._call_ollama(user_prompt)
++                parsed = self._parse_model_output(content)
++                return TenderAnalysis(
++                    relevance_score=parsed.get("relevance_score", 0),
++                    summary=str(parsed.get("summary", "")).strip(),
++                    recommendation=str(parsed.get("recommendation", "review")).strip(),
++                    risks=parsed.get("risks", []) or [],
++                    budget_note=str(parsed.get("budget_note", "")).strip(),
++                    deadline_note=str(parsed.get("deadline_note", "")).strip(),
++                    is_stub=False,
++                )
++            except OllamaModelNotFoundError as exc:
++                # Повторять бессмысленно — модель либо есть, либо нет.
++                last_error = exc
++                logger.error("AI: %s", exc)
++                break
++            except (OllamaUnavailableError, OllamaResponseError) as exc:
++                last_error = exc
++                logger.warning(
++                    "AI: попытка %d/%d не удалась: %s", attempt, _MAX_ATTEMPTS, exc
++                )
++
++        assert last_error is not None
++        if self.use_stub_when_no_key:
++            return self._stub_analysis(str(last_error))
++        raise last_error
+diff --git a/tests/test_ai_analyzer.py b/tests/test_ai_analyzer.py
+new file mode 100644
+index 0000000..3eae279
+--- /dev/null
++++ b/tests/test_ai_analyzer.py
+@@ -0,0 +1,132 @@
++from __future__ import annotations
++
++import unittest
++from unittest.mock import patch
++
++import requests
++
++from src.ai.analyzer import TenderAnalyzer
++from src.models.tender import Tender
++
++
++def _make_tender() -> Tender:
++    return Tender(
++        platform="eis",
++        external_id="0001",
++        title="Поставка полумуфт",
++        url="https://example.com/tender/0001",
++        customer="ООО Заказчик",
++        price=150000,
++        currency="RUB",
++    )
++
++
++class _FakeResponse:
++    def __init__(self, status_code: int = 200, json_data=None, text: str = "") -> None:
++        self.status_code = status_code
++        self._json_data = json_data
++        self.text = text
++
++    def json(self):
++        if self._json_data is None:
++            raise ValueError("no json")
++        return self._json_data
++
++
++class TenderAnalyzerTests(unittest.TestCase):
++    def test_module_is_importable_and_used_by_orchestrator(self) -> None:
++        # Ранее src/ai/analyzer.py отсутствовал в репозитории, из-за чего
++        # весь orchestrator падал на импорте ещё до старта pipeline.
++        from src.orchestrator import Orchestrator  # noqa: F401
++
++    def test_successful_ollama_chat_call_is_parsed(self) -> None:
++        analyzer = TenderAnalyzer(model="qwen3:8b", ollama_url="http://localhost:11434")
++        fake_response = _FakeResponse(
++            status_code=200,
++            json_data={
++                "message": {
++                    "content": (
++                        '{"relevance_score": 80, "summary": "ок", '
++                        '"recommendation": "participate", "risks": [], '
++                        '"budget_note": "", "deadline_note": ""}'
++                    )
++                }
++            },
++        )
++        with patch("src.ai.analyzer.requests.post", return_value=fake_response) as mock_post:
++            analysis = analyzer.analyze(_make_tender())
++
++        self.assertEqual(analysis.relevance_score, 80)
++        self.assertEqual(analysis.recommendation, "participate")
++        self.assertFalse(analysis.is_stub)
++        called_url = mock_post.call_args.args[0]
++        self.assertTrue(called_url.endswith("/api/chat"))
++
++    def test_strips_qwen3_think_block_before_parsing_json(self) -> None:
++        analyzer = TenderAnalyzer(model="qwen3:8b", ollama_url="http://localhost:11434")
++        fake_response = _FakeResponse(
++            status_code=200,
++            json_data={
++                "message": {
++                    "content": (
++                        "<think>рассуждения модели</think>"
++                        '{"relevance_score": 40, "summary": "ок", '
++                        '"recommendation": "review", "risks": [], '
++                        '"budget_note": "", "deadline_note": ""}'
++                    )
++                }
++            },
++        )
++        with patch("src.ai.analyzer.requests.post", return_value=fake_response):
++            analysis = analyzer.analyze(_make_tender())
++        self.assertEqual(analysis.relevance_score, 40)
++
++    def test_model_not_found_raises_clear_error_without_stub(self) -> None:
++        analyzer = TenderAnalyzer(
++            model="does-not-exist", ollama_url="http://localhost:11434", use_stub_when_no_key=False
++        )
++        fake_response = _FakeResponse(status_code=404, text="model not found")
++        with patch("src.ai.analyzer.requests.post", return_value=fake_response):
++            with self.assertRaises(Exception) as ctx:
++                analyzer.analyze(_make_tender())
++        self.assertIn("404", str(ctx.exception))
++
++    def test_connection_error_falls_back_to_stub_when_allowed(self) -> None:
++        analyzer = TenderAnalyzer(
++            model="qwen3:8b", ollama_url="http://localhost:11434", use_stub_when_no_key=True
++        )
++        with patch(
++            "src.ai.analyzer.requests.post",
++            side_effect=requests.exceptions.ConnectionError("refused"),
++        ):
++            analysis = analyzer.analyze(_make_tender())
++        self.assertTrue(analysis.is_stub)
++        self.assertEqual(analysis.recommendation, "review")
++
++    def test_connection_error_raises_when_stub_not_allowed(self) -> None:
++        analyzer = TenderAnalyzer(
++            model="qwen3:8b", ollama_url="http://localhost:11434", use_stub_when_no_key=False
++        )
++        with patch(
++            "src.ai.analyzer.requests.post",
++            side_effect=requests.exceptions.ConnectionError("refused"),
++        ):
++            with self.assertRaises(Exception):
++                analyzer.analyze(_make_tender())
++
++    def test_malformed_json_response_is_reported_clearly(self) -> None:
++        analyzer = TenderAnalyzer(
++            model="qwen3:8b", ollama_url="http://localhost:11434", use_stub_when_no_key=True
++        )
++        fake_response = _FakeResponse(
++            status_code=200,
++            json_data={"message": {"content": "это не json"}},
++        )
++        with patch("src.ai.analyzer.requests.post", return_value=fake_response):
++            analysis = analyzer.analyze(_make_tender())
++        self.assertTrue(analysis.is_stub)
++        self.assertIn("JSON", analysis.summary)
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+
