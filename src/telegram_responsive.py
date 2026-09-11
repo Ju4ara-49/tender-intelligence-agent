@@ -7,24 +7,19 @@ import time
 
 import httpx
 
-from src.telegram_bot import HELP_TEXT, PLATFORM_NAMES
+from src.telegram_bot import HELP_TEXT
 from src.telegram_multiuser import MultiUserTelegramBot
 
 logger = logging.getLogger(__name__)
 
-PLATFORM_NAMES.clear()
-PLATFORM_NAMES.update({
-    "eis": "ЕИС",
-    "b2b_center": "B2B-Center",
-    "fabrikant": "Фабрикант",
-    "rts_tender": "РТС-тендер",
-    "tmk": "ТМК",
-    "rosatom": "Росатом",
-})
-
 
 class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
-    """Multi-user bot with interruptible short polling."""
+    """Multi-user bot with interruptible short polling.
+
+    Площадки и пользовательские критерии берутся из базового TelegramBot;
+    этот класс отвечает только за сетевой polling и не делает monkey-patch
+    глобальных словарей.
+    """
 
     POLL_TIMEOUT_SECONDS = 2
     REQUEST_TIMEOUT_SECONDS = 15
@@ -54,8 +49,6 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
                 logger.info("Telegram-бот остановлен (Ctrl+C)")
                 break
             except httpx.ReadTimeout:
-                # Long-polling timeout is a normal transient network event.
-                # Do not emit a full traceback or make it look like the bot crashed.
                 logger.warning("Telegram-бот: timeout getUpdates; повторяем polling")
                 time.sleep(1)
             except httpx.HTTPError as exc:
@@ -77,35 +70,3 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
                 self._handle_callback(update["callback_query"])
             elif update.get("message"):
                 self._handle_message(update["message"])
-
-    def _platform_keyboard(self, chat_id: str) -> dict:
-        enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
-        rows = []
-        for platform, name in PLATFORM_NAMES.items():
-            mark = "☑" if platform in enabled else "☐"
-            rows.append([{"text": f"{mark} {name}", "callback_data": f"platform:{platform}"}])
-        rows.append([{"text": "Закрыть", "callback_data": "platform:close"}])
-        return {"inline_keyboard": rows}
-
-    def _show_platforms(self, chat_id: str) -> None:
-        enabled = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
-        lines = ["<b>Площадки поиска</b>", "", "Нажмите на площадку, чтобы включить или выключить её.", ""]
-        for platform, name in PLATFORM_NAMES.items():
-            lines.append(f"{'☑' if platform in enabled else '☐'} {name}")
-        lines.append("")
-        lines.append("<i>Подключены: ЕИС, B2B-Center, Фабрикант, РТС-тендер, ТМК и Росатом.</i>")
-        self._send(chat_id, "\n".join(lines), self._platform_keyboard(chat_id))
-
-    def _toggle_platform(self, chat_id: str, platform: str) -> None:
-        if platform not in PLATFORM_NAMES:
-            logger.warning("Telegram-бот: неизвестная площадка в callback: %s", platform)
-            return
-        current = set(self._call_user(chat_id, self.criteria_store.get_enabled_platforms))
-        before = sorted(current)
-        if platform in current:
-            current.remove(platform)
-        else:
-            current.add(platform)
-        self._call_user(chat_id, self.criteria_store.set_enabled_platforms, sorted(current))
-        logger.info("Telegram-бот: площадка изменена chat_id=%s platform=%s before=%s after=%s", chat_id, platform, before, sorted(current))
-        self._show_platforms(chat_id)
