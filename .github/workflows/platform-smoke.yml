@@ -1,0 +1,51 @@
+name: Live platform smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: "Probe keyword"
+        required: true
+        default: "подшипники"
+
+actions:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run live platform diagnostics
+        env:
+          PYTHONPATH: .
+          PLATFORM_SMOKE_PROBE: ${{ inputs.probe }}
+        run: |
+          mkdir -p output/platform_smoke
+          python -m src.main platforms --probe "$PLATFORM_SMOKE_PROBE" | tee output/platform_smoke/report.txt
+
+      - name: Upload diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-smoke-report
+          path: output/platform_smoke/report.txt
+          if-no-files-found: warn
+          retention-days: 14
