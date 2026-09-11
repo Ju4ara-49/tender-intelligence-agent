@@ -2,6 +2,13 @@
 from __future__ import annotations
 
 from src.telegram_bot import TelegramBot
+from src.telegram_multiuser import (
+    BTN_ADMIN,
+    BTN_ADMIN_ADD,
+    BTN_ADMIN_BACK,
+    BTN_ADMIN_REMOVE,
+    BTN_ADMIN_USERS,
+)
 from src.telegram_responsive import ResponsiveMultiUserTelegramBot
 
 
