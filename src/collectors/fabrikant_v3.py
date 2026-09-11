@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class FabrikantV3Collector(FabrikantV2Collector):
-    """Fabrikant V2 plus reliable region/publication-date enrichment."""
+    """Fabrikant V2 plus reliable common-field enrichment."""
 
     def _parse_results(self, html: str) -> list[Tender]:
         results = super()._parse_results(html)
@@ -78,6 +78,39 @@ class FabrikantV3Collector(FabrikantV2Collector):
                 raw = detailed.raw_data if isinstance(detailed.raw_data, dict) else {}
                 raw["region_source"] = "detail_text"
                 detailed.raw_data = raw
+
+        # Common commercial terms are often present in the procedure text but
+        # were previously discarded. Fill the unified Tender fields so Telegram
+        # criteria can operate consistently with the browser collector.
+        if detailed.advance_percent is None:
+            detailed.advance_percent = self._extract_percent(
+                text, ("Аванс", "Предоплата", "Размер аванса", "Авансовый платеж")
+            )
+        if detailed.advance_percent is not None:
+            detailed.advance_required = detailed.advance_percent > 0
+        if detailed.postpayment_days is None:
+            detailed.postpayment_days = self._extract_days(
+                text, ("Отсрочка платежа", "Срок оплаты", "Условия оплаты", "Постоплата")
+            )
+        if detailed.application_security_percent is None:
+            detailed.application_security_percent = self._extract_percent(
+                text, ("Обеспечение заявки", "Обеспечение предложения")
+            )
+        if detailed.contract_security_percent is None:
+            detailed.contract_security_percent = self._extract_percent(
+                text, ("Обеспечение исполнения", "Обеспечение контракта", "Обеспечение договора")
+            )
+
+        raw = detailed.raw_data if isinstance(detailed.raw_data, dict) else {}
+        if detailed.advance_percent is not None:
+            raw["advance_payment"] = {"percent": detailed.advance_percent}
+        if detailed.postpayment_days is not None:
+            raw["postpayment"] = {"days": detailed.postpayment_days}
+        if detailed.application_security_percent is not None:
+            raw["application_security"] = {"percent": detailed.application_security_percent}
+        if detailed.contract_security_percent is not None:
+            raw["contract_security"] = {"percent": detailed.contract_security_percent}
+        detailed.raw_data = raw
         return detailed
 
     @classmethod
@@ -89,7 +122,7 @@ class FabrikantV3Collector(FabrikantV2Collector):
             rf"(?:дата публикации|дата размещения|опубликовано|размещено)\D{{0,80}}(\d{{1,2}}\s+(?:{month})\s+20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?)",
             r"(?:дата публикации|дата размещения|опубликовано|размещено)\D{0,80}(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)",
             rf"(\d{{1,2}}\s+(?:{month})\s+20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?)\s*[•|-]?\s*начало(?: приема| подачи)?",
-            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)\s*[•|-]?\s*начало(?: приема| подачи)?",
+            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)\s*[•|-]?\s*начало(?: приема|подачи)?",
         )
         for pattern in patterns:
             match = re.search(pattern, normalized, re.I)
