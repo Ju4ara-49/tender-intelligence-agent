@@ -38,9 +38,10 @@ class KeywordFilter:
     # Keeping the list explicit prevents short stems such as "стан" from
     # matching unrelated words such as "станция".
     RUSSIAN_NOUN_SUFFIXES = (
+        "ками", "ками", "ках", "ков", "кев", "ки", "ка", "ку", "ке", "ко",
         "ами", "ями", "ами", "ями", "ов", "ев", "ей", "ах", "ях",
         "ам", "ям", "ом", "ем", "ою", "ею", "ой", "ей", "ью", "у", "ю",
-        "а", "я", "ы", "и", "е", "о", "у", "ю",
+        "а", "я", "ы", "и", "е", "о",
     )
 
     def __init__(self, include: list[str], exclude: list[str], min_text_length: int = 10) -> None:
@@ -56,11 +57,7 @@ class KeywordFilter:
         return normalized in {cls._normalize(item) for item in cls.GENERIC_INCLUDE_PATTERNS}
 
     def matches_soft(self, tender: Tender) -> bool:
-        """Дешёвый pre-filter: исключения + минимальный объём текста.
-
-        INCLUDE здесь намеренно НЕ применяется. Сначала нужно получить детали,
-        лоты и спецификацию, иначе релевантные закупки теряются слишком рано.
-        """
+        """Дешёвый pre-filter: исключения + минимальный объём текста."""
         full_text = tender.full_text or ""
         if len(full_text) < self.min_text_length:
             logger.debug("Пропуск %s: слишком короткий текст", tender.unique_key)
@@ -118,7 +115,6 @@ class KeywordFilter:
         return False
 
     def matches(self, tender: Tender) -> bool:
-        """Совместимость со старым API: теперь это строгая проверка."""
         return self.matches_strict(tender)
 
     @classmethod
@@ -134,7 +130,6 @@ class KeywordFilter:
 
     @classmethod
     def _contains(cls, text: str, pattern: str) -> bool:
-        """Match literal phrases plus conservative Russian word morphology."""
         pattern_lower = cls._normalize(pattern)
         if not pattern_lower:
             return False
@@ -146,7 +141,6 @@ class KeywordFilter:
         words = re.findall(r"[\w-]+", pattern_lower, re.UNICODE)
         if not words:
             return False
-
         if len(words) > 1:
             return all(cls._contains_word(text, word) for word in words)
         return cls._contains_word(text, words[0])
@@ -165,8 +159,6 @@ class KeywordFilter:
         pattern = rf"\b{re.escape(stem)}(?P<suffix>[\w-]*)\b"
         for match in re.finditer(pattern, text, re.UNICODE):
             suffix = match.group("suffix")
-            if not suffix:
-                return True
-            if suffix in cls.RUSSIAN_NOUN_SUFFIXES:
+            if not suffix or suffix in cls.RUSSIAN_NOUN_SUFFIXES:
                 return True
         return False
