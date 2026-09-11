@@ -11,6 +11,7 @@ from src.filters.keyword_filter import KeywordFilter
 from src.models.tender import Tender
 from src.notifications.telegram import TelegramNotifier
 from src.notifications.email import EmailNotifier
+from src.profiles import SearchProfileStore
 from src.settings import AppSettings
 from src.storage.database import TenderDatabase
 from src.telegram_settings import CriteriaStore, TenderCriteria
@@ -23,13 +24,13 @@ class Orchestrator:
     """Широкий multi-platform pipeline: discovery → dedup → enrich → filters → AI."""
 
     def _get_next_search_number(self) -> int:
-        """Атомарный номер поиска; файл search_counter.txt больше не используется."""
         return self.db.next_search_number()
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.db = TenderDatabase(settings.database_path)
         self.criteria_store = CriteriaStore(self.db)
+        self.profile_store = SearchProfileStore(self.db)
         self.analyzer = TenderAnalyzer(
             model=settings.ai_model,
             ai_context=settings.ai_context,
@@ -38,8 +39,7 @@ class Orchestrator:
         )
         logger.info(
             "AI: provider=%s | model=%s | ollama_url=%s | configured=%s",
-            settings.ai_provider, settings.ai_model, settings.ollama_url,
-            self.analyzer.is_configured,
+            settings.ai_provider, settings.ai_model, settings.ollama_url, self.analyzer.is_configured,
         )
         self.notifier = TelegramNotifier(
             bot_token=settings.telegram_bot_token,
@@ -120,18 +120,13 @@ class Orchestrator:
                 tender.raw_data["details_loaded"] = True
             tender = self._normalize_tender_datetimes(tender)
             loaded = bool(tender.raw_data.get("details_loaded"))
-            logger.info(
-                "%s: детали загружены %s | price=%s | customer=%s | deadline=%s",
-                getattr(collector, "platform", "unknown"), tender.external_id,
-                tender.price, bool(tender.customer), tender.deadline,
-            )
+            logger.info("%s: детали загружены %s | price=%s | customer=%s | deadline=%s", getattr(collector, "platform", "unknown"), tender.external_id, tender.price, bool(tender.customer), tender.deadline)
             return tender, loaded
         except Exception:
             logger.exception("%s: ошибка загрузки деталей %s", getattr(collector, "platform", "unknown"), tender.external_id)
             return self._normalize_tender_datetimes(tender), False
 
     def _search_platform(self, collector, keywords: list[str]) -> tuple[str, list[Tender]]:
-        """Один сбой площадки не должен останавливать остальные."""
         platform = getattr(collector, "platform", "unknown")
         try:
             config = self.settings.config.get("collectors", {}).get(platform, {})
@@ -149,16 +144,14 @@ class Orchestrator:
         seen: set[str] = set()
         result: list[tuple[object, Tender]] = []
         for collector, tender in pairs:
-            key = tender.unique_key
-            if key in seen:
+            if tender.unique_key in seen:
                 continue
-            seen.add(key)
+            seen.add(tender.unique_key)
             result.append((collector, tender))
         return result
 
     @staticmethod
     def _passes_criteria(tender: Tender, criteria: TenderCriteria) -> tuple[bool, str]:
-        """Проверить бизнес-критерии пользователя после enrichment."""
         if criteria.min_price is not None and (tender.price is None or tender.price < criteria.min_price):
             return False, "min_price"
         if criteria.max_price is not None and (tender.price is None or tender.price > criteria.max_price):
@@ -168,34 +161,37 @@ class Orchestrator:
                 return False, "advance_required"
             if tender.advance_percent is None:
                 return False, "advance_percent_missing"
-        if criteria.min_advance_percent > 0:
-            if tender.advance_percent is None or tender.advance_percent < criteria.min_advance_percent:
-                return False, "min_advance_percent"
-        if criteria.max_postpayment_days is not None:
-            postpayment_days = tender.postpayment_days or 0
-            if postpayment_days > criteria.max_postpayment_days:
-                return False, "max_postpayment_days"
-        if criteria.min_application_security_percent > 0:
-            if tender.application_security_percent is None or tender.application_security_percent < criteria.min_application_security_percent:
-                return False, "min_application_security_percent"
-        if criteria.max_application_security_percent is not None:
-            application_security = tender.application_security_percent or 0.0
-            if application_security > criteria.max_application_security_percent:
-                return False, "max_application_security_percent"
-        if criteria.min_contract_security_percent > 0:
-            if tender.contract_security_percent is None or tender.contract_security_percent < criteria.min_contract_security_percent:
-                return False, "min_contract_security_percent"
-        if criteria.max_contract_security_percent is not None:
-            contract_security = tender.contract_security_percent or 0.0
-            if contract_security > criteria.max_contract_security_percent:
-                return False, "max_contract_security_percent"
+        if criteria.min_advance_percent > 0 and (tender.advance_percent is None or tender.advance_percent < criteria.min_advance_percent):
+            return False, "min_advance_percent"
+        if criteria.max_postpayment_days is not None and (tender.postpayment_days or 0) > criteria.max_postpayment_days:
+            return False, "max_postpayment_days"
+        if criteria.min_application_security_percent > 0 and (
+            tender.application_security_percent is None or tender.application_security_percent < criteria.min_application_security_percent
+        ):
+            return False, "min_application_security_percent"
+        if criteria.max_application_security_percent is not None and (tender.application_security_percent or 0.0) > criteria.max_application_security_percent:
+            return False, "max_application_security_percent"
+        if criteria.min_contract_security_percent > 0 and (
+            tender.contract_security_percent is None or tender.contract_security_percent < criteria.min_contract_security_percent
+        ):
+            return False, "min_contract_security_percent"
+        if criteria.max_contract_security_percent is not None and (tender.contract_security_percent or 0.0) > criteria.max_contract_security_percent:
+            return False, "max_contract_security_percent"
         if criteria.min_submission_days and tender.deadline is not None:
-            seconds_left = (tender.deadline - datetime.now(timezone.utc)).total_seconds()
-            if seconds_left < criteria.min_submission_days * 86400:
+            if (tender.deadline - datetime.now(timezone.utc)).total_seconds() < criteria.min_submission_days * 86400:
                 return False, "min_submission_days"
         elif criteria.min_submission_days:
             return False, "deadline_missing"
         return True, ""
+
+    @staticmethod
+    def _passes_regions(tender: Tender, regions: list[str] | None) -> bool:
+        if not regions:
+            return True
+        tender_region = (tender.region or "").strip().casefold()
+        if not tender_region:
+            return False
+        return any(region.strip().casefold() in tender_region for region in regions if region.strip())
 
     def run_cycle(
         self,
@@ -203,12 +199,14 @@ class Orchestrator:
         criteria: TenderCriteria | None = None,
         keywords: list[str] | None = None,
         platforms: list[str] | None = None,
+        exclude_keywords: list[str] | None = None,
+        regions: list[str] | None = None,
     ) -> dict[str, int]:
         search_number = self._get_next_search_number()
         stats = {
-            "search_number": search_number, "found": 0, "soft_filtered": 0,
-            "filtered": 0, "keyword_excluded": 0, "new": 0, "analyzed": 0,
-            "notified": 0, "skipped_duplicate": 0, "excluded_by_criteria": 0,
+            "search_number": search_number, "found": 0, "soft_filtered": 0, "filtered": 0,
+            "keyword_excluded": 0, "new": 0, "analyzed": 0, "notified": 0,
+            "skipped_duplicate": 0, "excluded_by_criteria": 0, "excluded_by_region": 0,
             "details_loaded": 0, "details_failed": 0,
         }
         self.clear_stop_request()
@@ -218,15 +216,14 @@ class Orchestrator:
         min_text = int(self.settings.config.get("filters", {}).get("min_text_length", 10))
         search_keywords = keywords if keywords is not None else (self.criteria_store.get_keywords(user_id) or self.settings.include_keywords)
         enabled_platforms = platforms if platforms is not None else self.criteria_store.get_enabled_platforms(user_id)
-        logger.info("Поиск: user_id=%s | используются ключевые слова: %s", user_id, search_keywords)
-        logger.info("Поиск: включённые площадки: %s", enabled_platforms)
+        exclusions = exclude_keywords if exclude_keywords is not None else self.settings.exclude_keywords
+        logger.info("Поиск: user_id=%s | keywords=%s | platforms=%s | regions=%s", user_id, search_keywords, enabled_platforms, regions or [])
 
-        self.keyword_filter = KeywordFilter(include=search_keywords, exclude=self.settings.exclude_keywords, min_text_length=min_text)
+        self.keyword_filter = KeywordFilter(include=search_keywords, exclude=exclusions, min_text_length=min_text)
         collectors = get_enabled_collectors(self.settings.config, enabled_platforms=enabled_platforms)
         if not collectors:
             logger.warning("Нет включённых сборщиков. Проверьте config.yaml и настройки площадок.")
             return stats
-        logger.info("Активные сборщики: %s", [c.platform for c in collectors])
 
         all_pairs: list[tuple[object, Tender]] = []
         workers = min(len(collectors), max(1, int(self.settings.config.get("search", {}).get("platform_workers", len(collectors)))))
@@ -237,14 +234,11 @@ class Orchestrator:
                 collector = next((c for c in collectors if c.platform == platform), None)
                 if collector is not None:
                     all_pairs.extend((collector, tender) for tender in found)
-                    logger.info("Discovery: %s raw=%d", platform, len(found))
 
         stats["found"] = len(all_pairs)
         unique_pairs = self._deduplicate_pairs(all_pairs)
-        logger.info("Discovery: total_raw=%d global_unique=%d duplicates=%d", len(all_pairs), len(unique_pairs), len(all_pairs) - len(unique_pairs))
-
-        soft_pairs: list[tuple[object, Tender]] = []
         now = datetime.now(timezone.utc)
+        soft_pairs: list[tuple[object, Tender]] = []
         for collector, tender in unique_pairs:
             if self.stop_requested:
                 break
@@ -257,17 +251,14 @@ class Orchestrator:
             if self.keyword_filter.matches_soft(tender):
                 soft_pairs.append((collector, tender))
         stats["soft_filtered"] = len(soft_pairs)
-        logger.info("Soft pre-filter: %d/%d candidates remain", len(soft_pairs), len(unique_pairs))
 
         enriched_pairs: list[tuple[object, Tender]] = []
         for collector, tender in soft_pairs:
             if self.stop_requested:
                 break
             enriched, loaded = self._enrich_tender(collector, tender)
-            if loaded:
-                stats["details_loaded"] += 1
-            elif callable(getattr(collector, "get_details", None)):
-                stats["details_failed"] += 1
+            stats["details_loaded"] += int(loaded)
+            stats["details_failed"] += int(not loaded and callable(getattr(collector, "get_details", None)))
             enriched_pairs.append((collector, enriched))
 
         strict_pairs: list[tuple[object, Tender]] = []
@@ -277,12 +268,14 @@ class Orchestrator:
             else:
                 stats["keyword_excluded"] += 1
         stats["filtered"] = len(strict_pairs)
-        logger.info("Strict keyword filter: kept=%d excluded=%d", len(strict_pairs), stats["keyword_excluded"])
 
         current_run_tender_ids: list[int] = []
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
+            if not self._passes_regions(tender, regions):
+                stats["excluded_by_region"] += 1
+                continue
             passed, reason = self._passes_criteria(tender, criteria)
             if not passed:
                 stats["excluded_by_criteria"] += 1
@@ -309,13 +302,6 @@ class Orchestrator:
                 self.db.mark_notified(tender_id)
                 stats["notified"] += 1
 
-        logger.info(
-            "Цикл завершён: found=%d soft=%d filtered=%d kw_excluded=%d new=%d analyzed=%d notified=%d dup=%d excluded=%d details=%d failed=%d",
-            stats["found"], stats["soft_filtered"], stats["filtered"], stats["keyword_excluded"],
-            stats["new"], stats["analyzed"], stats["notified"], stats["skipped_duplicate"],
-            stats["excluded_by_criteria"], stats["details_loaded"], stats["details_failed"],
-        )
-
         try:
             output_dir = Path(self.settings.config.get("export", {}).get("output_dir", "output"))
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -327,3 +313,26 @@ class Orchestrator:
         except Exception:
             logger.exception("Excel: ошибка экспорта результатов")
         return stats
+
+    def run_cycle_for_user(self, user_id: str | int) -> list[dict[str, int]]:
+        """Запустить все включённые профили пользователя и записать фактическую статистику."""
+        user_id = str(user_id).strip()
+        profiles = self.profile_store.list(user_id, enabled_only=True)
+        if not profiles:
+            profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
+        results: list[dict[str, int]] = []
+        for profile in profiles:
+            if self.stop_requested:
+                break
+            started_at = datetime.now(timezone.utc).isoformat()
+            stats = self.run_cycle(
+                user_id=user_id,
+                criteria=profile.criteria(),
+                keywords=profile.keywords or None,
+                platforms=profile.platforms or None,
+                exclude_keywords=profile.exclusions or None,
+                regions=profile.regions or None,
+            )
+            self.profile_store.record_run(user_id, profile.id, stats, started_at=started_at)
+            results.append(stats)
+        return results
