@@ -30,11 +30,13 @@ SUPPORTED_OFFICE_EXTENSIONS = {".docx", ".xlsx", ".xlsm"}
 SUPPORTED_ARCHIVES = {".zip"}
 SUPPORTED_PDF = {".pdf"}
 
+
 @dataclass(frozen=True)
 class DocumentText:
     path: str
     text: str
     mime_hint: str = ""
+
 
 @dataclass(frozen=True)
 class DocumentHit:
@@ -44,21 +46,38 @@ class DocumentHit:
     start: int
     end: int
 
+
 class UnsafeArchiveError(ValueError):
     """Архив содержит опасный путь или превышает лимиты."""
+
 
 @dataclass
 class _ExtractionBudget:
     uncompressed_bytes: int = 0
     files: int = 0
 
+
 class DocumentIntelligence:
     """Извлечение, нормализация и локальный поиск по документам и архивам."""
 
-    def __init__(self, max_file_bytes: int = MAX_FILE_BYTES, max_archive_files: int = MAX_ARCHIVE_FILES,
-                 max_archive_uncompressed: int = MAX_ARCHIVE_UNCOMPRESSED, max_pdf_pages: int = MAX_PDF_PAGES,
-                 max_nesting_depth: int = MAX_NESTING_DEPTH) -> None:
-        if min(max_file_bytes, max_archive_files, max_archive_uncompressed, max_pdf_pages) <= 0:
+    def __init__(
+        self,
+        max_file_bytes: int = MAX_FILE_BYTES,
+        max_archive_files: int = MAX_ARCHIVE_FILES,
+        max_archive_uncompressed: int = MAX_ARCHIVE_UNCOMPRESSED,
+        max_pdf_pages: int = MAX_PDF_PAGES,
+        max_nesting_depth: int = MAX_NESTING_DEPTH,
+        max_xlsx_rows: int = MAX_XLSX_ROWS,
+        max_xlsx_cells: int = MAX_XLSX_CELLS,
+    ) -> None:
+        if min(
+            max_file_bytes,
+            max_archive_files,
+            max_archive_uncompressed,
+            max_pdf_pages,
+            max_xlsx_rows,
+            max_xlsx_cells,
+        ) <= 0:
             raise ValueError("Лимиты обработки документов должны быть положительными")
         if max_nesting_depth < 0:
             raise ValueError("max_nesting_depth не может быть отрицательным")
@@ -67,6 +86,8 @@ class DocumentIntelligence:
         self.max_archive_uncompressed = max_archive_uncompressed
         self.max_pdf_pages = max_pdf_pages
         self.max_nesting_depth = max_nesting_depth
+        self.max_xlsx_rows = max_xlsx_rows
+        self.max_xlsx_cells = max_xlsx_cells
 
     @staticmethod
     def normalize(text: str) -> str:
@@ -103,7 +124,14 @@ class DocumentIntelligence:
             raise ValueError(f"Файл слишком большой: {filename}")
         return self._extract_bytes(data, filename, Path(filename).suffix.lower(), 0, _ExtractionBudget())
 
-    def _extract_bytes(self, data: bytes, name: str, ext: str, depth: int, budget: _ExtractionBudget) -> list[DocumentText]:
+    def _extract_bytes(
+        self,
+        data: bytes,
+        name: str,
+        ext: str,
+        depth: int,
+        budget: _ExtractionBudget,
+    ) -> list[DocumentText]:
         if len(data) > self.max_file_bytes:
             raise ValueError(f"Файл слишком большой: {name}")
         if ext in SUPPORTED_TEXT_EXTENSIONS:
@@ -122,8 +150,20 @@ class DocumentIntelligence:
         if ext in SUPPORTED_OFFICE_EXTENSIONS:
             self._validate_zip_container(data, name)
             if ext in {".xlsx", ".xlsm"}:
-                return [DocumentText(name, self._xlsx(data), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
-            return [DocumentText(name, self._docx(data), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
+                return [
+                    DocumentText(
+                        name,
+                        self._xlsx(data),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                ]
+            return [
+                DocumentText(
+                    name,
+                    self._docx(data),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            ]
         if ext in SUPPORTED_ARCHIVES:
             return self._extract_archive(data, name, depth, budget)
         return []
@@ -162,12 +202,12 @@ class DocumentIntelligence:
                 lines.append(f"[Лист: {sheet.title}]")
                 for row in sheet.iter_rows(values_only=True):
                     rows += 1
-                    if rows > MAX_XLSX_ROWS:
+                    if rows > self.max_xlsx_rows:
                         raise ValueError("XLSX содержит слишком много строк")
-                    values = [str(value).strip() for value in row if value is not None and str(value).strip()]
                     cells += len(row)
-                    if cells > MAX_XLSX_CELLS:
+                    if cells > self.max_xlsx_cells:
                         raise ValueError("XLSX содержит слишком много ячеек")
+                    values = [str(value).strip() for value in row if value is not None and str(value).strip()]
                     if values:
                         lines.append(" | ".join(values))
         finally:
@@ -186,7 +226,13 @@ class DocumentIntelligence:
         except zipfile.BadZipFile as exc:
             raise ValueError(f"Повреждённый ZIP-контейнер: {name}") from exc
 
-    def _extract_archive(self, data: bytes, name: str, depth: int, budget: _ExtractionBudget) -> list[DocumentText]:
+    def _extract_archive(
+        self,
+        data: bytes,
+        name: str,
+        depth: int,
+        budget: _ExtractionBudget,
+    ) -> list[DocumentText]:
         if depth >= self.max_nesting_depth:
             raise UnsafeArchiveError("Превышена максимальная глубина вложенных архивов")
         results: list[DocumentText] = []
@@ -208,7 +254,15 @@ class DocumentIntelligence:
                     member = archive.read(info)
                     virtual = f"{name}!/{info.filename}"
                     try:
-                        results.extend(self._extract_bytes(member, virtual, Path(info.filename).suffix.lower(), depth + 1, budget))
+                        results.extend(
+                            self._extract_bytes(
+                                member,
+                                virtual,
+                                Path(info.filename).suffix.lower(),
+                                depth + 1,
+                                budget,
+                            )
+                        )
                     except UnsafeArchiveError:
                         raise
                     except (ValueError, zipfile.BadZipFile, UnicodeError):
