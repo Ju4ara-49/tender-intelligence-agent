@@ -11,13 +11,13 @@ from src.collectors.browser_public_reliable import (
     ReliableRtsTenderCollector,
     ReliableTmkCollector,
 )
-from src.collectors.eis_zakupki import EisZakupkiCollector
+from src.collectors.eis_reliable import ReliableEisZakupkiCollector
 from src.collectors.fabrikant_v3 import FabrikantV3Collector
 
 
 # Все поддерживаемые площадки. Конкретное включение управляется Telegram.
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
-    EisZakupkiCollector,
+    ReliableEisZakupkiCollector,
     ReliableB2BCenterCollector,
     FabrikantV3Collector,
     ReliableRtsTenderCollector,
