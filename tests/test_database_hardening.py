@@ -5,6 +5,9 @@ from src.models.tender import Tender
 from src.storage.database import TenderDatabase
 
 
+FIXED_DEADLINE = datetime(2030, 1, 15, 12, 0, tzinfo=timezone.utc)
+
+
 def _tender(price: float = 100.0, title: str = "Подшипник") -> Tender:
     return Tender(
         platform="eis",
@@ -13,7 +16,7 @@ def _tender(price: float = 100.0, title: str = "Подшипник") -> Tender:
         url="https://example.test/tender/123",
         description="Тестовый тендер",
         price=price,
-        deadline=datetime.now(timezone.utc) + timedelta(days=20),
+        deadline=FIXED_DEADLINE,
         region="Москва",
         customer="Тестовый заказчик",
         raw_data={"details": {"price": price}},
