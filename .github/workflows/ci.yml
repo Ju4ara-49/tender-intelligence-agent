@@ -78,9 +78,22 @@ jobs:
           retention-days: 7
 
       - name: Run full pytest suite
+        id: full_pytest
+        continue-on-error: true
         env:
           PYTHONPATH: .
-        run: pytest -q tests
+        run: |
+          set -o pipefail
+          pytest -q tests 2>&1 | tee output/full_pytest.log
+
+      - name: Upload full pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-pytest-diagnostics-${{ github.run_id }}
+          path: output/full_pytest.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run search pipeline regression tests
         env:
@@ -117,3 +130,15 @@ jobs:
           path: output/github_actions_test.db
           if-no-files-found: error
           retention-days: 14
+
+      - name: Fail if captured test suites failed
+        if: always()
+        env:
+          UNITTEST_OUTCOME: ${{ steps.unittest_discovery.outcome }}
+          B2B_OUTCOME: ${{ steps.b2b_quality_gate.outcome }}
+          PYTEST_OUTCOME: ${{ steps.full_pytest.outcome }}
+        run: |
+          echo "unittest=$UNITTEST_OUTCOME b2b_quality_gate=$B2B_OUTCOME full_pytest=$PYTEST_OUTCOME"
+          test "$UNITTEST_OUTCOME" = "success"
+          test "$B2B_OUTCOME" = "success"
+          test "$PYTEST_OUTCOME" = "success"
