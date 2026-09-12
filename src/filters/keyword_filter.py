@@ -124,7 +124,8 @@ class KeywordFilter:
 
         # Conservative two-character stem fallback. This deliberately requires
         # a known noun ending, so "стан" cannot match "станция" while
-        # "станок" matches "станков" and "подшипник" matches "подшипники".
+        # "станок" matches "станки"/"станков" and "подшипник" matches
+        # "подшипники".
         stem = word[:-2]
         if len(stem) < 4:
             return False
