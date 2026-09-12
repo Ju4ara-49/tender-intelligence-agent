@@ -7,22 +7,33 @@ from src.models.tender import Tender
 
 
 _DETAIL_STATUSES = {"success", "partial", "failed"}
+_INN_RE = re.compile(r"(?<!\d)(?:\d{10}|\d{12})(?!\d)")
+
+
+def _normalize_inn(value: object) -> str:
+    """Return only a valid Russian INN (10 or 12 digits)."""
+    if value is None:
+        return ""
+    compact = re.sub(r"\s+", "", str(value)).strip()
+    match = _INN_RE.search(compact)
+    return match.group(0) if match else ""
 
 
 def _extract_inn(tender: Tender) -> str:
-    if str(tender.customer_inn or "").strip():
-        return tender.customer_inn.strip()
+    existing = _normalize_inn(tender.customer_inn)
+    if existing:
+        return existing
+
     raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
     for key in ("customer_inn", "inn", "customerInn", "customer_inn_number"):
         value = raw.get(key)
-        if value:
-            match = re.search(r"\b\d{10}(?:\d{2})?\b", str(value).replace(" ", ""))
-            if match:
-                return match.group(0)
+        normalized = _normalize_inn(value)
+        if normalized:
+            return normalized
 
-    # Some collectors expose the organizer/customer as the only human-readable
-    # source containing the INN. Include it in the fallback extraction instead
-    # of requiring every platform adapter to duplicate the same parsing logic.
+    # Some collectors expose the customer/organizer as the only human-readable
+    # source containing the INN. Include these fields in the common fallback so
+    # platform adapters do not have to duplicate the same extraction logic.
     text_parts = [
         tender.customer,
         tender.description,
@@ -39,7 +50,9 @@ def _extract_inn(tender: Tender) -> str:
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
-            return re.sub(r"\s+", "", match.group(1))
+            normalized = _normalize_inn(match.group(1))
+            if normalized:
+                return normalized
     return ""
 
 
@@ -77,7 +90,7 @@ def enforce_detail_contract(collector) -> None:
                 raw.get("detail_diagnostics") or "Площадка вернула блокировку/WAF/CAPTCHA"
             )[:4000]
         else:
-            tender.customer_inn = tender.customer_inn or _extract_inn(tender)
+            tender.customer_inn = _extract_inn(tender)
             missing = []
             if not str(tender.title or "").strip():
                 missing.append("title")
