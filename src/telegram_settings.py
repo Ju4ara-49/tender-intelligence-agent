@@ -58,7 +58,8 @@ class TenderCriteria:
         self.min_submission_days = self._nonnegative_int(self.min_submission_days, "min_submission_days")
         if not isinstance(self.min_ai_score, int) or isinstance(self.min_ai_score, bool) or not 0 <= self.min_ai_score <= 100:
             raise ValueError("min_ai_score must be an integer from 0 to 100")
-        self.advance_required = bool(self.advance_required)
+        if not isinstance(self.advance_required, bool):
+            raise ValueError("advance_required must be a bool")
         self.exclude_keywords = _clean_list(self.exclude_keywords)
         self.regions = _clean_list(self.regions)
 
