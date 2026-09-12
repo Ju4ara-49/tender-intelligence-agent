@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
+
+import tests.platform_browser_diagnostics as diagnostics
 
 from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence
 
@@ -24,15 +28,49 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
         self.assertIsNone(evidence["result_count"])
         self.assertIsNone(evidence["result_count_evidence"])
 
-    def test_http_403_is_access_block(self) -> None:
-        self.assertEqual(classify_http_access(403), "access_block")
-
-    def test_http_429_is_access_block(self) -> None:
-        self.assertEqual(classify_http_access(429), "access_block")
+    def test_http_401_403_429_are_access_blocks(self) -> None:
+        for status in (401, 403, 429):
+            with self.subTest(status=status):
+                self.assertEqual(classify_http_access(status), "access_block")
 
     def test_normal_http_status_is_not_access_block(self) -> None:
         self.assertIsNone(classify_http_access(200))
+        self.assertIsNone(classify_http_access(500))
         self.assertIsNone(classify_http_access(None))
+
+    def test_supported_targets_are_all_covered(self) -> None:
+        self.assertEqual(
+            set(diagnostics.TARGETS),
+            {
+                "eis",
+                "b2b_center",
+                "fabrikant_223",
+                "fabrikant_44",
+                "rts_tender",
+                "tmk",
+                "rosatom",
+            },
+        )
+
+    def test_script_has_real_entrypoint_to_prevent_false_green(self) -> None:
+        source = Path(diagnostics.__file__).read_text(encoding="utf-8")
+        self.assertIn('if __name__ == "__main__":', source)
+        self.assertIn("raise SystemExit(main())", source)
+
+    def test_report_contract_separates_access_blocks_from_ci_failures(self) -> None:
+        report = {
+            "failures": ["eis: WAF or access block"],
+            "ci_failures": [],
+            "access_blocks": ["eis: WAF or access block"],
+            "access_block_count": 1,
+            "ci_failure_count": 0,
+        }
+        serialized = json.dumps(report, ensure_ascii=False)
+        loaded = json.loads(serialized)
+        self.assertEqual(loaded["access_block_count"], 1)
+        self.assertEqual(loaded["ci_failure_count"], 0)
+        self.assertEqual(loaded["ci_failures"], [])
+        self.assertEqual(len(loaded["access_blocks"]), 1)
 
 
 if __name__ == "__main__":
