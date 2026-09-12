@@ -155,19 +155,19 @@ class TenderDatabase:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(notification_events)").fetchall()}
         indexes = conn.execute("PRAGMA index_list(notification_events)").fetchall()
         has_recipient = "recipient_key" in columns
-        has_recipient_unique = any(
-            "notification_events" in str(row["name"] or "") and False for row in indexes
-        )
+        has_recipient_unique = False
         if has_recipient:
-            # CREATE TABLE IF NOT EXISTS above already gives the desired constraint
-            # on new databases. Existing tables need an explicit uniqueness check.
-            unique_columns: set[str] = set()
+            required = {"tender_id", "event_key", "channel", "recipient_key"}
             for index in indexes:
                 if not index["unique"]:
                     continue
-                for index_row in conn.execute(f"PRAGMA index_info({index['name']})").fetchall():
-                    unique_columns.add(str(index_row["name"]))
-            has_recipient_unique = {"tender_id", "event_key", "channel", "recipient_key"}.issubset(unique_columns)
+                index_columns = {
+                    str(index_row["name"])
+                    for index_row in conn.execute(f"PRAGMA index_info({index['name']})").fetchall()
+                }
+                if index_columns == required:
+                    has_recipient_unique = True
+                    break
         if has_recipient and has_recipient_unique:
             return
 
@@ -211,6 +211,19 @@ class TenderDatabase:
             except (IndexError, KeyError):
                 return None
 
+        raw_data = {}
+        raw_value = value("raw_data")
+        if raw_value:
+            try:
+                parsed = json.loads(raw_value)
+                if isinstance(parsed, dict):
+                    raw_data = parsed
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw_data = {}
+        normalized = raw_data.get("_normalized") if isinstance(raw_data, dict) else {}
+        if not isinstance(normalized, dict):
+            normalized = {}
+
         state = {
             "title": value("title"),
             "url": value("url"),
@@ -222,13 +235,13 @@ class TenderDatabase:
             "published_at": value("published_at"),
             "region": value("region"),
             "customer": value("customer"),
-            "customer_inn": value("customer_inn"),
+            "customer_inn": value("customer_inn") or normalized.get("customer_inn", ""),
             "law_type": value("law_type"),
-            "advance_required": value("advance_required"),
-            "advance_percent": value("advance_percent"),
-            "postpayment_days": value("postpayment_days"),
-            "application_security_percent": value("application_security_percent"),
-            "contract_security_percent": value("contract_security_percent"),
+            "advance_required": normalized.get("advance_required", False),
+            "advance_percent": normalized.get("advance_percent"),
+            "postpayment_days": normalized.get("postpayment_days"),
+            "application_security_percent": normalized.get("application_security_percent"),
+            "contract_security_percent": normalized.get("contract_security_percent"),
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -465,7 +478,7 @@ class TenderDatabase:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             tender = conn.execute(
-                "SELECT id, title, url, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type FROM tenders WHERE id = ?",
+                "SELECT id, title, url, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type, raw_data FROM tenders WHERE id = ?",
                 (tender_id,),
             ).fetchone()
             if tender is None:
