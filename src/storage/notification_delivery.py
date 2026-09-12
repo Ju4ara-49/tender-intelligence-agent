@@ -32,6 +32,7 @@ class NotificationDeliveryState:
         normalized = cls._normalized_fields(tender)
         state = {
             "title": tender.title,
+            "description": tender.description,
             "url": tender.url,
             "price": tender.price,
             "currency": tender.currency,
@@ -63,6 +64,7 @@ class NotificationDeliveryState:
         normalized = normalized if isinstance(normalized, dict) else {}
         state = {
             "title": row["title"],
+            "description": row["description"],
             "url": row["url"],
             "price": row["price"],
             "currency": row["currency"],
@@ -90,7 +92,7 @@ class NotificationDeliveryState:
                 """
                 SELECT n.id AS notification_id, n.tender_id, n.event_key,
                        n.channel, n.sent_at, n.payload,
-                       t.title, t.url, t.price, t.currency,
+                       t.title, t.description, t.url, t.price, t.currency,
                        t.start_date, t.end_date, t.deadline, t.published_at,
                        t.region, t.customer, t.customer_inn, t.law_type, t.raw_data
                 FROM notification_events n
