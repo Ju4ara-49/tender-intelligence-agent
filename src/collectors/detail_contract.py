@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+
 from src.models.tender import Tender
 
 
@@ -18,7 +19,17 @@ def _extract_inn(tender: Tender) -> str:
             match = re.search(r"\b\d{10}(?:\d{2})?\b", str(value).replace(" ", ""))
             if match:
                 return match.group(0)
-    text_parts = [tender.description, str(raw.get("details", ""))]
+
+    # Some collectors expose the organizer/customer as the only human-readable
+    # source containing the INN. Include it in the fallback extraction instead
+    # of requiring every platform adapter to duplicate the same parsing logic.
+    text_parts = [
+        tender.customer,
+        tender.description,
+        str(raw.get("details", "")),
+        str(raw.get("customer", "")),
+        str(raw.get("organizer", "")),
+    ]
     text = " ".join(text_parts)
     digit_pattern = r"(\d(?:\s*\d){9}(?:\s*\d\s*\d)?)"
     patterns = (
