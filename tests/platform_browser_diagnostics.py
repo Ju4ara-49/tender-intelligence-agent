@@ -105,6 +105,18 @@ def perform_search(page, query: str) -> dict[str, object]:
     return evidence
 
 
+def wait_for_initial_dom(page) -> None:
+    """Do not make SPA navigation depend on all document resources finishing."""
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+    except Exception:
+        pass
+    try:
+        page.locator("body").wait_for(state="attached", timeout=5000)
+    except Exception:
+        pass
+
+
 def main() -> int:
     report: dict[str, object] = {}
     failures: list[str] = []
@@ -116,7 +128,8 @@ def main() -> int:
             page = context.new_page()
             entry: dict[str, object] = {"url": url, "query": QUERY}
             try:
-                response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                response = page.goto(url, wait_until="commit", timeout=30000)
+                wait_for_initial_dom(page)
                 page.wait_for_timeout(5000)
                 try:
                     page.wait_for_load_state("networkidle", timeout=5000)
