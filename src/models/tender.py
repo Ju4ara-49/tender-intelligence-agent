@@ -67,6 +67,7 @@ class Tender:
             if value.tzinfo is None:
                 value = value.replace(tzinfo=moscow)
             setattr(self, field_name, value.astimezone(timezone.utc))
+        self._persist_normalized_fields()
         return self
 
     def _enrich_commercial_terms(self) -> None:
