@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
+from urllib.parse import urljoin, urlparse
 
 from src.collectors.fabrikant_v2 import FabrikantV2Collector
 from src.models.tender import Tender
@@ -37,6 +38,27 @@ class FabrikantV3Collector(FabrikantV2Collector):
         if enriched:
             logger.info("fabrikant: region enriched from registry rows: %d", enriched)
         return results
+
+    @staticmethod
+    def _procedure_anchor(row, base_host):
+        """Resolve procedure links against the active Fabrikant host.
+
+        Fabrikant uses separate `soap2` and `soap4` hosts for 223-FZ and
+        44-FZ. The V2 parser previously hard-coded `soap4` when resolving a
+        relative href, which caused relative 223-FZ procedure links to be
+        rejected before the rich registry-row parser could run. Keep the
+        active host supplied by V2 so both registries retain their table
+        metadata (customer, price, dates, etc.).
+        """
+        base_url = f"https://{base_host}/"
+        for anchor in row.find_all("a", href=True):
+            href = str(anchor.get("href", "")).strip()
+            if not href:
+                continue
+            full = urljoin(base_url, href)
+            if urlparse(full).netloc.lower() == base_host.lower() and "/procedure/" in full.lower():
+                return anchor
+        return None
 
     @classmethod
     def _header_index(cls, headers: list[str], names: tuple[str, ...]) -> int | None:
