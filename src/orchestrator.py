@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
-    """Широкий multi-platform pipeline: discovery → dedup → enrich → filters → AI."""
+    """Широкий multi-platform pipeline: discovery → detail → filters → AI → notify."""
 
     def _get_next_search_number(self) -> int:
         return self.db.next_search_number()
@@ -78,76 +78,89 @@ class Orchestrator:
         return value.replace(tzinfo=moscow_offset).astimezone(timezone.utc)
 
     def _normalize_tender_datetimes(self, tender: Tender) -> Tender:
-        tender.start_date = self._normalize_datetime(tender.start_date)
-        tender.end_date = self._normalize_datetime(tender.end_date)
-        tender.deadline = self._normalize_datetime(tender.deadline)
-        tender.published_at = self._normalize_datetime(tender.published_at)
+        tender.to_utc()
         if tender.deadline is None and tender.end_date is not None:
             tender.deadline = tender.end_date
         return tender
 
-    def _enrich_tender(self, collector, tender: Tender) -> tuple[Tender, bool]:
+    @staticmethod
+    def _set_detail_failure(tender: Tender, reason: str) -> Tender:
+        tender.detail_status = "failed"
+        tender.detail_diagnostics = str(reason)[:4000]
+        tender.raw_data["details_loaded"] = False
+        tender.raw_data["detail_status"] = "failed"
+        tender.raw_data["detail_diagnostics"] = tender.detail_diagnostics
+        return tender
+
+    def _merge_detail(self, tender: Tender, detailed: Tender) -> Tender:
+        for field_name in (
+            "title", "description", "price", "currency", "start_date", "end_date",
+            "deadline", "published_at", "region", "customer", "customer_inn", "law_type",
+            "advance_percent", "postpayment_days", "application_security_percent",
+            "contract_security_percent", "url",
+        ):
+            value = getattr(detailed, field_name, None)
+            if value not in (None, ""):
+                setattr(tender, field_name, value)
+        if detailed.advance_percent is not None:
+            tender.advance_required = detailed.advance_percent > 0
+        elif detailed.advance_required:
+            tender.advance_required = True
+        if detailed.field_sources:
+            tender.field_sources.update(detailed.field_sources)
+        if detailed.documents:
+            tender.documents = list(detailed.documents)
+        if detailed.raw_data:
+            for key in (
+                "procurement_method", "application_security", "contract_security",
+                "advance_payment", "postpayment", "lots", "lot", "specification",
+                "specifications", "items", "products",
+            ):
+                if detailed.raw_data.get(key) is not None:
+                    tender.raw_data[key] = detailed.raw_data[key]
+            tender.raw_data["details"] = detailed.raw_data
+        status = str(getattr(detailed, "detail_status", "success") or "success").lower()
+        if status not in {"success", "partial", "failed"}:
+            status = "success"
+        tender.detail_status = status
+        diagnostics = str(getattr(detailed, "detail_diagnostics", "") or "")
+        tender.detail_diagnostics = diagnostics[:4000]
+        tender.raw_data["details_loaded"] = status != "failed"
+        tender.raw_data["detail_status"] = status
+        if diagnostics:
+            tender.raw_data["detail_diagnostics"] = diagnostics[:4000]
+        return self._normalize_tender_datetimes(tender)
+
+    def _enrich_tender(self, collector, tender: Tender) -> tuple[Tender, str]:
         get_details = getattr(collector, "get_details", None)
         if not callable(get_details) or not tender.external_id:
-            return self._normalize_tender_datetimes(tender), False
+            tender.detail_status = "partial"
+            tender.raw_data["details_loaded"] = False
+            tender.raw_data["detail_status"] = "partial"
+            return self._normalize_tender_datetimes(tender), "partial"
         try:
-            logger.info("%s: загружаем детали тендера %s", getattr(collector, "platform", "unknown"), tender.external_id)
+            logger.info(
+                "%s: загружаем детали тендера %s",
+                getattr(collector, "platform", "unknown"), tender.external_id,
+            )
             detailed = get_details(tender.external_id)
-            if detailed:
-                if detailed.title:
-                    tender.title = detailed.title
-                if detailed.description:
-                    tender.description = detailed.description
-                if detailed.price is not None:
-                    tender.price = detailed.price
-                if detailed.currency:
-                    tender.currency = detailed.currency
-                if detailed.start_date:
-                    tender.start_date = detailed.start_date
-                if detailed.end_date:
-                    tender.end_date = detailed.end_date
-                if detailed.deadline:
-                    tender.deadline = detailed.deadline
-                elif detailed.end_date:
-                    tender.deadline = detailed.end_date
-                if detailed.published_at:
-                    tender.published_at = detailed.published_at
-                if detailed.region:
-                    tender.region = detailed.region
-                if detailed.customer:
-                    tender.customer = detailed.customer
-                if detailed.law_type:
-                    tender.law_type = detailed.law_type
-                if detailed.advance_percent is not None:
-                    tender.advance_percent = detailed.advance_percent
-                    tender.advance_required = True
-                elif detailed.advance_required:
-                    tender.advance_required = True
-                if detailed.postpayment_days is not None:
-                    tender.postpayment_days = detailed.postpayment_days
-                if detailed.application_security_percent is not None:
-                    tender.application_security_percent = detailed.application_security_percent
-                if detailed.contract_security_percent is not None:
-                    tender.contract_security_percent = detailed.contract_security_percent
-                if detailed.url:
-                    tender.url = detailed.url
-                if detailed.raw_data:
-                    for key in (
-                        "procurement_method", "application_security", "contract_security",
-                        "advance_payment", "postpayment", "lots", "lot", "specification",
-                        "specifications", "items", "products",
-                    ):
-                        if detailed.raw_data.get(key):
-                            tender.raw_data[key] = detailed.raw_data[key]
-                    tender.raw_data["details"] = detailed.raw_data
-                tender.raw_data["details_loaded"] = True
-            tender = self._normalize_tender_datetimes(tender)
-            loaded = bool(tender.raw_data.get("details_loaded"))
-            logger.info("%s: детали загружены %s | price=%s | customer=%s | deadline=%s", getattr(collector, "platform", "unknown"), tender.external_id, tender.price, bool(tender.customer), tender.deadline)
-            return tender, loaded
-        except Exception:
-            logger.exception("%s: ошибка загрузки деталей %s", getattr(collector, "platform", "unknown"), tender.external_id)
-            return self._normalize_tender_datetimes(tender), False
+            if detailed is None:
+                tender = self._set_detail_failure(tender, "get_details returned None")
+                return self._normalize_tender_datetimes(tender), "failed"
+            tender = self._merge_detail(tender, detailed)
+            logger.info(
+                "%s: детали %s | price=%s | customer=%s | deadline=%s | status=%s",
+                getattr(collector, "platform", "unknown"), tender.external_id,
+                tender.price, bool(tender.customer), tender.deadline, tender.detail_status,
+            )
+            return tender, tender.detail_status
+        except Exception as exc:
+            logger.exception(
+                "%s: ошибка загрузки деталей %s",
+                getattr(collector, "platform", "unknown"), tender.external_id,
+            )
+            tender = self._set_detail_failure(tender, f"{type(exc).__name__}: {exc}")
+            return self._normalize_tender_datetimes(tender), "failed"
 
     def _search_platform(self, collector, keywords: list[str]) -> tuple[str, list[Tender]]:
         platform = getattr(collector, "platform", "unknown")
@@ -233,7 +246,8 @@ class Orchestrator:
             "search_number": search_number, "found": 0, "soft_filtered": 0, "filtered": 0,
             "keyword_excluded": 0, "new": 0, "analyzed": 0, "notified": 0,
             "skipped_duplicate": 0, "excluded_by_criteria": 0, "excluded_by_region": 0,
-            "details_loaded": 0, "details_failed": 0,
+            "details_loaded": 0, "details_partial": 0, "details_failed": 0,
+            "saved": 0, "ai_failed": 0,
         }
         self.clear_stop_request()
         self.last_run_results = []
@@ -242,8 +256,12 @@ class Orchestrator:
         min_text = int(self.settings.config.get("filters", {}).get("min_text_length", 10))
         search_keywords = keywords if keywords is not None else (self.criteria_store.get_keywords(user_id) or self.settings.include_keywords)
         enabled_platforms = platforms if platforms is not None else self.criteria_store.get_enabled_platforms(user_id)
-        exclusions = exclude_keywords if exclude_keywords is not None else self.settings.exclude_keywords
-        logger.info("Поиск: user_id=%s | keywords=%s | platforms=%s | regions=%s", user_id, search_keywords, enabled_platforms, regions or [])
+        exclusions = exclude_keywords if exclude_keywords is not None else criteria.exclude_keywords
+        selected_regions = regions if regions is not None else criteria.regions
+        logger.info(
+            "Поиск: user_id=%s | keywords=%s | platforms=%s | regions=%s",
+            user_id, search_keywords, enabled_platforms, selected_regions,
+        )
 
         self.keyword_filter = KeywordFilter(include=search_keywords, exclude=exclusions, min_text_length=min_text)
         collectors = get_enabled_collectors(self.settings.config, enabled_platforms=enabled_platforms)
@@ -279,27 +297,40 @@ class Orchestrator:
         stats["soft_filtered"] = len(soft_pairs)
 
         enriched_pairs: list[tuple[object, Tender]] = []
+        current_run_tender_ids: list[int] = []
         for collector, tender in soft_pairs:
             if self.stop_requested:
                 break
-            enriched, loaded = self._enrich_tender(collector, tender)
-            stats["details_loaded"] += int(loaded)
-            stats["details_failed"] += int(not loaded and callable(getattr(collector, "get_details", None)))
+            enriched, detail_status = self._enrich_tender(collector, tender)
+            stats["details_loaded"] += int(detail_status == "success")
+            stats["details_partial"] += int(detail_status == "partial")
+            stats["details_failed"] += int(detail_status == "failed")
             enriched_pairs.append((collector, enriched))
+
+            # Persist the discovery/detail result before strict filtering so a
+            # broken detail page is retained for diagnostics and cannot disappear
+            # silently from the run.
+            existing = self.db.exists(enriched.unique_key)
+            tender_id = self.db.save_tender(enriched)
+            current_run_tender_ids.append(tender_id)
+            stats["saved"] += 1
+            if not existing:
+                stats["new"] += 1
 
         strict_pairs: list[tuple[object, Tender]] = []
         for collector, tender in enriched_pairs:
+            if tender.detail_status == "failed":
+                continue
             if self.keyword_filter.matches_strict(tender):
                 strict_pairs.append((collector, tender))
             else:
                 stats["keyword_excluded"] += 1
         stats["filtered"] = len(strict_pairs)
 
-        current_run_tender_ids: list[int] = []
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
-            if not self._passes_regions(tender, regions):
+            if not self._passes_regions(tender, selected_regions):
                 stats["excluded_by_region"] += 1
                 continue
             passed, reason = self._passes_criteria(tender, criteria)
@@ -308,15 +339,19 @@ class Orchestrator:
                 logger.debug("Критерии: исключён %s:%s (%s)", tender.platform, tender.external_id, reason)
                 continue
             self.last_run_results.append(tender)
-            existing = self.db.exists(tender.unique_key)
-            tender_id = self.db.save_tender(tender)
-            current_run_tender_ids.append(tender_id)
-            if existing and self.notification_state.was_notified(tender):
+            tender_id = self.db.get_tender_id(tender.unique_key)
+            if tender_id is None:
+                logger.error("Tender disappeared after save: %s", tender.unique_key)
+                continue
+            if self.notification_state.was_notified(tender):
                 stats["skipped_duplicate"] += 1
                 continue
-            if not existing:
-                stats["new"] += 1
-            analysis = self.analyzer.analyze(tender)
+            try:
+                analysis = self.analyzer.analyze(tender)
+            except Exception as exc:
+                stats["ai_failed"] += 1
+                logger.exception("AI: ошибка анализа %s: %s", tender.unique_key, exc)
+                continue
             self.db.save_analysis(tender_id, analysis)
             stats["analyzed"] += 1
             if analysis.relevance_score < criteria.min_ai_score:
@@ -333,7 +368,9 @@ class Orchestrator:
             output_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             excel_path = output_dir / f"search_{search_number:03d}_{timestamp}.xlsx"
-            export_path = export_tenders_to_excel(self.db, excel_path, tender_ids=current_run_tender_ids, search_number=search_number)
+            export_path = export_tenders_to_excel(
+                self.db, excel_path, tender_ids=current_run_tender_ids, search_number=search_number,
+            )
             logger.info("Excel: создан новый файл текущего прогона: %s", export_path)
             self.email_notifier.send_excel(export_path, search_number)
         except Exception:
@@ -356,8 +393,8 @@ class Orchestrator:
                 criteria=profile.criteria(),
                 keywords=profile.keywords or None,
                 platforms=profile.platforms or None,
-                exclude_keywords=profile.exclusions or None,
-                regions=profile.regions or None,
+                exclude_keywords=profile.exclusions,
+                regions=profile.regions,
             )
             self.profile_store.record_run(user_id, profile.id, stats, started_at=started_at)
             results.append(stats)
