@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from tests.platform_browser_diagnostics import extract_result_evidence
+from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence
 
 
 class PlatformBrowserDiagnosticsTests(unittest.TestCase):
@@ -23,6 +23,16 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
         evidence = extract_result_evidence("Форма поиска загружена")
         self.assertIsNone(evidence["result_count"])
         self.assertIsNone(evidence["result_count_evidence"])
+
+    def test_http_403_is_access_block(self) -> None:
+        self.assertEqual(classify_http_access(403), "access_block")
+
+    def test_http_429_is_access_block(self) -> None:
+        self.assertEqual(classify_http_access(429), "access_block")
+
+    def test_normal_http_status_is_not_access_block(self) -> None:
+        self.assertIsNone(classify_http_access(200))
+        self.assertIsNone(classify_http_access(None))
 
 
 if __name__ == "__main__":
