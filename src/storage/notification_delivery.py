@@ -15,6 +15,9 @@ class NotificationDeliveryState:
     CHANNEL = "telegram"
     DEFAULT_RECIPIENT_KEY = TenderDatabase.DEFAULT_RECIPIENT_KEY
 
+    def __init__(self, db: TenderDatabase) -> None:
+        self.db = db
+
     @staticmethod
     def event_key(tender: Tender) -> str:
         state = {
