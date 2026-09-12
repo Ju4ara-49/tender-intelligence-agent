@@ -259,12 +259,11 @@ class Orchestrator:
         notification_recipient_key: str | None = None,
         notification_chat_id: str | None = None,
     ) -> dict[str, int]:
-        """Run one search and optionally scope Telegram delivery to its recipient.
+        """Run one search and scope Telegram delivery when a user is supplied.
 
-        ``notification_recipient_key`` separates notification history between
-        profiles. ``notification_chat_id`` routes the actual Telegram message to
-        the same user's chat. Both are optional so CLI/scheduled calls retain the
-        configured global Telegram destination.
+        Explicit notification parameters take precedence. Otherwise a user-scoped
+        search uses a stable recipient key and the user's Telegram chat id. CLI or
+        scheduled runs without ``user_id`` keep the configured global destination.
         """
         search_number = self._get_next_search_number()
         stats = {
@@ -283,11 +282,20 @@ class Orchestrator:
         enabled_platforms = platforms if platforms is not None else self.criteria_store.get_enabled_platforms(user_id)
         exclusions = exclude_keywords if exclude_keywords is not None else criteria.exclude_keywords
         selected_regions = regions if regions is not None else criteria.regions
-        recipient_key = str(notification_recipient_key).strip() if notification_recipient_key else NotificationDeliveryState.DEFAULT_RECIPIENT_KEY
+        recipient_key = (
+            str(notification_recipient_key).strip()
+            if notification_recipient_key
+            else (f"user:{str(user_id).strip()}" if user_id is not None and str(user_id).strip() else NotificationDeliveryState.DEFAULT_RECIPIENT_KEY)
+        )
+        target_chat_id = (
+            str(notification_chat_id).strip()
+            if notification_chat_id
+            else (str(user_id).strip() if user_id is not None and str(user_id).strip() else None)
+        )
         logger.info(
             "Поиск: user_id=%s | keywords=%s | platforms=%s | regions=%s | notification_recipient=%s | notification_chat=%s",
             user_id, search_keywords, enabled_platforms, selected_regions, recipient_key,
-            notification_chat_id or self.notifier.chat_id or "<none>",
+            target_chat_id or self.notifier.chat_id or "<none>",
         )
 
         self.keyword_filter = KeywordFilter(include=search_keywords, exclude=exclusions, min_text_length=min_text)
@@ -387,7 +395,7 @@ class Orchestrator:
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
-            if self.notifier.send_tender_alert(tender, analysis, chat_id=notification_chat_id):
+            if self.notifier.send_tender_alert(tender, analysis, chat_id=target_chat_id):
                 self.notification_state.mark_notified(tender, recipient_key=recipient_key)
                 stats["notified"] += 1
 
