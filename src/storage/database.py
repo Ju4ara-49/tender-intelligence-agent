@@ -187,7 +187,7 @@ class TenderDatabase:
             )
             """
         )
-        source_columns = {row["name"] for row in conn.execute("PRAGMA table_info(notification_events").fetchall()}
+        source_columns = {row["name"] for row in conn.execute("PRAGMA table_info(notification_events)").fetchall()}
         recipient_expression = "recipient_key" if "recipient_key" in source_columns else "'__legacy__'"
         conn.execute(
             f"""
