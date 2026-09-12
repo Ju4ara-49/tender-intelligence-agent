@@ -3,6 +3,8 @@ name: Platform Browser Diagnostics
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/PROJECT_CHECKPOINT_*.md"
   workflow_dispatch:
 
 permissions:
