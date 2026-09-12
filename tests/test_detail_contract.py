@@ -82,3 +82,34 @@ def test_detail_contract_extracts_inn_from_raw_organizer() -> None:
     enforce_detail_contract(collector)
     result = collector.get_details("3")
     assert result.customer_inn == "7701122334"
+
+
+def test_detail_contract_normalizes_spaced_inn() -> None:
+    tender = Tender(
+        platform="dummy",
+        external_id="4",
+        title="Title",
+        url="https://example.test/4",
+        customer_inn="770 123 456 7",
+        price=100,
+    )
+    collector = DummyCollector(tender)
+    enforce_detail_contract(collector)
+    result = collector.get_details("4")
+    assert result.customer_inn == "7701234567"
+
+
+def test_detail_contract_ignores_invalid_customer_inn_and_uses_text_fallback() -> None:
+    tender = Tender(
+        platform="dummy",
+        external_id="5",
+        title="Title",
+        url="https://example.test/5",
+        customer_inn="неизвестно",
+        customer="ООО Тест, ИНН 7707654321",
+        price=100,
+    )
+    collector = DummyCollector(tender)
+    enforce_detail_contract(collector)
+    result = collector.get_details("5")
+    assert result.customer_inn == "7707654321"
