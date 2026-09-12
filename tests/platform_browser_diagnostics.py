@@ -152,6 +152,8 @@ def main() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(locale="ru-RU")
+        context.set_default_timeout(5000)
+        context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
         for name, url in TARGETS.items():
             page = context.new_page()
             entry: dict[str, object] = {"url": url, "query": QUERY}
@@ -210,7 +212,11 @@ def main() -> int:
                         message = f"{name}: search returned no result evidence"
                         failures.append(message)
                         ci_failures.append(message)
-                page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+                # A full-page screenshot can become unbounded on infinite-scroll
+                # portals and was able to stall the entire 7-platform diagnostic.
+                # The report already contains text/DOM evidence, so a viewport
+                # screenshot is sufficient and has a deterministic size.
+                page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=10000)
             except Exception as exc:
                 entry["error"] = repr(exc)
                 entry["diagnostic_state"] = "exception"
