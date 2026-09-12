@@ -30,14 +30,25 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
 
-      - name: Run deterministic tests
+      - name: Run unittest discovery
         env:
           PYTHONPATH: .
-        run: |
-          python -m unittest discover -s tests
-          python test_b2b_parser.py
-          python tests/test_b2b_reliable_adapter.py
-          python tests/test_b2b_quality_gate.py
+        run: python -m unittest discover -s tests -v
+
+      - name: Run B2B parser tests
+        env:
+          PYTHONPATH: .
+        run: python test_b2b_parser.py
+
+      - name: Run B2B reliable adapter tests
+        env:
+          PYTHONPATH: .
+        run: python tests/test_b2b_reliable_adapter.py
+
+      - name: Run B2B quality gate tests
+        env:
+          PYTHONPATH: .
+        run: python tests/test_b2b_quality_gate.py
 
       - name: Run full pytest suite
         env:
