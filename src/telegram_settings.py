@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from src.storage.database import TenderDatabase
-
 
 SUPPORTED_PLATFORMS = ["eis", "b2b_center", "fabrikant", "rts_tender", "tmk", "rosatom"]
 
@@ -39,6 +39,66 @@ class TenderCriteria:
     min_ai_score: int = 70
     exclude_keywords: list[str] = field(default_factory=list)
     regions: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.min_price = self._finite_nonnegative(self.min_price, "min_price")
+        self.max_price = self._finite_nonnegative(self.max_price, "max_price")
+        if self.min_price is not None and self.max_price is not None and self.min_price > self.max_price:
+            raise ValueError("min_price cannot exceed max_price")
+        self.min_advance_percent = self._percent(self.min_advance_percent, "min_advance_percent")
+        self.min_application_security_percent = self._percent(self.min_application_security_percent, "min_application_security_percent")
+        self.max_application_security_percent = self._optional_percent(self.max_application_security_percent, "max_application_security_percent")
+        self.min_contract_security_percent = self._percent(self.min_contract_security_percent, "min_contract_security_percent")
+        self.max_contract_security_percent = self._optional_percent(self.max_contract_security_percent, "max_contract_security_percent")
+        if self.max_application_security_percent is not None and self.min_application_security_percent > self.max_application_security_percent:
+            raise ValueError("min_application_security_percent cannot exceed max_application_security_percent")
+        if self.max_contract_security_percent is not None and self.min_contract_security_percent > self.max_contract_security_percent:
+            raise ValueError("min_contract_security_percent cannot exceed max_contract_security_percent")
+        self.max_postpayment_days = self._optional_nonnegative_int(self.max_postpayment_days, "max_postpayment_days")
+        self.min_submission_days = self._nonnegative_int(self.min_submission_days, "min_submission_days")
+        if not isinstance(self.min_ai_score, int) or isinstance(self.min_ai_score, bool) or not 0 <= self.min_ai_score <= 100:
+            raise ValueError("min_ai_score must be an integer from 0 to 100")
+        self.advance_required = bool(self.advance_required)
+        self.exclude_keywords = _clean_list(self.exclude_keywords)
+        self.regions = _clean_list(self.regions)
+
+    @staticmethod
+    def _finite_nonnegative(value: float | None, name: str) -> float | None:
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a finite non-negative number") from None
+        if not math.isfinite(number) or number < 0:
+            raise ValueError(f"{name} must be a finite non-negative number")
+        return number
+
+    @classmethod
+    def _percent(cls, value: float, name: str) -> float:
+        number = cls._finite_nonnegative(value, name)
+        assert number is not None
+        if number > 100:
+            raise ValueError(f"{name} must be between 0 and 100")
+        return number
+
+    @classmethod
+    def _optional_percent(cls, value: float | None, name: str) -> float | None:
+        if value is None:
+            return None
+        return cls._percent(value, name)
+
+    @staticmethod
+    def _nonnegative_int(value: int, name: str) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{name} must be a non-negative integer")
+        return value
+
+    @classmethod
+    def _optional_nonnegative_int(cls, value: int | None, name: str) -> int | None:
+        if value is None:
+            return None
+        return cls._nonnegative_int(value, name)
 
 
 class CriteriaStore:
@@ -182,6 +242,15 @@ class CriteriaStore:
         if not values:
             return
         user_id = self._user_id_and_ensure(user_id)
+        current = self.get(user_id)
+        merged = {field_name: getattr(current, field_name) for field_name in (
+            "min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days",
+            "min_submission_days", "min_application_security_percent", "max_application_security_percent",
+            "min_contract_security_percent", "max_contract_security_percent", "min_ai_score",
+        )}
+        merged.update(values)
+        candidate = TenderCriteria(**merged)
+        values = {key: getattr(candidate, key) for key in values}
         values["updated_at"] = datetime.now(timezone.utc).isoformat()
         fields = ", ".join(f"{key} = ?" for key in values)
         with self.db._connect() as conn:
