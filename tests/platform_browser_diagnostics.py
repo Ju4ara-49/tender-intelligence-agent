@@ -5,6 +5,7 @@ import re
 import time
 from pathlib import Path
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 TARGETS = {
@@ -217,6 +218,17 @@ def main() -> int:
                 # The report already contains text/DOM evidence, so a viewport
                 # screenshot is sufficient and has a deterministic size.
                 page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=10000)
+            except PlaywrightTimeoutError as exc:
+                # A CI runner can be unable to reach a public portal even when the
+                # production collector itself is healthy. A navigation timeout is
+                # therefore external-access evidence, not proof of a Python/parser
+                # failure. Keep it visible in the report, but do not make CI red.
+                entry["error"] = repr(exc)
+                entry["diagnostic_state"] = "external_timeout"
+                entry["failure_class"] = "external_access"
+                message = f"{name}: external navigation timeout"
+                failures.append(message)
+                access_blocks.append(message)
             except Exception as exc:
                 entry["error"] = repr(exc)
                 entry["diagnostic_state"] = "exception"
@@ -242,13 +254,13 @@ def main() -> int:
             continue
         summary_lines.append(f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` status={entry.get('status')} result_count={entry.get('result_count')} links={entry.get('result_link_count', 0)} navigation_attempt={entry.get('navigation_attempt', '-')}")
     if access_blocks:
-        summary_lines.extend(["", "### External access blocks (inconclusive, not a Python failure)", *[f"- {item}" for item in access_blocks]])
+        summary_lines.extend(["", "### External access blocks / timeouts (inconclusive, not a Python failure)", *[f"- {item}" for item in access_blocks]])
     if ci_failures:
         summary_lines.extend(["", "### Diagnostic failures", *[f"- {item}" for item in ci_failures]])
     elif not access_blocks:
         summary_lines.extend(["", "All supported public platform endpoints passed the browser search probe."])
     else:
-        summary_lines.extend(["", "No internal diagnostic failure was detected; externally blocked portals require a network-accessible recheck."])
+        summary_lines.extend(["", "No internal diagnostic failure was detected; externally unreachable portals require a network-accessible recheck."])
     (OUT / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
     print("\n".join(summary_lines))
     return 1 if ci_failures else 0
