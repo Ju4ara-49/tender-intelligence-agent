@@ -357,6 +357,7 @@ class TenderDatabase:
             "raw_data",
         )
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             previous = conn.execute("SELECT * FROM tenders WHERE unique_key = ?", (tender.unique_key,)).fetchone()
             conn.execute(
                 """
