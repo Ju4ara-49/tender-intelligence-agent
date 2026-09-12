@@ -89,8 +89,6 @@ class ReliableBrowserSearchMixin:
                 self.platform, query,
             )
         logger.info("%s: keyword=%r: search_control=%s, принято %d результатов", self.platform, query, search_control_found, len(results))
-        if search_control_found and not results:
-            logger.warning("%s: RESULT_PARSER_ZERO — поиск был отправлен, но парсер не нашёл процедур для %r", self.platform, query)
         return results
 
     def _parse_detail(self, html: str, external_id: str, url: str):
@@ -120,6 +118,19 @@ class ReliableBrowserSearchMixin:
             )
             if match:
                 tender.customer = re.sub(r"\s+", " ", match.group(1)).strip(" ;,")[:1000]
+
+        if not tender.customer_inn:
+            inn_patterns = (
+                r"(?:ИНН|И\.Н\.Н\.)\s*[:№]?\s*(\d(?:\s*\d){9}(?:\s*\d\s*\d)?)\b",
+                r"\bИНН\s*(\d(?:\s*\d){9}(?:\s*\d\s*\d)?)\b",
+            )
+            for pattern in inn_patterns:
+                match = re.search(pattern, text, re.I)
+                if match:
+                    candidate = re.sub(r"\s+", "", match.group(1))
+                    if len(candidate) in (10, 12):
+                        tender.customer_inn = candidate
+                        break
 
         if not tender.law_type:
             match = re.search(r"\b(44\s*-?\s*ФЗ|223\s*-?\s*ФЗ)\b", text, re.I)
