@@ -1,4 +1,4 @@
-﻿"""Фильтрация тендеров по ключевым словам из конфигурации."""
+"""Фильтрация тендеров по ключевым словам из конфигурации."""
 
 from __future__ import annotations
 
@@ -34,15 +34,14 @@ class KeywordFilter:
         "система видеонаблюдения", "оборудование для дск", "дск",
     )
 
-    # Suffixes that commonly represent Russian noun declension/number.
-    # Keeping the list explicit prevents short stems such as "стан" from
-    # matching unrelated words such as "станция".
-    RUSSIAN_NOUN_SUFFIXES = (
-        "ками", "ками", "ках", "ков", "кев", "ки", "ка", "ку", "ке", "ко",
+    # Russian noun endings used for the conservative morphology fallback.
+    # The fallback is deliberately narrow: short stems such as "стан" must
+    # never match unrelated words such as "станция".
+    RUSSIAN_NOUN_SUFFIXES = {
         "ами", "ями", "ами", "ями", "ов", "ев", "ей", "ах", "ях",
-        "ам", "ям", "ом", "ем", "ою", "ею", "ой", "ей", "ью", "у", "ю",
-        "а", "я", "ы", "и", "е", "о",
-    )
+        "ам", "ям", "ом", "ем", "ою", "ею", "ой", "ей", "ью",
+        "а", "я", "ы", "и", "е", "о", "у", "ю", "ку", "ке", "ко", "ка", "ки", "ков", "ками",
+    }
 
     def __init__(self, include: list[str], exclude: list[str], min_text_length: int = 10) -> None:
         self.include = [k.strip() for k in include if k and k.strip()]
@@ -69,37 +68,9 @@ class KeywordFilter:
                 return False
         return True
 
-    @staticmethod
-    def _b2b_details_complete(tender: Tender) -> bool:
-        """Do not publish B2B cards when detail enrichment produced a skeleton."""
-        if tender.platform != "b2b_center":
-            return True
-        if not tender.raw_data.get("details_loaded"):
-            logger.warning(
-                "B2B-Center: reject incomplete tender %s: details were not loaded",
-                tender.external_id,
-            )
-            return False
-        missing: list[str] = []
-        if not str(tender.customer or "").strip():
-            missing.append("customer")
-        if tender.price is None:
-            missing.append("price")
-        if tender.deadline is None:
-            missing.append("deadline")
-        if missing:
-            logger.warning(
-                "B2B-Center: reject incomplete tender %s: missing=%s",
-                tender.external_id, ",".join(missing),
-            )
-            return False
-        return True
-
     def matches_strict(self, tender: Tender) -> bool:
         """Финальный INCLUDE-фильтр по полному тексту тендера."""
         if not self.matches_soft(tender):
-            return False
-        if not self._b2b_details_complete(tender):
             return False
         if not self.include:
             return True
@@ -133,11 +104,6 @@ class KeywordFilter:
         pattern_lower = cls._normalize(pattern)
         if not pattern_lower:
             return False
-        if pattern_lower in text:
-            return True
-        if len(pattern_lower) <= 3:
-            return False
-
         words = re.findall(r"[\w-]+", pattern_lower, re.UNICODE)
         if not words:
             return False
@@ -147,18 +113,20 @@ class KeywordFilter:
 
     @classmethod
     def _contains_word(cls, text: str, word: str) -> bool:
-        if word in text:
+        if re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", text, re.UNICODE):
             return True
-        if len(word) <= 3:
+        if len(word) < 6:
             return False
 
-        stem = word[:-2] if len(word) >= 6 else word[:-1]
+        # Conservative stem: remove the last two characters and accept only
+        # known noun endings. This handles e.g. подшипник/подшипники/
+        # подшипников without turning a short stem into a substring search.
+        stem = word[:-2]
         if len(stem) < 4:
             return False
-
-        pattern = rf"\b{re.escape(stem)}(?P<suffix>[\w-]*)\b"
+        pattern = rf"(?<![\w-]){re.escape(stem)}(?P<suffix>[\w-]*)(?![\w-])"
         for match in re.finditer(pattern, text, re.UNICODE):
             suffix = match.group("suffix")
-            if not suffix or suffix in cls.RUSSIAN_NOUN_SUFFIXES:
+            if suffix in cls.RUSSIAN_NOUN_SUFFIXES:
                 return True
         return False
