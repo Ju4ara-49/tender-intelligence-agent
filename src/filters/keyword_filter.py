@@ -34,13 +34,15 @@ class KeywordFilter:
         "система видеонаблюдения", "оборудование для дск", "дск",
     )
 
-    # Russian noun endings used for the conservative morphology fallback.
-    # The fallback is deliberately narrow: short stems such as "стан" must
-    # never match unrelated words such as "станция".
+    # Conservative endings used only after an unambiguous noun stem.
+    # The important property is that a short stem such as "стан" is never
+    # reduced to "стан"/"ст" and then matched as a substring of "станция".
     RUSSIAN_NOUN_SUFFIXES = {
-        "ами", "ями", "ами", "ями", "ов", "ев", "ей", "ах", "ях",
-        "ам", "ям", "ом", "ем", "ою", "ею", "ой", "ей", "ью",
-        "а", "я", "ы", "и", "е", "о", "у", "ю", "ку", "ке", "ко", "ка", "ки", "ков", "ками",
+        "а", "я", "ы", "и", "е", "о", "у", "ю", "ь",
+        "ов", "ев", "ей", "ам", "ям", "ом", "ем", "ах", "ях",
+        "ами", "ями", "ою", "ею", "ой", "ей", "ью",
+        # Pattern "подшипник" -> stem "подшипн" + these endings.
+        "ик", "ика", "ику", "иком", "ике", "ики", "иков", "иками", "иках",
     }
 
     def __init__(self, include: list[str], exclude: list[str], min_text_length: int = 10) -> None:
@@ -118,9 +120,9 @@ class KeywordFilter:
         if len(word) < 6:
             return False
 
-        # Conservative stem: remove the last two characters and accept only
-        # known noun endings. This handles e.g. подшипник/подшипники/
-        # подшипников without turning a short stem into a substring search.
+        # Conservative two-character stem fallback. This deliberately requires
+        # a known noun ending, so "стан" cannot match "станция" while
+        # "подшипник" matches "подшипники", "подшипников", etc.
         stem = word[:-2]
         if len(stem) < 4:
             return False
