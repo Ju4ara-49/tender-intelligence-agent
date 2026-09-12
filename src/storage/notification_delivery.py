@@ -14,6 +14,7 @@ class NotificationDeliveryState:
 
     CHANNEL = "telegram"
     DEFAULT_RECIPIENT_KEY = TenderDatabase.DEFAULT_RECIPIENT_KEY
+    LEGACY_RECIPIENT_KEY = "__legacy__"
 
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
@@ -75,7 +76,7 @@ class NotificationDeliveryState:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _repair_legacy_default_events(self) -> None:
-        """Bring pre-STEP-25 default-recipient events to the canonical fingerprint."""
+        """Normalize legacy delivery rows into one canonical default-recipient event."""
         with self.db._connect() as conn:
             rows = conn.execute(
                 """
@@ -97,13 +98,21 @@ class NotificationDeliveryState:
                     (row["tender_id"], row["channel"], self.DEFAULT_RECIPIENT_KEY),
                 ).fetchall()
                 if len(existing) == 1 and existing[0]["event_key"] == key:
+                    conn.execute(
+                        """
+                        DELETE FROM notification_events
+                        WHERE tender_id = ? AND channel = ? AND recipient_key = ?
+                          AND recipient_key = ?
+                        """,
+                        (row["tender_id"], row["channel"], self.LEGACY_RECIPIENT_KEY, self.LEGACY_RECIPIENT_KEY),
+                    )
                     continue
                 conn.execute(
                     """
                     DELETE FROM notification_events
-                    WHERE tender_id = ? AND channel = ? AND recipient_key = ?
+                    WHERE tender_id = ? AND channel = ? AND recipient_key IN (?, ?)
                     """,
-                    (row["tender_id"], row["channel"], self.DEFAULT_RECIPIENT_KEY),
+                    (row["tender_id"], row["channel"], self.DEFAULT_RECIPIENT_KEY, self.LEGACY_RECIPIENT_KEY),
                 )
                 conn.execute(
                     """
@@ -119,6 +128,11 @@ class NotificationDeliveryState:
                         row["sent_at"], row["payload"],
                     ),
                 )
+
+            conn.execute(
+                "DELETE FROM notification_events WHERE recipient_key = ?",
+                (self.LEGACY_RECIPIENT_KEY,),
+            )
 
     def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
         """Return True only when this exact state was delivered to this recipient."""
