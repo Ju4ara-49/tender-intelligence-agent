@@ -32,11 +32,24 @@ jobs:
       - name: Probe all supported public tender portals
         run: python tests/platform_browser_diagnostics.py
 
+      - name: Validate diagnostics artifacts
+        if: always()
+        run: |
+          test -s output/platform_browser_diagnostics/report.json
+          test -s output/platform_browser_diagnostics/summary.md
+          test -s output/platform_browser_diagnostics/eis.png
+          test -s output/platform_browser_diagnostics/b2b_center.png
+          test -s output/platform_browser_diagnostics/fabrikant_223.png
+          test -s output/platform_browser_diagnostics/fabrikant_44.png
+          test -s output/platform_browser_diagnostics/rts_tender.png
+          test -s output/platform_browser_diagnostics/tmk.png
+          test -s output/platform_browser_diagnostics/rosatom.png
+
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: platform-browser-diagnostics
           path: output/platform_browser_diagnostics/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
