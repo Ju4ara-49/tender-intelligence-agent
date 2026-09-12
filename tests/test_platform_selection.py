@@ -18,7 +18,7 @@ class PlatformSelectionTests(unittest.TestCase):
             set(SUPPORTED_PLATFORMS),
         )
 
-    def test_explicit_selection_overrides_config(self):
+    def test_explicit_selection_cannot_override_disabled_config(self):
         config = {
             "collectors": {
                 platform: {"enabled": False}
@@ -26,10 +26,7 @@ class PlatformSelectionTests(unittest.TestCase):
             }
         }
         collectors = get_enabled_collectors(config, enabled_platforms=["eis", "b2b_center"])
-        self.assertEqual(
-            {collector.platform for collector in collectors},
-            {"eis", "b2b_center"},
-        )
+        self.assertEqual(collectors, [])
 
 
 if __name__ == "__main__":
