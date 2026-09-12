@@ -388,22 +388,37 @@ class Orchestrator:
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
+
+            # was_notified() reserves the delivery slot for this worker. From
+            # this point every exit path must either mark the event as delivered
+            # or release the reservation, otherwise a failed AI/send path can
+            # suppress retries until the claim TTL expires.
             try:
-                analysis = self.analyzer.analyze(tender)
-            except Exception as exc:
-                stats["ai_failed"] += 1
-                logger.exception("AI: ошибка анализа %s: %s", tender.unique_key, exc)
-                continue
-            self.db.save_analysis(tender_id, analysis)
-            stats["analyzed"] += 1
-            if analysis.relevance_score < criteria.min_ai_score:
-                continue
-            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
-                stats["skipped_duplicate"] += 1
-                continue
-            if self.notifier.send_tender_alert(tender, analysis, chat_id=target_chat_id):
-                self.notification_state.mark_notified(tender, recipient_key=recipient_key)
-                stats["notified"] += 1
+                try:
+                    analysis = self.analyzer.analyze(tender)
+                except Exception as exc:
+                    stats["ai_failed"] += 1
+                    logger.exception("AI: ошибка анализа %s: %s", tender.unique_key, exc)
+                    self.notification_state.release_claim(tender, recipient_key=recipient_key)
+                    continue
+
+                self.db.save_analysis(tender_id, analysis)
+                stats["analyzed"] += 1
+                if analysis.relevance_score < criteria.min_ai_score:
+                    self.notification_state.release_claim(tender, recipient_key=recipient_key)
+                    continue
+
+                sent = self.notifier.send_tender_alert(tender, analysis, chat_id=target_chat_id)
+                if sent:
+                    self.notification_state.mark_notified(tender, recipient_key=recipient_key)
+                    stats["notified"] += 1
+                else:
+                    self.notification_state.release_claim(tender, recipient_key=recipient_key)
+            except Exception:
+                # The claim must never survive an unexpected failure in
+                # persistence, notification, or any future code added here.
+                self.notification_state.release_claim(tender, recipient_key=recipient_key)
+                raise
 
         try:
             output_dir = Path(self.settings.config.get("export", {}).get("output_dir", "output"))
