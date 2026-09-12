@@ -241,12 +241,18 @@ class Orchestrator:
 
     @staticmethod
     def _passes_regions(tender: Tender, regions: list[str] | None) -> bool:
-        if not regions:
+        valid_regions = [
+            str(region).strip().casefold()
+            for region in (regions or [])
+            if str(region).strip()
+        ]
+        # A profile containing only empty region values is equivalent to no filter.
+        if not valid_regions:
             return True
         tender_region = (tender.region or "").strip().casefold()
         if not tender_region:
             return False
-        return any(region.strip().casefold() in tender_region for region in regions if region.strip())
+        return any(region in tender_region for region in valid_regions)
 
     def run_cycle(
         self,
