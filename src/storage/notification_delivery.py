@@ -18,7 +18,6 @@ class NotificationDeliveryState:
 
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
-        self._repaired_event_keys: dict[int, str] = {}
         self._repair_legacy_default_events()
 
     @staticmethod
@@ -86,12 +85,11 @@ class NotificationDeliveryState:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _repair_legacy_default_events(self) -> None:
-        """Migrate only legacy-recipient events without deleting canonical history."""
+        """Migrate legacy-recipient events while preserving their original fingerprints."""
         with self.db._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT n.id AS notification_id, n.tender_id, n.event_key,
-                       n.channel, n.sent_at, n.payload,
+                SELECT n.tender_id, n.event_key, n.channel, n.sent_at, n.payload,
                        t.title, t.description, t.url, t.price, t.currency,
                        t.start_date, t.end_date, t.deadline, t.published_at,
                        t.region, t.customer, t.customer_inn, t.law_type, t.raw_data
@@ -104,34 +102,25 @@ class NotificationDeliveryState:
             ).fetchall()
 
             for row in rows:
-                key = self._event_key_from_row(row)
-                tender_id = int(row["tender_id"])
-                self._repaired_event_keys[tender_id] = key
-
-                existing = conn.execute(
+                # A legacy row already contains the historical fingerprint. Recomputing it
+                # from today's tender would collapse historical versions into the current one.
+                key = str(row["event_key"] or "").strip() or self._event_key_from_row(row)
+                conn.execute(
                     """
-                    SELECT 1 FROM notification_events
-                    WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                    INSERT INTO notification_events
+                        (tender_id, event_key, channel, recipient_key, sent_at, payload)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tender_id, event_key, channel, recipient_key) DO NOTHING
                     """,
-                    (tender_id, key, row["channel"], self.DEFAULT_RECIPIENT_KEY),
-                ).fetchone()
-                if existing is None:
-                    conn.execute(
-                        """
-                        INSERT INTO notification_events
-                            (tender_id, event_key, channel, recipient_key, sent_at, payload)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(tender_id, event_key, channel, recipient_key) DO NOTHING
-                        """,
-                        (
-                            tender_id,
-                            key,
-                            row["channel"],
-                            self.DEFAULT_RECIPIENT_KEY,
-                            row["sent_at"],
-                            row["payload"],
-                        ),
-                    )
+                    (
+                        int(row["tender_id"]),
+                        key,
+                        row["channel"],
+                        self.DEFAULT_RECIPIENT_KEY,
+                        row["sent_at"],
+                        row["payload"],
+                    ),
+                )
 
             conn.execute(
                 "DELETE FROM notification_events WHERE recipient_key = ?",
@@ -152,20 +141,7 @@ class NotificationDeliveryState:
                 """,
                 (tender_id, event_key, self.CHANNEL, recipient_key),
             ).fetchone()
-            if row is not None:
-                return True
-
-            repaired_key = self._repaired_event_keys.get(tender_id)
-            if repaired_key is None or recipient_key != self.DEFAULT_RECIPIENT_KEY:
-                return False
-            repaired = conn.execute(
-                """
-                SELECT 1 FROM notification_events
-                WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
-                """,
-                (tender_id, repaired_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
-            ).fetchone()
-        return repaired is not None
+        return row is not None
 
     def mark_notified(
         self,
