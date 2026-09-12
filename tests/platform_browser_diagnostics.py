@@ -7,9 +7,6 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-# This is intentionally the complete supported-platform smoke matrix. The
-# regular unit tests exercise collectors offline; this probe checks that every
-# public platform is reachable and exposes a usable search surface.
 TARGETS = {
     "eis": "https://zakupki.gov.ru/epz/order/extendedsearch/results.html",
     "b2b_center": "https://www.b2b-center.ru/market/",
@@ -27,19 +24,12 @@ NAVIGATION_ATTEMPTS = 3
 RETRY_DELAYS_SECONDS = (2, 5)
 
 SEARCH_SELECTORS = (
-    "input[type='search']",
-    "input[name*='search' i]",
-    "input[name*='query' i]",
-    "input[name*='keyword' i]",
-    "input[name*='searchString' i]",
-    "input[placeholder*='поиск' i]",
-    "input[placeholder*='закуп' i]",
-    "input[placeholder*='наимен' i]",
-    "input[placeholder*='ключев' i]",
-    "input[aria-label*='поиск' i]",
-    "input[aria-label*='закуп' i]",
-    "textarea[placeholder*='поиск' i]",
-    "[contenteditable='true']",
+    "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
+    "input[name*='keyword' i]", "input[name*='searchString' i]",
+    "input[placeholder*='поиск' i]", "input[placeholder*='закуп' i]",
+    "input[placeholder*='наимен' i]", "input[placeholder*='ключев' i]",
+    "input[aria-label*='поиск' i]", "input[aria-label*='закуп' i]",
+    "textarea[placeholder*='поиск' i]", "[contenteditable='true']",
 )
 SEARCH_LABELS = ("Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти", "Применить")
 ACCESS_BLOCK_STATUSES = frozenset({401, 403, 429})
@@ -53,20 +43,13 @@ def visible(locator) -> bool:
 
 
 def classify_http_access(status: int | None) -> str | None:
-    """Return the diagnostic class for an upstream access/rate-limit response."""
     if status in ACCESS_BLOCK_STATUSES:
         return "access_block"
     return None
 
 
 def goto_with_retries(page, url: str, *, timeout_ms: int = NAVIGATION_TIMEOUT_MS, attempts: int = NAVIGATION_ATTEMPTS):
-    """Navigate with bounded retries for intermittent public-portal transport failures.
-
-    A single Chromium navigation timeout is not enough evidence that a public
-    portal is unavailable: the affected Russian procurement sites sometimes
-    have transient TLS/connectivity delays from hosted runners. We retry a
-    small fixed number of times, never bypassing WAF/CAPTCHA or access control.
-    """
+    """Retry only transient navigation failures; never bypass access controls."""
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
@@ -77,13 +60,6 @@ def goto_with_retries(page, url: str, *, timeout_ms: int = NAVIGATION_TIMEOUT_MS
             if attempt >= attempts:
                 raise
             time.sleep(RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)])
-            try:
-                page.close()
-            except Exception:
-                pass
-            # The caller cannot reuse a closed page, so recreate it through the
-            # page's browser context on the next attempt.
-            page = page.context.new_page()
     assert last_error is not None
     raise last_error
 
@@ -91,7 +67,6 @@ def goto_with_retries(page, url: str, *, timeout_ms: int = NAVIGATION_TIMEOUT_MS
 def perform_search(page, query: str) -> dict[str, object]:
     frames = [page.main_frame] + [frame for frame in page.frames if frame != page.main_frame]
     evidence: dict[str, object] = {"control_found": False, "selector": None, "frame_url": None}
-
     for frame in frames:
         for label in SEARCH_LABELS:
             try:
@@ -102,7 +77,6 @@ def perform_search(page, query: str) -> dict[str, object]:
                     break
             except Exception:
                 continue
-
     for frame in frames:
         for selector in SEARCH_SELECTORS:
             try:
@@ -128,7 +102,6 @@ def perform_search(page, query: str) -> dict[str, object]:
                 return evidence
             except Exception:
                 continue
-
         try:
             textbox = frame.get_by_role("textbox").first
             if visible(textbox):
@@ -138,7 +111,6 @@ def perform_search(page, query: str) -> dict[str, object]:
                 return evidence
         except Exception:
             continue
-
     return evidence
 
 
@@ -154,12 +126,6 @@ def wait_for_initial_dom(page) -> None:
 
 
 def extract_result_evidence(text: str) -> dict[str, object]:
-    """Detect an explicit result state even when the portal has no result links.
-
-    A legitimate search may return zero procedures. The previous probe treated
-    that as a failure merely because no <a> elements were present, which made a
-    valid Fabrikant 223-FZ empty result look like a parser/transport failure.
-    """
     normalized = " ".join(text.split())
     patterns = (
         r"\bВсего\s*:\s*([0-9][0-9\s]*)\b",
@@ -181,7 +147,6 @@ def extract_result_evidence(text: str) -> dict[str, object]:
 def main() -> int:
     report: dict[str, object] = {}
     failures: list[str] = []
-
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(locale="ru-RU")
@@ -197,7 +162,6 @@ def main() -> int:
                     page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
                     pass
-
                 entry["status"] = response.status if response else None
                 entry["final_url"] = page.url
                 entry["title"] = page.title()
@@ -205,23 +169,14 @@ def main() -> int:
                 lower_body = body_text.lower()
                 entry["waf"] = "web application firewall" in lower_body or "временно заблокирован" in lower_body
                 entry["http_access_class"] = classify_http_access(response.status if response else None)
-                entry["inputs"] = page.locator("input").evaluate_all(
-                    "els => els.map(e => ({type:e.type,name:e.name,placeholder:e.placeholder,aria:e.getAttribute('aria-label'),id:e.id,visible:!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)}))"
-                )
-                entry["buttons"] = page.locator("button").evaluate_all(
-                    "els => els.map(e => ({text:(e.innerText||'').trim(),aria:e.getAttribute('aria-label'),title:e.title,type:e.type,visible:!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)})).filter(x => x.visible).slice(0,100)"
-                )
+                entry["inputs"] = page.locator("input").evaluate_all("els => els.map(e => ({type:e.type,name:e.name,placeholder:e.placeholder,aria:e.getAttribute('aria-label'),id:e.id,visible:!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)}))")
+                entry["buttons"] = page.locator("button").evaluate_all("els => els.map(e => ({text:(e.innerText||'').trim(),aria:e.getAttribute('aria-label'),title:e.title,type:e.type,visible:!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)})).filter(x => x.visible).slice(0,100)")
                 entry["before_excerpt"] = body_text[:12000]
-
                 access_class = entry["http_access_class"]
                 if entry["waf"] or access_class:
                     entry["diagnostic_state"] = "waf_or_block" if entry["waf"] else "http_access_block"
                     entry["failure_class"] = "access_block"
-                    failures.append(
-                        f"{name}: access block (HTTP {entry['status']})"
-                        if access_class
-                        else f"{name}: WAF or access block"
-                    )
+                    failures.append(f"{name}: access block (HTTP {entry['status']})" if access_class else f"{name}: WAF or access block")
                 else:
                     entry["search"] = perform_search(page, QUERY)
                     page.wait_for_timeout(5000)
@@ -230,11 +185,8 @@ def main() -> int:
                     except Exception:
                         pass
                     result_text = page.locator("body").inner_text(timeout=5000)
-                    result_evidence = extract_result_evidence(result_text)
-                    entry.update(result_evidence)
-                    links = page.locator("a[href]").evaluate_all(
-                        "els => els.map(e => ({text:(e.innerText||'').trim().slice(0,300),href:e.href})).filter(x => x.text || x.href).slice(0,200)"
-                    )
+                    entry.update(extract_result_evidence(result_text))
+                    links = page.locator("a[href]").evaluate_all("els => els.map(e => ({text:(e.innerText||'').trim().slice(0,300),href:e.href})).filter(x => x.text || x.href).slice(0,200)")
                     entry["after_excerpt"] = result_text[:12000]
                     entry["result_links"] = links
                     entry["result_link_count"] = len(links)
@@ -244,19 +196,12 @@ def main() -> int:
                         entry["diagnostic_state"] = "search_control_missing"
                         entry["failure_class"] = "search_adapter"
                         failures.append(f"{name}: search control missing")
-                    elif result_count is not None:
-                        # Explicit result counts, including zero, prove that the
-                        # query reached a real result surface. Zero is not itself
-                        # a collector failure: the chosen smoke keyword may simply
-                        # have no current matches on that platform.
-                        entry["diagnostic_state"] = "ok"
-                    elif links:
+                    elif result_count is not None or links:
                         entry["diagnostic_state"] = "ok"
                     else:
                         entry["diagnostic_state"] = "search_returned_no_evidence"
                         entry["failure_class"] = "search_result_surface"
                         failures.append(f"{name}: search returned no result evidence")
-
                 page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
             except Exception as exc:
                 entry["error"] = repr(exc)
@@ -266,24 +211,16 @@ def main() -> int:
             finally:
                 page.close()
             report[name] = entry
-
         context.close()
         browser.close()
-
     report["failures"] = failures
     (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
-
     summary_lines = ["## Platform browser diagnostics", "", f"Query: `{QUERY}`", ""]
     for name, entry in report.items():
         if name == "failures":
             continue
-        summary_lines.append(
-            f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` "
-            f"status={entry.get('status')} result_count={entry.get('result_count')} "
-            f"links={entry.get('result_link_count', 0)} "
-            f"navigation_attempt={entry.get('navigation_attempt', '-') }"
-        )
+        summary_lines.append(f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` status={entry.get('status')} result_count={entry.get('result_count')} links={entry.get('result_link_count', 0)} navigation_attempt={entry.get('navigation_attempt', '-')}")
     if failures:
         summary_lines.extend(["", "### Failures", *[f"- {item}" for item in failures]])
     else:
