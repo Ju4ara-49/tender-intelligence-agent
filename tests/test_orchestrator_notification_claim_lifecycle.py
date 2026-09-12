@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -57,7 +58,7 @@ def _make_orchestrator(tmp_path, analyzer, notifier):
         platform="test",
         config={"lookback_days": 3},
         search=lambda keywords, since: [tender],
-        get_details=lambda external_id: tender,
+        get_details=lambda external_id: deepcopy(tender),
     )
     settings = SimpleNamespace(
         config={
