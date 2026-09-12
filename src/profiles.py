@@ -128,6 +128,49 @@ class SearchProfileStore:
                 """
             )
 
+            # Existing installations may have these tables from the pre-profile
+            # schema. CREATE TABLE IF NOT EXISTS does not add new columns, so
+            # migrate every field used by the current dataclasses explicitly.
+            profile_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({self.PROFILES_TABLE})").fetchall()}
+            profile_migrations = {
+                "keywords": "TEXT NOT NULL DEFAULT '[]'",
+                "exclusions": "TEXT NOT NULL DEFAULT '[]'",
+                "platforms": "TEXT NOT NULL DEFAULT '[]'",
+                "regions": "TEXT NOT NULL DEFAULT '[]'",
+                "min_price": "REAL",
+                "max_price": "REAL",
+                "advance_required": "INTEGER NOT NULL DEFAULT 0",
+                "min_advance_percent": "REAL NOT NULL DEFAULT 0",
+                "max_postpayment_days": "INTEGER",
+                "min_submission_days": "INTEGER NOT NULL DEFAULT 7",
+                "min_application_security_percent": "REAL NOT NULL DEFAULT 0",
+                "max_application_security_percent": "REAL",
+                "min_contract_security_percent": "REAL NOT NULL DEFAULT 0",
+                "max_contract_security_percent": "REAL",
+                "min_ai_score": "INTEGER NOT NULL DEFAULT 70",
+                "enabled": "INTEGER NOT NULL DEFAULT 1",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+                "updated_at": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column, definition in profile_migrations.items():
+                if column not in profile_columns:
+                    conn.execute(f"ALTER TABLE {self.PROFILES_TABLE} ADD COLUMN {column} {definition}")
+
+            run_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({self.RUNS_TABLE})").fetchall()}
+            run_migrations = {
+                "search_number": "INTEGER",
+                "found": "INTEGER NOT NULL DEFAULT 0",
+                "filtered": "INTEGER NOT NULL DEFAULT 0",
+                "new_count": "INTEGER NOT NULL DEFAULT 0",
+                "analyzed": "INTEGER NOT NULL DEFAULT 0",
+                "notified": "INTEGER NOT NULL DEFAULT 0",
+                "duplicates": "INTEGER NOT NULL DEFAULT 0",
+                "excluded_by_criteria": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for column, definition in run_migrations.items():
+                if column not in run_columns:
+                    conn.execute(f"ALTER TABLE {self.RUNS_TABLE} ADD COLUMN {column} {definition}")
+
     @classmethod
     def _from_row(cls, row) -> SearchProfile:
         return SearchProfile(
