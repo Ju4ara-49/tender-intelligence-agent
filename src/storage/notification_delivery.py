@@ -299,3 +299,13 @@ class NotificationDeliveryState:
                 """,
                 claim_key,
             )
+            if recipient_key != self.DEFAULT_RECIPIENT_KEY:
+                default_event = conn.execute(
+                    """
+                    SELECT 1 FROM notification_events
+                    WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                    """,
+                    (tender_id, event_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
+                ).fetchone()
+                if default_event is None:
+                    conn.execute("DELETE FROM notifications WHERE tender_id = ?", (tender_id,))
