@@ -1,4 +1,4 @@
-﻿"""Модели тендера и результата AI-анализа."""
+"""Модели тендера и результата AI-анализа."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ class Tender:
 
     region: str = ""
     customer: str = ""
+    customer_inn: str = ""
     law_type: str = ""
 
     advance_required: bool = False
@@ -36,10 +37,27 @@ class Tender:
     application_security_percent: float | None = None
     contract_security_percent: float | None = None
 
+    # Detail loading contract. Keep these fields optional so old collectors and
+    # persisted objects remain compatible while the orchestrator migrates to the
+    # unified contract.
+    detail_status: str = "success"
+    detail_diagnostics: str = ""
+    field_sources: dict[str, str] = field(default_factory=dict)
+    documents: list[dict[str, str]] = field(default_factory=list)
+
     raw_data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize timestamps and recover common commercial terms from detail text."""
+        self.to_utc()
+        self._enrich_commercial_terms()
+
+    def to_utc(self) -> Tender:
+        """Normalize all tender timestamps to UTC.
+
+        Naive datetimes are interpreted as Moscow time for backward compatibility
+        with existing collectors. The operation is idempotent for aware values.
+        """
         moscow = timezone(timedelta(hours=3), name="MSK")
         for field_name in ("start_date", "end_date", "published_at", "deadline"):
             value = getattr(self, field_name)
@@ -48,8 +66,7 @@ class Tender:
             if value.tzinfo is None:
                 value = value.replace(tzinfo=moscow)
             setattr(self, field_name, value.astimezone(timezone.utc))
-
-        self._enrich_commercial_terms()
+        return self
 
     def _enrich_commercial_terms(self) -> None:
         """Fill unified commercial fields from Russian tender detail text.
@@ -149,7 +166,7 @@ class Tender:
     @property
     def full_text(self) -> str:
         """Полный поисковый текст, включая детали, лоты и спецификации."""
-        parts = [self.title, self.description, self.customer, self.region]
+        parts = [self.title, self.description, self.customer, self.region, self.customer_inn]
         raw = self.raw_data or {}
         for key in ("details", "lots", "lot", "specification", "specifications", "items", "products"):
             if key in raw:
