@@ -364,7 +364,7 @@ class TenderDatabase:
         tracked_fields = (
             "title", "url", "description", "price", "currency", "start_date", "end_date",
             "deadline", "published_at", "region", "customer", "customer_inn", "law_type",
-            "raw_data",
+            "detail_status", "detail_diagnostics", "raw_data",
         )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -426,6 +426,7 @@ class TenderDatabase:
                     "deadline": previous["deadline"], "published_at": previous["published_at"],
                     "region": previous["region"], "customer": previous["customer"],
                     "customer_inn": previous["customer_inn"], "law_type": previous["law_type"],
+                    "detail_status": previous["detail_status"], "detail_diagnostics": previous["detail_diagnostics"],
                     "raw_data": self._canonical_json(previous["raw_data"]),
                 }
                 current_values = {
@@ -435,6 +436,7 @@ class TenderDatabase:
                     "deadline": snapshot["deadline"], "published_at": snapshot["published_at"],
                     "region": snapshot["region"], "customer": snapshot["customer"],
                     "customer_inn": snapshot["customer_inn"], "law_type": snapshot["law_type"],
+                    "detail_status": snapshot["detail_status"], "detail_diagnostics": snapshot["detail_diagnostics"],
                     "raw_data": self._canonical_json(snapshot["raw_data"]),
                 }
                 changed_fields = [field for field in tracked_fields if previous_values[field] != current_values[field]]
@@ -518,13 +520,3 @@ class TenderDatabase:
                 """,
                 (tender_id, channel, now, json.dumps(payload or {}, ensure_ascii=False)),
             )
-
-    def count_tenders(self) -> int:
-        with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS c FROM tenders").fetchone()
-        return int(row["c"])
-
-    def count_notifications(self) -> int:
-        with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS c FROM notification_events").fetchone()
-        return int(row["c"])
