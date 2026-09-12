@@ -75,7 +75,7 @@ class MultiUserTelegramBot(TelegramBot):
     def _show_users(self, chat_id: str) -> None:
         users = sorted(self._allowed_user_ids)
         lines = ["<b>👥 Разрешённые пользователи</b>", "", f"Всего: {len(users)}", ""]
-        lines.extend(f"• <code>{x}</code>{' — владелец' if x == OWNER_TELEGRAM_ID else ''}" for x in users)
+        lines.extend(f"• <code>{html.escape(x)}</code>{' — владелец' if x == self.owner_telegram_id else ''}" for x in users)
         self._send(chat_id, "\n".join(lines), self._admin_keyboard())
 
     def _add_user(self, chat_id: str, user_id: str) -> None:
@@ -83,7 +83,7 @@ class MultiUserTelegramBot(TelegramBot):
             self._allowed_user_ids.add(user_id)
             self._save_allowed_user_ids()
         self._admin_waiting.pop(chat_id, None)
-        self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> добавлен.", self._admin_keyboard())
+        self._send(chat_id, f"✅ Пользователь <code>{html.escape(user_id)}</code> добавлен.", self._admin_keyboard())
 
     def _remove_user(self, chat_id: str, user_id: str) -> None:
         if user_id == self.owner_telegram_id:
@@ -93,7 +93,7 @@ class MultiUserTelegramBot(TelegramBot):
             self._allowed_user_ids.discard(user_id)
             self._save_allowed_user_ids()
         self._admin_waiting.pop(chat_id, None)
-        self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> удалён.", self._admin_keyboard())
+        self._send(chat_id, f"✅ Пользователь <code>{html.escape(user_id)}</code> удалён.", self._admin_keyboard())
 
     def _admin_command(self, chat_id: str, text: str) -> bool:
         if not self._is_owner(chat_id):
@@ -210,8 +210,6 @@ class MultiUserTelegramBot(TelegramBot):
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.", self._keyboard())
         try:
-            # Критерии, keywords и площадки передаются в Orchestrator явно.
-            # Никакого общего user context для потока не используется.
             stats = orchestrator.run_cycle(user_id=chat_id)
             self._send_search_results(chat_id, orchestrator)
             elapsed = int(time.monotonic() - started_at)
