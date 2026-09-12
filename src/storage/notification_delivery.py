@@ -13,6 +13,7 @@ class NotificationDeliveryState:
     """Tracks notification delivery by a meaningful Tender state fingerprint."""
 
     CHANNEL = "telegram"
+    DEFAULT_RECIPIENT_KEY = TenderDatabase.DEFAULT_RECIPIENT_KEY
 
     @staticmethod
     def event_key(tender: Tender) -> str:
@@ -38,20 +39,28 @@ class NotificationDeliveryState:
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def was_notified(self, tender: Tender) -> bool:
-        """Return True only when this exact rich tender state was delivered."""
+    def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
+        """Return True only when this exact state was delivered to this recipient."""
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             return False
         key = self.event_key(tender)
         with self.db._connect() as conn:
             row = conn.execute(
-                "SELECT 1 FROM notification_events WHERE tender_id = ? AND event_key = ? AND channel = ?",
-                (tender_id, key, self.CHANNEL),
+                """
+                SELECT 1 FROM notification_events
+                WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                """,
+                (tender_id, key, self.CHANNEL, recipient_key),
             ).fetchone()
         return row is not None
 
-    def mark_notified(self, tender: Tender, payload: dict | None = None) -> None:
+    def mark_notified(
+        self,
+        tender: Tender,
+        payload: dict | None = None,
+        recipient_key: str = DEFAULT_RECIPIENT_KEY,
+    ) -> None:
         """Record the rich tender fingerprint as the delivered notification event."""
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
@@ -61,4 +70,5 @@ class NotificationDeliveryState:
             channel=self.CHANNEL,
             payload=payload,
             event_key=self.event_key(tender),
+            recipient_key=recipient_key,
         )
