@@ -362,3 +362,60 @@ class SearchProfileStore:
                 min_ai_score=criteria.min_ai_score,
             ),
         )
+
+    def record_run(self, user_id: str | int, profile_id: int, stats: dict[str, int], *, started_at: str | None = None) -> None:
+        user_id = str(user_id).strip()
+        if not user_id:
+            raise ValueError("user_id обязателен")
+        started = started_at or self._now()
+        finished = self._now()
+        with self.db._connect() as conn:
+            owner = conn.execute(
+                f"SELECT 1 FROM {self.PROFILES_TABLE} WHERE id = ? AND user_id = ?", (profile_id, user_id)
+            ).fetchone()
+            if owner is None:
+                raise KeyError(profile_id)
+            conn.execute(
+                f"""
+                INSERT INTO {self.RUNS_TABLE} (
+                    profile_id, search_number, started_at, finished_at, found, filtered,
+                    new_count, analyzed, notified, duplicates, excluded_by_criteria
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    profile_id,
+                    stats.get("search_number"),
+                    started,
+                    finished,
+                    int(stats.get("found", 0)),
+                    int(stats.get("filtered", 0)),
+                    int(stats.get("new", stats.get("new_count", 0))),
+                    int(stats.get("analyzed", 0)),
+                    int(stats.get("notified", 0)),
+                    int(stats.get("skipped_duplicate", stats.get("duplicates", 0))),
+                    int(stats.get("excluded_by_criteria", 0)),
+                ),
+            )
+
+    def stats(self, user_id: str | int, profile_id: int) -> dict[str, int]:
+        user_id = str(user_id).strip()
+        with self.db._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS runs,
+                       COALESCE(SUM(found), 0) AS found,
+                       COALESCE(SUM(filtered), 0) AS filtered,
+                       COALESCE(SUM(new_count), 0) AS new_count,
+                       COALESCE(SUM(analyzed), 0) AS analyzed,
+                       COALESCE(SUM(notified), 0) AS notified,
+                       COALESCE(SUM(duplicates), 0) AS duplicates,
+                       COALESCE(SUM(excluded_by_criteria), 0) AS excluded_by_criteria
+                FROM {self.RUNS_TABLE} r
+                JOIN {self.PROFILES_TABLE} p ON p.id = r.profile_id
+                WHERE r.profile_id = ? AND p.user_id = ?
+                """,
+                (profile_id, user_id),
+            ).fetchone()
+        if row is None:
+            return {"runs": 0, "found": 0, "filtered": 0, "new_count": 0, "analyzed": 0, "notified": 0, "duplicates": 0, "excluded_by_criteria": 0}
+        return {key: int(row[key]) for key in ("runs", "found", "filtered", "new_count", "analyzed", "notified", "duplicates", "excluded_by_criteria")}
