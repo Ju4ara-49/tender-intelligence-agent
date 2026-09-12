@@ -5,7 +5,14 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+# This is intentionally the complete supported-platform smoke matrix.  The
+# regular unit tests exercise collectors offline; this probe checks that every
+# public platform is reachable and exposes a usable search surface.
 TARGETS = {
+    "eis": "https://zakupki.gov.ru/epz/order/extendedsearch/results.html",
+    "b2b_center": "https://www.b2b-center.ru/market/",
+    "fabrikant_223": "https://soap2.fabrikant.ru/223/catalog/procedure/published",
+    "fabrikant_44": "https://soap4.fabrikant.ru/44/catalog/procedure",
     "rts_tender": "https://www.rts-tender.ru/",
     "tmk": "https://zakupki.tmk-group.com/",
     "rosatom": "https://zakupki.rosatom.ru/?link=published_procurements",
@@ -19,6 +26,7 @@ SEARCH_SELECTORS = (
     "input[name*='search' i]",
     "input[name*='query' i]",
     "input[name*='keyword' i]",
+    "input[name*='searchString' i]",
     "input[placeholder*='поиск' i]",
     "input[placeholder*='закуп' i]",
     "input[placeholder*='наимен' i]",
@@ -28,7 +36,7 @@ SEARCH_SELECTORS = (
     "textarea[placeholder*='поиск' i]",
     "[contenteditable='true']",
 )
-SEARCH_LABELS = ("Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти")
+SEARCH_LABELS = ("Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти", "Применить")
 
 
 def visible(locator) -> bool:
@@ -40,11 +48,7 @@ def visible(locator) -> bool:
 
 def perform_search(page, query: str) -> dict[str, object]:
     frames = [page.main_frame] + [frame for frame in page.frames if frame != page.main_frame]
-    evidence: dict[str, object] = {
-        "control_found": False,
-        "selector": None,
-        "frame_url": None,
-    }
+    evidence: dict[str, object] = {"control_found": False, "selector": None, "frame_url": None}
 
     for frame in frames:
         for label in SEARCH_LABELS:
@@ -64,8 +68,7 @@ def perform_search(page, query: str) -> dict[str, object]:
                 if not visible(locator):
                     continue
                 locator.fill(query)
-                value = locator.input_value()
-                if value != query:
+                if locator.input_value() != query:
                     continue
                 try:
                     locator.press("Enter")
@@ -79,11 +82,7 @@ def perform_search(page, query: str) -> dict[str, object]:
                             break
                     except Exception:
                         continue
-                evidence.update({
-                    "control_found": True,
-                    "selector": selector,
-                    "frame_url": frame.url,
-                })
+                evidence.update({"control_found": True, "selector": selector, "frame_url": frame.url})
                 return evidence
             except Exception:
                 continue
@@ -93,11 +92,7 @@ def perform_search(page, query: str) -> dict[str, object]:
             if visible(textbox):
                 textbox.fill(query)
                 textbox.press("Enter")
-                evidence.update({
-                    "control_found": True,
-                    "selector": "role=textbox",
-                    "frame_url": frame.url,
-                })
+                evidence.update({"control_found": True, "selector": "role=textbox", "frame_url": frame.url})
                 return evidence
         except Exception:
             continue
@@ -106,7 +101,6 @@ def perform_search(page, query: str) -> dict[str, object]:
 
 
 def wait_for_initial_dom(page) -> None:
-    """Do not make SPA navigation depend on all document resources finishing."""
     try:
         page.wait_for_load_state("domcontentloaded", timeout=10000)
     except Exception:
@@ -152,6 +146,7 @@ def main() -> int:
 
                 if entry["waf"]:
                     entry["diagnostic_state"] = "waf_or_block"
+                    failures.append(f"{name}: WAF or access block")
                 else:
                     entry["search"] = perform_search(page, QUERY)
                     page.wait_for_timeout(5000)
@@ -189,9 +184,7 @@ def main() -> int:
         browser.close()
 
     report["failures"] = failures
-    (OUT / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
     summary_lines = ["## Platform browser diagnostics", "", f"Query: `{QUERY}`", ""]
@@ -205,7 +198,7 @@ def main() -> int:
     if failures:
         summary_lines.extend(["", "### Failures", *[f"- {item}" for item in failures]])
     else:
-        summary_lines.extend(["", "All non-blocked portals passed the basic browser search probe."])
+        summary_lines.extend(["", "All supported public platform endpoints passed the browser search probe."])
     (OUT / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
     print("\n".join(summary_lines))
     return 1 if failures else 0
