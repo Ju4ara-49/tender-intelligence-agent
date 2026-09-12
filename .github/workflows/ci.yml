@@ -31,8 +31,6 @@ jobs:
           python -m pip install pytest
 
       - name: Run unittest discovery
-        id: unittest_discovery
-        continue-on-error: true
         env:
           PYTHONPATH: .
         run: |
@@ -60,8 +58,6 @@ jobs:
         run: python tests/test_b2b_reliable_adapter.py
 
       - name: Run B2B quality gate tests
-        id: b2b_quality_gate
-        continue-on-error: true
         env:
           PYTHONPATH: .
         run: |
@@ -78,8 +74,6 @@ jobs:
           retention-days: 7
 
       - name: Run full pytest suite
-        id: full_pytest
-        continue-on-error: true
         env:
           PYTHONPATH: .
         run: |
@@ -130,15 +124,3 @@ jobs:
           path: output/github_actions_test.db
           if-no-files-found: error
           retention-days: 14
-
-      - name: Fail if captured test suites failed
-        if: always()
-        env:
-          UNITTEST_OUTCOME: ${{ steps.unittest_discovery.outcome }}
-          B2B_OUTCOME: ${{ steps.b2b_quality_gate.outcome }}
-          PYTEST_OUTCOME: ${{ steps.full_pytest.outcome }}
-        run: |
-          echo "unittest=$UNITTEST_OUTCOME b2b_quality_gate=$B2B_OUTCOME full_pytest=$PYTEST_OUTCOME"
-          test "$UNITTEST_OUTCOME" = "success"
-          test "$B2B_OUTCOME" = "success"
-          test "$PYTEST_OUTCOME" = "success"
