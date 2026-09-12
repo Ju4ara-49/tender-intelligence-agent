@@ -59,24 +59,34 @@ class KeywordFilter:
         normalized = cls._normalize(pattern)
         return normalized in {cls._normalize(item) for item in cls.GENERIC_INCLUDE_PATTERNS}
 
+    def _has_direct_include_match(self, text: str) -> bool:
+        """Allow a short title that itself exactly matches an include keyword.
+
+        The minimum-text guard is meant to reject empty/skeleton discovery rows,
+        not legitimate procedures whose entire title is a short keyword such as
+        ``Подшипник``.  This check does not bypass exclusions.
+        """
+        normalized = self._normalize(text)
+        return any(self._contains(normalized, pattern) for pattern in self.include)
+
     def matches_soft(self, tender: Tender) -> bool:
         """Дешёвый pre-filter: исключения + минимальный объём текста."""
         full_text = tender.full_text or ""
-        if len(full_text) < self.min_text_length:
-            logger.debug("Пропуск %s: слишком короткий текст", tender.unique_key)
-            return False
         normalized = self._normalize(full_text)
         for pattern in self.exclude:
             if self._contains(normalized, pattern):
                 logger.debug("Пропуск %s: найдено исключение «%s»", tender.unique_key, pattern)
                 return False
+        if len(full_text) < self.min_text_length and not self._has_direct_include_match(full_text):
+            logger.debug("Пропуск %s: слишком короткий текст", tender.unique_key)
+            return False
         return True
 
     @staticmethod
     def _b2b_details_are_complete(tender: Tender) -> bool:
         """Require successful detail loading before strict B2B-Center matching.
 
-        B2B-Center discovery intentionally returns lightweight rows.  Those rows
+        B2B-Center discovery intentionally returns lightweight rows. Those rows
         are not safe for final filtering because title-only data can produce false
         positives and missing commercial fields can bypass downstream criteria.
         The detail collector marks a successful load with ``details_loaded=True``.
@@ -87,10 +97,6 @@ class KeywordFilter:
         raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
         if raw.get("details_loaded") is not True:
             return False
-
-        # These fields are the minimum contract used by the B2B quality gate.
-        # Empty customer/price/deadline means the detail page was not parsed
-        # completely enough for a strict match, even if the page itself loaded.
         if not str(tender.customer or "").strip():
             return False
         if tender.price is None:
