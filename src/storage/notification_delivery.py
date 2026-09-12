@@ -14,9 +14,6 @@ class NotificationDeliveryState:
 
     CHANNEL = "telegram"
 
-    def __init__(self, db: TenderDatabase) -> None:
-        self.db = db
-
     @staticmethod
     def event_key(tender: Tender) -> str:
         state = {
@@ -30,6 +27,7 @@ class NotificationDeliveryState:
             "published_at": tender.published_at.isoformat() if tender.published_at else None,
             "region": tender.region,
             "customer": tender.customer,
+            "customer_inn": tender.customer_inn,
             "law_type": tender.law_type,
             "advance_required": tender.advance_required,
             "advance_percent": tender.advance_percent,
