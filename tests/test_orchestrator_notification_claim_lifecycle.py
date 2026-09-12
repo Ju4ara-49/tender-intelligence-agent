@@ -80,10 +80,16 @@ def _make_orchestrator(tmp_path, analyzer, notifier):
     runner._stop_requested = False
     runner.last_run_results = []
     runner._get_next_search_number = lambda: 1
+    runner.db.save_analysis = lambda *args, **kwargs: None
     return runner, collector, tender, db
 
 
-def _run(monkeypatch, runner, collector, tender):
+def _claim_count(db):
+    with db._connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM notification_delivery_claims").fetchone()[0]
+
+
+def _run(monkeypatch, runner, collector):
     monkeypatch.setattr(orchestrator_module, "get_enabled_collectors", lambda config, enabled_platforms=None: [collector])
     monkeypatch.setattr(orchestrator_module, "export_tenders_to_excel", lambda *args, **kwargs: args[1])
     return runner.run_cycle(criteria=TenderCriteria(min_submission_days=0), keywords=["подшипников"], platforms=["test"])
@@ -103,10 +109,10 @@ def test_run_cycle_releases_notification_claim_on_non_delivery_paths(
 ):
     runner, collector, tender, db = _make_orchestrator(tmp_path, analyzer, notifier)
 
-    stats = _run(monkeypatch, runner, collector, tender)
+    stats = _run(monkeypatch, runner, collector)
 
     assert stats[expected_stat] == 1
-    assert db._connect().execute("SELECT COUNT(*) FROM notification_delivery_claims").fetchone()[0] == 0
+    assert _claim_count(db) == 0
 
     # The event was not delivered, so another worker must be able to reserve it
     # immediately rather than waiting for the ten-minute stale-claim TTL.
@@ -119,9 +125,9 @@ def test_run_cycle_marks_delivery_and_leaves_no_claim(tmp_path, monkeypatch):
     notifier = _FakeNotifier(True)
     runner, collector, tender, db = _make_orchestrator(tmp_path, analyzer, notifier)
 
-    stats = _run(monkeypatch, runner, collector, tender)
+    stats = _run(monkeypatch, runner, collector)
 
     assert stats["notified"] == 1
     assert notifier.calls == 1
-    assert db._connect().execute("SELECT COUNT(*) FROM notification_delivery_claims").fetchone()[0] == 0
+    assert _claim_count(db) == 0
     assert runner.notification_state.was_notified(tender) is True
