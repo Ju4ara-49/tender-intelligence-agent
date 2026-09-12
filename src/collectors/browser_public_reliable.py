@@ -15,9 +15,27 @@ logger = logging.getLogger(__name__)
 class ReliableBrowserSearchMixin:
     """Search helper that tolerates delayed widgets, frames and pagination."""
 
+    @staticmethod
+    def _wait_for_initial_dom(page) -> None:
+        """Do not make SPA search depend on every document resource finishing."""
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
+        try:
+            page.locator("body").wait_for(state="attached", timeout=5000)
+        except Exception:
+            pass
+
+    def _goto(self, page, url: str) -> None:
+        """Navigate without waiting for long-lived XHR/WebSocket requests."""
+        page.goto(url, wait_until="commit", timeout=self.timeout_ms)
+        self._wait_for_initial_dom(page)
+
     def _search_one(self, query: str):
         logger.info("%s: поиск по ключевому слову: %s", self.platform, query)
         search_control_found = False
+        html = ""
         try:
             from playwright.sync_api import sync_playwright
 
@@ -33,7 +51,7 @@ class ReliableBrowserSearchMixin:
                     ),
                 )
                 page = context.new_page()
-                page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                self._goto(page, self.BASE_URL)
                 page.wait_for_timeout(6500)
                 self._dismiss_consent(page)
 
