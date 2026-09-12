@@ -108,8 +108,10 @@ class Orchestrator:
             tender.advance_required = True
         if detailed.field_sources:
             tender.field_sources.update(detailed.field_sources)
+            tender.raw_data["field_sources"] = dict(tender.field_sources)
         if detailed.documents:
             tender.documents = list(detailed.documents)
+            tender.raw_data["documents"] = [dict(item) for item in tender.documents]
         if detailed.raw_data:
             for key in (
                 "procurement_method", "application_security", "contract_security",
@@ -119,6 +121,11 @@ class Orchestrator:
                 if detailed.raw_data.get(key) is not None:
                     tender.raw_data[key] = detailed.raw_data[key]
             tender.raw_data["details"] = detailed.raw_data
+
+        if tender.documents:
+            tender.raw_data["documents"] = [dict(item) for item in tender.documents]
+        if tender.field_sources:
+            tender.raw_data["field_sources"] = dict(tender.field_sources)
         status = str(getattr(detailed, "detail_status", "success") or "success").lower()
         if status not in {"success", "partial", "failed"}:
             status = "success"
