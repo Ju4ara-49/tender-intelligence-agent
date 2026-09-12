@@ -35,14 +35,16 @@ class KeywordFilter:
     )
 
     # Conservative endings used only after an unambiguous noun stem.
-    # The important property is that a short stem such as "стан" is never
-    # reduced to "стан"/"ст" and then matched as a substring of "станция".
+    # A short stem such as "стан" is therefore not treated as a substring:
+    # "станция" has the suffix "ция", which is not in this allow-list.
     RUSSIAN_NOUN_SUFFIXES = {
         "а", "я", "ы", "и", "е", "о", "у", "ю", "ь",
         "ов", "ев", "ей", "ам", "ям", "ом", "ем", "ах", "ях",
-        "ами", "ями", "ою", "ею", "ой", "ей", "ью",
-        # Pattern "подшипник" -> stem "подшипн" + these endings.
+        "ами", "ями", "ою", "ею", "ой", "ью",
+        # Pattern "подшипник" -> stem "подшипн".
         "ик", "ика", "ику", "иком", "ике", "ики", "иков", "иками", "иках",
+        # Pattern "станок" -> stem "стан".
+        "к", "ка", "ку", "ком", "ке", "ки", "ков", "ками", "ках",
     }
 
     def __init__(self, include: list[str], exclude: list[str], min_text_length: int = 10) -> None:
@@ -122,7 +124,7 @@ class KeywordFilter:
 
         # Conservative two-character stem fallback. This deliberately requires
         # a known noun ending, so "стан" cannot match "станция" while
-        # "подшипник" matches "подшипники", "подшипников", etc.
+        # "станок" matches "станков" and "подшипник" matches "подшипники".
         stem = word[:-2]
         if len(stem) < 4:
             return False
