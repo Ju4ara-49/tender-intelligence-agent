@@ -17,6 +17,7 @@ _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 _REQUEST_TIMEOUT_SECONDS = 120
 _MAX_ATTEMPTS = 2
+_ALLOWED_RECOMMENDATIONS = {"participate", "review", "skip"}
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -110,9 +111,11 @@ class TenderAnalyzer:
             ) from exc
 
         if response.status_code == 404:
+            response_text = str(response.text or "").strip()
             raise OllamaModelNotFoundError(
-                f"Ollama вернул 404 для модели '{self.model}' по адресу {url}. "
-                f"Убедитесь, что модель установлена: `ollama pull {self.model}`."
+                f"Ollama вернул HTTP 404 для модели '{self.model}' по адресу {url}. "
+                f"Проверьте, что Ollama доступен и модель установлена: `ollama pull {self.model}`. "
+                f"Ответ сервера: {response_text[:200] or '<пусто>'}"
             )
         if response.status_code >= 400:
             raise OllamaResponseError(f"Ollama вернул HTTP {response.status_code}: {response.text[:300]}")
@@ -146,6 +149,40 @@ class TenderAnalyzer:
                 pass
         raise OllamaResponseError(f"Не удалось разобрать JSON в ответе модели: {cleaned[:300]}")
 
+    @staticmethod
+    def _normalize_analysis(parsed: dict) -> TenderAnalysis:
+        """Validate model JSON before it reaches scoring/filtering code."""
+        raw_score = parsed.get("relevance_score", 0)
+        try:
+            score = int(float(raw_score))
+        except (TypeError, ValueError) as exc:
+            raise OllamaResponseError(
+                f"Поле relevance_score должно быть числом, получено: {raw_score!r}"
+            ) from exc
+        score = max(0, min(100, score))
+
+        recommendation = str(parsed.get("recommendation", "review") or "review").strip().lower()
+        if recommendation not in _ALLOWED_RECOMMENDATIONS:
+            recommendation = "review"
+
+        raw_risks = parsed.get("risks", [])
+        if raw_risks is None:
+            risks: list[str] = []
+        elif isinstance(raw_risks, list):
+            risks = [str(item).strip() for item in raw_risks if str(item).strip()]
+        else:
+            risks = [str(raw_risks).strip()] if str(raw_risks).strip() else []
+
+        return TenderAnalysis(
+            relevance_score=score,
+            summary=str(parsed.get("summary", "") or "").strip(),
+            recommendation=recommendation,
+            risks=risks,
+            budget_note=str(parsed.get("budget_note", "") or "").strip(),
+            deadline_note=str(parsed.get("deadline_note", "") or "").strip(),
+            is_stub=False,
+        )
+
     def _stub_analysis(self, reason: str) -> TenderAnalysis:
         logger.warning("AI: используется stub-анализ. Причина: %s", reason)
         return TenderAnalysis(
@@ -163,15 +200,7 @@ class TenderAnalyzer:
             try:
                 content = self._call_ollama(user_prompt)
                 parsed = self._parse_model_output(content)
-                return TenderAnalysis(
-                    relevance_score=parsed.get("relevance_score", 0),
-                    summary=str(parsed.get("summary", "")).strip(),
-                    recommendation=str(parsed.get("recommendation", "review")).strip(),
-                    risks=parsed.get("risks", []) or [],
-                    budget_note=str(parsed.get("budget_note", "")).strip(),
-                    deadline_note=str(parsed.get("deadline_note", "")).strip(),
-                    is_stub=False,
-                )
+                return self._normalize_analysis(parsed)
             except OllamaModelNotFoundError as exc:
                 last_error = exc
                 logger.error("AI: %s", exc)
