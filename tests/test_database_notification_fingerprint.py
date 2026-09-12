@@ -21,6 +21,43 @@ def test_database_notification_fingerprint_uses_normalized_commercial_fields(tmp
     assert db.was_notified(tender.unique_key, recipient_key="chat-b") is False
 
 
+def test_description_change_creates_a_new_notification_event(tmp_path):
+    db = TenderDatabase(tmp_path / "description-change.db")
+    tender = Tender(
+        platform="test",
+        external_id="description-change-1",
+        title="Поставка подшипников",
+        url="https://example.test/description-change-1",
+        price=100000,
+        description="Поставка в одной партии.",
+    )
+    tender_id = db.save_tender(tender)
+    state = NotificationDeliveryState(db)
+
+    state.mark_notified(tender, recipient_key="chat-a")
+    first_key = state.event_key(tender)
+
+    tender.description = "Поставка в двух партиях с изменёнными условиями."
+    db.save_tender(tender)
+    second_key = state.event_key(tender)
+
+    assert first_key != second_key
+    assert state.was_notified(tender, recipient_key="chat-a") is False
+
+    state.mark_notified(tender, recipient_key="chat-a")
+    assert state.was_notified(tender, recipient_key="chat-a") is True
+    with db._connect() as conn:
+        count = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM notification_events
+            WHERE tender_id = ? AND recipient_key = ? AND channel = 'telegram'
+            """,
+            (tender_id, "chat-a"),
+        ).fetchone()["count"]
+    assert count == 2
+
+
 def test_legacy_notification_recipient_is_removed_after_repair(tmp_path):
     db = TenderDatabase(tmp_path / "legacy.db")
     tender = Tender(
