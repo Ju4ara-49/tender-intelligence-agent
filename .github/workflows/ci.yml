@@ -31,6 +31,8 @@ jobs:
           python -m pip install pytest
 
       - name: Run unittest discovery
+        id: unittest_discovery
+        continue-on-error: true
         env:
           PYTHONPATH: .
         run: |
@@ -48,32 +50,45 @@ jobs:
           retention-days: 7
 
       - name: Run B2B parser tests
+        id: b2b_parser
+        continue-on-error: true
         env:
           PYTHONPATH: .
-        run: python test_b2b_parser.py
+        run: |
+          python test_b2b_parser.py 2>&1 | tee output/b2b_parser.log
 
       - name: Run B2B reliable adapter tests
+        id: b2b_reliable_adapter
+        continue-on-error: true
         env:
           PYTHONPATH: .
-        run: python tests/test_b2b_reliable_adapter.py
+        run: |
+          python tests/test_b2b_reliable_adapter.py 2>&1 | tee output/b2b_reliable_adapter.log
 
       - name: Run B2B quality gate tests
+        id: b2b_quality_gate
+        continue-on-error: true
         env:
           PYTHONPATH: .
         run: |
           set -o pipefail
           python tests/test_b2b_quality_gate.py 2>&1 | tee output/b2b_quality_gate.log
 
-      - name: Upload B2B quality gate diagnostics
+      - name: Upload B2B diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: b2b-quality-gate-diagnostics-${{ github.run_id }}
-          path: output/b2b_quality_gate.log
+          name: b2b-diagnostics-${{ github.run_id }}
+          path: |
+            output/b2b_parser.log
+            output/b2b_reliable_adapter.log
+            output/b2b_quality_gate.log
           if-no-files-found: error
           retention-days: 7
 
       - name: Run full pytest suite
+        id: full_pytest
+        continue-on-error: true
         env:
           PYTHONPATH: .
         run: |
@@ -90,37 +105,79 @@ jobs:
           retention-days: 7
 
       - name: Run search pipeline regression tests
+        id: search_pipeline_regression
+        continue-on-error: true
         env:
           PYTHONPATH: .
         run: pytest -q tests/test_b2b_pagination.py tests/test_keyword_filter_morphology.py
 
       - name: Run analytics tests
+        id: analytics
+        continue-on-error: true
         env:
           PYTHONPATH: .
         run: pytest -q tests/test_market_analytics.py
 
       - name: Run real SQLite Excel integration test
+        id: excel_integration
+        continue-on-error: true
         env:
           PYTHONPATH: .
         run: python tests/test_excel_export_integration.py
 
       - name: Verify generated Excel file exists
+        id: excel_artifact_check
+        continue-on-error: true
         run: |
           test -f output/github_actions_excel_test.xlsx
           ls -lh output/github_actions_excel_test.xlsx
 
       - name: Upload generated Excel artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tender-intelligence-excel-test
           path: output/github_actions_excel_test.xlsx
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Upload test SQLite database
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tender-intelligence-test-db
           path: output/github_actions_test.db
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
+
+      - name: Fail CI if any test suite failed
+        if: always()
+        env:
+          UNITTEST_OUTCOME: ${{ steps.unittest_discovery.outcome }}
+          B2B_PARSER_OUTCOME: ${{ steps.b2b_parser.outcome }}
+          B2B_RELIABLE_OUTCOME: ${{ steps.b2b_reliable_adapter.outcome }}
+          B2B_QUALITY_OUTCOME: ${{ steps.b2b_quality_gate.outcome }}
+          PYTEST_OUTCOME: ${{ steps.full_pytest.outcome }}
+          SEARCH_PIPELINE_OUTCOME: ${{ steps.search_pipeline_regression.outcome }}
+          ANALYTICS_OUTCOME: ${{ steps.analytics.outcome }}
+          EXCEL_OUTCOME: ${{ steps.excel_integration.outcome }}
+          EXCEL_CHECK_OUTCOME: ${{ steps.excel_artifact_check.outcome }}
+        run: |
+          echo "unittest=$UNITTEST_OUTCOME"
+          echo "b2b_parser=$B2B_PARSER_OUTCOME"
+          echo "b2b_reliable_adapter=$B2B_RELIABLE_OUTCOME"
+          echo "b2b_quality_gate=$B2B_QUALITY_OUTCOME"
+          echo "full_pytest=$PYTEST_OUTCOME"
+          echo "search_pipeline=$SEARCH_PIPELINE_OUTCOME"
+          echo "analytics=$ANALYTICS_OUTCOME"
+          echo "excel_integration=$EXCEL_OUTCOME"
+          echo "excel_artifact_check=$EXCEL_CHECK_OUTCOME"
+          test "$UNITTEST_OUTCOME" = "success"
+          test "$B2B_PARSER_OUTCOME" = "success"
+          test "$B2B_RELIABLE_OUTCOME" = "success"
+          test "$B2B_QUALITY_OUTCOME" = "success"
+          test "$PYTEST_OUTCOME" = "success"
+          test "$SEARCH_PIPELINE_OUTCOME" = "success"
+          test "$ANALYTICS_OUTCOME" = "success"
+          test "$EXCEL_OUTCOME" = "success"
+          test "$EXCEL_CHECK_OUTCOME" = "success"
