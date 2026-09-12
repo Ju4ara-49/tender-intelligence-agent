@@ -51,6 +51,7 @@ class Tender:
         """Normalize timestamps and recover common commercial terms from detail text."""
         self.to_utc()
         self._enrich_commercial_terms()
+        self._persist_normalized_fields()
 
     def to_utc(self) -> Tender:
         """Normalize all tender timestamps to UTC.
@@ -109,6 +110,24 @@ class Tender:
                 text,
                 ("обеспечение исполнения", "обеспечение контракта", "обеспечение договора"),
             )
+
+    def _persist_normalized_fields(self) -> None:
+        """Keep normalized commercial fields in raw_data for SQLite round-trips.
+
+        The database intentionally stores raw_data as JSON for backward compatibility;
+        persisting the normalized values there prevents commercial criteria from being
+        lost between runs until all legacy databases have dedicated columns.
+        """
+        if not isinstance(self.raw_data, dict):
+            self.raw_data = {}
+        self.raw_data["_normalized"] = {
+            "advance_required": bool(self.advance_required),
+            "advance_percent": self.advance_percent,
+            "postpayment_days": self.postpayment_days,
+            "application_security_percent": self.application_security_percent,
+            "contract_security_percent": self.contract_security_percent,
+            "customer_inn": self.customer_inn,
+        }
 
     @staticmethod
     def _extract_percent(text: str, labels: tuple[str, ...]) -> float | None:
