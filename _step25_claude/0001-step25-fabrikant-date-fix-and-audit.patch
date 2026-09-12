@@ -1,0 +1,287 @@
+From ef5cc733d4bb864daafefa693b5527c2e7165c71 Mon Sep 17 00:00:00 2001
+From: "Claude (sandbox analysis)" <claude-sandbox@example.com>
+Date: Sat, 12 Sep 2026 08:27:16 +0000
+Subject: [PATCH] checkpoint: STEP-25 - fix Fabrikant date shift + Tender
+ post-construction UTC gap, audit customer INN/documents/detail fields
+
+---
+ docs/PROJECT_CHECKPOINT_2026-09-12_STEP-25.md | 75 +++++++++++++++++++
+ src/collectors/fabrikant.py                   | 16 +++-
+ src/collectors/fabrikant_v3.py                | 21 +++++-
+ src/models/tender.py                          | 25 +++++--
+ test_fabrikant_fields.py                      |  8 +-
+ tests/test_fabrikant_contract.py              | 28 ++++++-
+ 6 files changed, 160 insertions(+), 13 deletions(-)
+ create mode 100644 docs/PROJECT_CHECKPOINT_2026-09-12_STEP-25.md
+
+diff --git a/docs/PROJECT_CHECKPOINT_2026-09-12_STEP-25.md b/docs/PROJECT_CHECKPOINT_2026-09-12_STEP-25.md
+new file mode 100644
+index 0000000..a1ab584
+--- /dev/null
++++ b/docs/PROJECT_CHECKPOINT_2026-09-12_STEP-25.md
+@@ -0,0 +1,75 @@
++﻿# Контрольная точка — 2026-09-12 — STEP-25
++
++## Базовый HEAD
++`7285232997d10653cc046a22012dcae403b1c3fc` (STEP-24, зелёный CI подтверждён локальным
++повтором всех 7 шагов `.github/workflows/ci.yml`).
++
++## Найдено и исправлено
++
++### 1. Fabrikant: дата публикации без времени съезжала на день назад (реальный код)
++`FabrikantV3Collector._parse_human_date` (используется в проде через `registry.py`)
++подставляла `00:00`, если в тексте не было времени (например, «8 декабря 2024»).
++`Tender.__post_init__` считает любую naive-дату московским временем и переводит
++в UTC — полночь МСК превращается в 21:00 предыдущего дня UTC, дата съезжает.
++Исправлено: при отсутствии времени в источнике теперь подставляется полдень (12:00),
++у которого достаточно запаса по обе стороны от смещения +3 часа, чтобы календарная
++дата не менялась. То же исправлено в `src/collectors/fabrikant.py` (не используется
++реестром, но покрыт тестом `test_fabrikant_fields.py`).
++
++### 2. Tender: пост-конструкторное присвоение дат обходило нормализацию в UTC (реальный код)
++`Tender.__post_init__` конвертирует даты в UTC только при **создании** объекта.
++`FabrikantV3Collector.get_details` донасыщает `published_at` уже **после** создания
++(`detailed.published_at = published`) — это присвоение __post_init__ не запускало,
++и дата оставалась naive (без часового пояса). Дальше по пайплайну сравнение
++naive/aware datetime может привести к `TypeError` или тихо неверному поведению.
++Исправлено: логика конвертации вынесена в переиспользуемый classmethod
++`Tender.to_utc(value)`; `__post_init__` теперь его использует, и `fabrikant_v3.py`
++тоже вызывает его явно перед присвоением после конструктора.
++
++### 3. Тест `test_fabrikant_fields.py` содержал устаревшее ожидание
++Тест ожидал, что `deadline` останется «как есть» (12:00), но вся остальная
++система (дважды подтверждено: `Tender.__post_init__` и
++`Orchestrator._normalize_datetime` в `test_datetime_normalization.py`) намеренно
++конвертирует naive-время как московское в UTC. Тест обновлён на ожидание 09:00 UTC.
++
++## Тесты
++- Добавлен регрессионный тест `test_fabrikant_v3_date_only_publication_date_keeps_calendar_day`
++  в `tests/test_fabrikant_contract.py` — покрывает баг №1+№2 именно в боевом классе
++  `FabrikantV3Collector`, а не только в неиспользуемом `fabrikant.py`.
++- Полный повтор всех 7 шагов `.github/workflows/ci.yml` — зелено (69 tests в `tests/`,
++  было 68).
++- Дополнительно (не входят в CI, но проверены): `test_fabrikant_fields.py`,
++  `test_datetime_normalization.py`, `test_b2b_parser.py` — все зелёные.
++
++## Аудит: customer INN, документы/ссылки, полнота detail-полей (6 площадок)
++
++**Полнота существующих полей** (`customer`, `region`, `price`, `deadline`,
++`published_at`, `law_type`, `start_date`/`end_date`, авансы/обеспечение) —
++проверено по эффективной цепочке наследования каждого зарегистрированного
++в `registry.py` коллектора (EIS, B2B-Center, Fabrikant v3, RTS, TMK, Rosatom):
++все шесть присваивают все перечисленные поля (частично — через общий
++`Tender._enrich_commercial_terms`). У цепочки B2B-Center не найдено явного
++присвоения `law_type` и `start_date` — стоит перепроверить на реальных данных.
++
++**Customer INN и документы/ссылки — не реализовано ни на одной площадке.**
++Причина не в логике коллекторов, а в том, что единой модели `Tender`
++(`src/models/tender.py`) в принципе не хватает полей `customer_inn` и
++`documents`. Ни в одном сохранённом фикстурном/debug-артефакте в репозитории
++(`debug_artifacts/`, `tests/`) не нашлось примеров разметки с ИНН — то есть
++у меня нет реального HTML, на котором можно надёжно написать и проверить
++парсинг, не гадая. Из этой рабочей среды нет сетевого доступа к самим
++тендерным площадкам (только к github/pypi/npm), поэтому получить свежий
++HTML напрямую тоже не могу.
++
++**Рекомендованный следующий шаг:** сохранить в репозиторий (по образцу уже
++существующих `debug_artifacts/b2b_*`) 1–2 реальные detail-страницы на
++площадку с видимым ИНН и документами — тогда добавление полей в модель и
++парсинг под тестовым покрытием займёт один цикл работы.
++
++## Следующий шаг
++Дождаться нового CI на HEAD после применения этого патча. При зелёном —
++собрать фикстуры для ИНН/документов (см. выше) и продолжить по плану
++`docs/TENDERPLAN_BENCHMARK.md`.
++
++## Правило проекта
++Каждая остановка фиксируется отдельным checkpoint независимо от результата.
+diff --git a/src/collectors/fabrikant.py b/src/collectors/fabrikant.py
+index 562e757..b1fb2e6 100644
+--- a/src/collectors/fabrikant.py
++++ b/src/collectors/fabrikant.py
+@@ -341,18 +341,30 @@ class FabrikantCollector(_BrowserTenderCollector):
+ 
+     @staticmethod
+     def _parse_datetime(value: str) -> datetime | None:
++        """Parse a date, optionally with a time.
++
++        Defaults to noon, not midnight, when no time is present in the
++        source text. See ``FabrikantV3Collector._parse_human_date`` for why:
++        ``Tender.__post_init__`` converts naive values from assumed Moscow
++        time to UTC, and a midnight default would shift date-only values
++        back to the previous calendar day.
++        """
+         if not value:
+             return None
+         m = re.search(r"(\d{1,2})[./-](\d{1,2})[./-](20\d{2})(?:\s+(\d{1,2}):(\d{2}))?", value)
+         if m:
+             try:
+-                return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), int(m.group(4) or 0), int(m.group(5) or 0))
++                hour = int(m.group(4)) if m.group(4) is not None else 12
++                minute = int(m.group(5)) if m.group(5) is not None else 0
++                return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), hour, minute)
+             except ValueError:
+                 return None
+         m = re.search(r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2}))?", value)
+         if m:
+             try:
+-                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), int(m.group(5) or 0))
++                hour = int(m.group(4)) if m.group(4) is not None else 12
++                minute = int(m.group(5)) if m.group(5) is not None else 0
++                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), hour, minute)
+             except ValueError:
+                 return None
+         return None
+diff --git a/src/collectors/fabrikant_v3.py b/src/collectors/fabrikant_v3.py
+index f560fc5..c3e9815 100644
+--- a/src/collectors/fabrikant_v3.py
++++ b/src/collectors/fabrikant_v3.py
+@@ -66,6 +66,9 @@ class FabrikantV3Collector(FabrikantV2Collector):
+         if not detailed.published_at:
+             published = self._extract_publication_date(text)
+             if published:
++                # Assigned after construction, so Tender.__post_init__ never
++                # ran on it: normalize to UTC explicitly or it stays naive.
++                published = Tender.to_utc(published)
+                 detailed.published_at = published
+                 detailed.start_date = published
+                 raw = detailed.raw_data if isinstance(detailed.raw_data, dict) else {}
+@@ -134,6 +137,16 @@ class FabrikantV3Collector(FabrikantV2Collector):
+ 
+     @staticmethod
+     def _parse_human_date(value: str) -> datetime | None:
++        """Parse a Russian human-readable date, optionally with a time.
++
++        When the source text has no time component, the hour defaults to
++        noon (12) rather than midnight. ``Tender.__post_init__`` treats any
++        naive datetime as Moscow time and converts it to UTC; a midnight
++        default would shift date-only values (e.g. "8 декабря 2024") back
++        to the previous calendar day after that conversion. Noon has enough
++        margin either side for the fixed +3h Moscow offset, so the calendar
++        date is preserved when no real time was published.
++        """
+         value = re.sub(r"\s+", " ", value.strip())
+         months = {
+             "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
+@@ -143,13 +156,17 @@ class FabrikantV3Collector(FabrikantV2Collector):
+         match = re.fullmatch(r"(\d{1,2})\s+([А-Яа-яЁё]+)\s+(20\d{2})(?:\s+(\d{1,2}):(\d{2}))?", value)
+         if match and match.group(2).lower() in months:
+             try:
+-                return datetime(int(match.group(3)), months[match.group(2).lower()], int(match.group(1)), int(match.group(4) or 0), int(match.group(5) or 0))
++                hour = int(match.group(4)) if match.group(4) is not None else 12
++                minute = int(match.group(5)) if match.group(5) is not None else 0
++                return datetime(int(match.group(3)), months[match.group(2).lower()], int(match.group(1)), hour, minute)
+             except ValueError:
+                 return None
+         match = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](20\d{2})(?:\s+(\d{1,2}):(\d{2}))?", value)
+         if match:
+             try:
+-                return datetime(int(match.group(3)), int(match.group(2)), int(match.group(1)), int(match.group(4) or 0), int(match.group(5) or 0))
++                hour = int(match.group(4)) if match.group(4) is not None else 12
++                minute = int(match.group(5)) if match.group(5) is not None else 0
++                return datetime(int(match.group(3)), int(match.group(2)), int(match.group(1)), hour, minute)
+             except ValueError:
+                 return None
+         return None
+diff --git a/src/models/tender.py b/src/models/tender.py
+index 05da202..29d74bd 100644
+--- a/src/models/tender.py
++++ b/src/models/tender.py
+@@ -38,16 +38,27 @@ class Tender:
+ 
+     raw_data: dict[str, Any] = field(default_factory=dict)
+ 
++    MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
++
++    @classmethod
++    def to_utc(cls, value: datetime | None) -> datetime | None:
++        """Normalize a timestamp to UTC, assuming naive values are Moscow time.
++
++        Collectors that enrich a Tender's date fields *after* construction
++        (bypassing ``__post_init__``) must call this explicitly, or the
++        value stays naive and can later blow up comparisons against
++        timezone-aware datetimes elsewhere in the pipeline.
++        """
++        if value is None:
++            return None
++        if value.tzinfo is None:
++            value = value.replace(tzinfo=cls.MOSCOW_TZ)
++        return value.astimezone(timezone.utc)
++
+     def __post_init__(self) -> None:
+         """Normalize timestamps and recover common commercial terms from detail text."""
+-        moscow = timezone(timedelta(hours=3), name="MSK")
+         for field_name in ("start_date", "end_date", "published_at", "deadline"):
+-            value = getattr(self, field_name)
+-            if value is None:
+-                continue
+-            if value.tzinfo is None:
+-                value = value.replace(tzinfo=moscow)
+-            setattr(self, field_name, value.astimezone(timezone.utc))
++            setattr(self, field_name, self.to_utc(getattr(self, field_name)))
+ 
+         self._enrich_commercial_terms()
+ 
+diff --git a/test_fabrikant_fields.py b/test_fabrikant_fields.py
+index feb7b09..427d436 100644
+--- a/test_fabrikant_fields.py
++++ b/test_fabrikant_fields.py
+@@ -21,8 +21,14 @@ class TestFabrikantFields(unittest.TestCase):
+         self.assertEqual(tender.title, "Подшипники прочие, зубчатые передачи и элементы приводов".replace("зубчатые передачи", "зубчатые колеса, зубчатые передачи"))
+         self.assertEqual(tender.customer, "МКУ «УХТО администрации Дербентского района»")
+         self.assertEqual(tender.region, "Республика Дагестан")
++        # published_at has no time in the source ("08.12.2024"), so the
++        # collector defaults it to noon MSK to survive the MSK->UTC
++        # conversion in Tender.__post_init__ without shifting calendar day.
+         self.assertEqual(tender.published_at.strftime("%d.%m.%Y"), "08.12.2024")
+-        self.assertEqual(tender.deadline.strftime("%d.%m.%Y %H:%M"), "08.12.2024 12:00")
++        # deadline has an explicit time ("12:00" MSK), which Tender.__post_init__
++        # converts to UTC (MSK is UTC+3), matching Orchestrator._normalize_datetime
++        # (see test_datetime_normalization.py) and the rest of the pipeline.
++        self.assertEqual(tender.deadline.strftime("%d.%m.%Y %H:%M"), "08.12.2024 09:00")
+ 
+     def test_generic_h1_is_not_used_when_subject_exists(self):
+         html = """
+diff --git a/tests/test_fabrikant_contract.py b/tests/test_fabrikant_contract.py
+index 2a02284..360fa9e 100644
+--- a/tests/test_fabrikant_contract.py
++++ b/tests/test_fabrikant_contract.py
+@@ -1,4 +1,4 @@
+-from datetime import datetime
++from datetime import datetime, timezone
+ 
+ from src.collectors.fabrikant_v2 import FabrikantV2Collector
+ from src.collectors.fabrikant_v3 import FabrikantV3Collector
+@@ -36,3 +36,29 @@ def test_fabrikant_v3_enriches_commercial_terms(monkeypatch):
+     assert detailed.raw_data["postpayment"]["days"] == 15
+     assert detailed.raw_data["application_security"]["percent"] == 2
+     assert detailed.raw_data["contract_security"]["percent"] == 5
++
++
++def test_fabrikant_v3_date_only_publication_date_keeps_calendar_day(monkeypatch):
++    """A publication date with no time (e.g. "8 декабря 2024") must not
++    shift to the previous calendar day once Tender.__post_init__ converts
++    it from assumed Moscow time to UTC. Regression test for a bug where the
++    fallback date parser defaulted missing time to midnight instead of noon.
++    """
++    base = Tender(
++        platform="fabrikant",
++        external_id="456",
++        title="Поставка оборудования",
++        url="https://soap2.fabrikant.ru/223/procedure/456",
++        description="Заказчик: ООО Ромашка. Дата публикации: 8 декабря 2024.",
++        price=None,
++        published_at=None,
++        start_date=None,
++    )
++
++    monkeypatch.setattr(FabrikantV2Collector, "get_details", lambda self, external_id: base)
++    detailed = FabrikantV3Collector({}).get_details("456")
++
++    assert detailed is not None
++    assert detailed.published_at is not None
++    assert detailed.published_at.tzinfo == timezone.utc
++    assert detailed.published_at.strftime("%d.%m.%Y") == "08.12.2024"
+-- 
+2.43.0
+

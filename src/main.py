@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from logging.handlers import RotatingFileHandler
 
+from src.logging_utils import SafeRotatingFileHandler
 from src.orchestrator import Orchestrator
 from src.scheduler import run_scheduled
 from src.settings import PROJECT_ROOT, load_settings
@@ -22,7 +22,7 @@ def setup_logging(settings) -> None:
 
     handlers: list[logging.Handler] = [
         logging.StreamHandler(sys.stdout),
-        RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"),
+        SafeRotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"),
     ]
     logging.basicConfig(
         level=log_level,

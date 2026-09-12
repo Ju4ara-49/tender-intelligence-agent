@@ -341,6 +341,14 @@ class FabrikantCollector(_BrowserTenderCollector):
 
     @staticmethod
     def _parse_datetime(value: str) -> datetime | None:
+        """Parse a date, optionally with a time.
+
+        Defaults to noon, not midnight, when no time is present in the
+        source text. See ``FabrikantV3Collector._parse_human_date`` for why:
+        ``Tender.__post_init__`` converts naive values from assumed Moscow
+        time to UTC, and a midnight default would shift date-only values
+        back to the previous calendar day.
+        """
         if not value:
             return None
         m = re.search(r"(\d{1,2})[./-](\d{1,2})[./-](20\d{2})(?:\s+(\d{1,2}):(\d{2}))?", value)

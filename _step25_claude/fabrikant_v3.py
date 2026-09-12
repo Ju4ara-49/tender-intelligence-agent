@@ -66,6 +66,8 @@ class FabrikantV3Collector(FabrikantV2Collector):
         if not detailed.published_at:
             published = self._extract_publication_date(text)
             if published:
+                # Assigned after construction, so Tender.__post_init__ never
+                # ran on it: normalize to UTC explicitly or it stays naive.
                 published = Tender.to_utc(published)
                 detailed.published_at = published
                 detailed.start_date = published
@@ -135,7 +137,16 @@ class FabrikantV3Collector(FabrikantV2Collector):
 
     @staticmethod
     def _parse_human_date(value: str) -> datetime | None:
-        """Parse a Russian date; default missing time to noon MSK-safe."""
+        """Parse a Russian human-readable date, optionally with a time.
+
+        When the source text has no time component, the hour defaults to
+        noon (12) rather than midnight. ``Tender.__post_init__`` treats any
+        naive datetime as Moscow time and converts it to UTC; a midnight
+        default would shift date-only values (e.g. "8 декабря 2024") back
+        to the previous calendar day after that conversion. Noon has enough
+        margin either side for the fixed +3h Moscow offset, so the calendar
+        date is preserved when no real time was published.
+        """
         value = re.sub(r"\s+", " ", value.strip())
         months = {
             "января": 1, "февраля": 2, "марта": 3, "апреля": 4,

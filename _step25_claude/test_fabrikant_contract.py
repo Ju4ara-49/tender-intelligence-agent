@@ -39,7 +39,11 @@ def test_fabrikant_v3_enriches_commercial_terms(monkeypatch):
 
 
 def test_fabrikant_v3_date_only_publication_date_keeps_calendar_day(monkeypatch):
-    """Date-only publication must not shift calendar day after MSK->UTC conversion."""
+    """A publication date with no time (e.g. "8 декабря 2024") must not
+    shift to the previous calendar day once Tender.__post_init__ converts
+    it from assumed Moscow time to UTC. Regression test for a bug where the
+    fallback date parser defaulted missing time to midnight instead of noon.
+    """
     base = Tender(
         platform="fabrikant",
         external_id="456",

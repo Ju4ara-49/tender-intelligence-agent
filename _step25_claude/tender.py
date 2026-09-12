@@ -44,8 +44,10 @@ class Tender:
     def to_utc(cls, value: datetime | None) -> datetime | None:
         """Normalize a timestamp to UTC, assuming naive values are Moscow time.
 
-        Collectors that enrich date fields after construction must call this
-        explicitly, or the value stays naive and can break aware comparisons.
+        Collectors that enrich a Tender's date fields *after* construction
+        (bypassing ``__post_init__``) must call this explicitly, or the
+        value stays naive and can later blow up comparisons against
+        timezone-aware datetimes elsewhere in the pipeline.
         """
         if value is None:
             return None

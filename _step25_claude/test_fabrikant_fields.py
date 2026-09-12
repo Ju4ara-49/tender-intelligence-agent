@@ -21,7 +21,13 @@ class TestFabrikantFields(unittest.TestCase):
         self.assertEqual(tender.title, "Подшипники прочие, зубчатые передачи и элементы приводов".replace("зубчатые передачи", "зубчатые колеса, зубчатые передачи"))
         self.assertEqual(tender.customer, "МКУ «УХТО администрации Дербентского района»")
         self.assertEqual(tender.region, "Республика Дагестан")
+        # published_at has no time in the source ("08.12.2024"), so the
+        # collector defaults it to noon MSK to survive the MSK->UTC
+        # conversion in Tender.__post_init__ without shifting calendar day.
         self.assertEqual(tender.published_at.strftime("%d.%m.%Y"), "08.12.2024")
+        # deadline has an explicit time ("12:00" MSK), which Tender.__post_init__
+        # converts to UTC (MSK is UTC+3), matching Orchestrator._normalize_datetime
+        # (see test_datetime_normalization.py) and the rest of the pipeline.
         self.assertEqual(tender.deadline.strftime("%d.%m.%Y %H:%M"), "08.12.2024 09:00")
 
     def test_generic_h1_is_not_used_when_subject_exists(self):
