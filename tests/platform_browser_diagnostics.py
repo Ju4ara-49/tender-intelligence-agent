@@ -38,6 +38,7 @@ SEARCH_SELECTORS = (
     "[contenteditable='true']",
 )
 SEARCH_LABELS = ("Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти", "Применить")
+ACCESS_BLOCK_STATUSES = frozenset({401, 403, 429})
 
 
 def visible(locator) -> bool:
@@ -45,6 +46,13 @@ def visible(locator) -> bool:
         return locator.count() > 0 and locator.is_visible()
     except Exception:
         return False
+
+
+def classify_http_access(status: int | None) -> str | None:
+    """Return the diagnostic class for an upstream access/rate-limit response."""
+    if status in ACCESS_BLOCK_STATUSES:
+        return "access_block"
+    return None
 
 
 def perform_search(page, query: str) -> dict[str, object]:
@@ -162,6 +170,7 @@ def main() -> int:
                 body_text = page.locator("body").inner_text(timeout=5000)
                 lower_body = body_text.lower()
                 entry["waf"] = "web application firewall" in lower_body or "временно заблокирован" in lower_body
+                entry["http_access_class"] = classify_http_access(response.status if response else None)
                 entry["inputs"] = page.locator("input").evaluate_all(
                     "els => els.map(e => ({type:e.type,name:e.name,placeholder:e.placeholder,aria:e.getAttribute('aria-label'),id:e.id,visible:!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)}))"
                 )
@@ -170,10 +179,15 @@ def main() -> int:
                 )
                 entry["before_excerpt"] = body_text[:12000]
 
-                if entry["waf"]:
-                    entry["diagnostic_state"] = "waf_or_block"
+                access_class = entry["http_access_class"]
+                if entry["waf"] or access_class:
+                    entry["diagnostic_state"] = "waf_or_block" if entry["waf"] else "http_access_block"
                     entry["failure_class"] = "access_block"
-                    failures.append(f"{name}: WAF or access block")
+                    failures.append(
+                        f"{name}: access block (HTTP {entry['status']})"
+                        if access_class
+                        else f"{name}: WAF or access block"
+                    )
                 else:
                     entry["search"] = perform_search(page, QUERY)
                     page.wait_for_timeout(5000)
