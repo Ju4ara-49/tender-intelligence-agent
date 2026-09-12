@@ -10,7 +10,7 @@ from src.storage.database import TenderDatabase
 
 
 class NotificationDeliveryState:
-    """Tracks notification delivery by a meaningful Tender state fingerprint."""
+    """Tracks notification delivery by a meaningful persisted Tender state fingerprint."""
 
     CHANNEL = "telegram"
     DEFAULT_RECIPIENT_KEY = TenderDatabase.DEFAULT_RECIPIENT_KEY
@@ -42,19 +42,11 @@ class NotificationDeliveryState:
             "customer": tender.customer,
             "customer_inn": tender.customer_inn or normalized.get("customer_inn", ""),
             "law_type": tender.law_type,
-            "advance_required": tender.advance_required if tender.advance_required is not None else normalized.get("advance_required", False),
-            "advance_percent": tender.advance_percent if tender.advance_percent is not None else normalized.get("advance_percent"),
-            "postpayment_days": tender.postpayment_days if tender.postpayment_days is not None else normalized.get("postpayment_days"),
-            "application_security_percent": (
-                tender.application_security_percent
-                if tender.application_security_percent is not None
-                else normalized.get("application_security_percent")
-            ),
-            "contract_security_percent": (
-                tender.contract_security_percent
-                if tender.contract_security_percent is not None
-                else normalized.get("contract_security_percent")
-            ),
+            "advance_required": tender.advance_required,
+            "advance_percent": tender.advance_percent,
+            "postpayment_days": tender.postpayment_days,
+            "application_security_percent": tender.application_security_percent,
+            "contract_security_percent": tender.contract_security_percent,
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -142,11 +134,11 @@ class NotificationDeliveryState:
             )
 
     def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
-        """Return True only when this exact state was delivered to this recipient."""
-        tender_id = self.db.get_tender_id(tender.unique_key)
-        if tender_id is None:
+        """Return True when the currently persisted tender state was delivered to this recipient."""
+        current = self.db._current_notification_event_key(tender.unique_key)
+        if current is None:
             return False
-        key = self.event_key(tender)
+        tender_id, key = current
         with self.db._connect() as conn:
             row = conn.execute(
                 """
@@ -163,7 +155,7 @@ class NotificationDeliveryState:
         payload: dict | None = None,
         recipient_key: str = DEFAULT_RECIPIENT_KEY,
     ) -> None:
-        """Record the rich tender fingerprint as the delivered notification event."""
+        """Record the fingerprint calculated from the persisted tender row."""
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             raise ValueError(f"Tender not found: {tender.unique_key}")
@@ -171,6 +163,5 @@ class NotificationDeliveryState:
             tender_id,
             channel=self.CHANNEL,
             payload=payload,
-            event_key=self.event_key(tender),
             recipient_key=recipient_key,
         )
