@@ -36,9 +36,21 @@ class TelegramNotifier:
     def is_configured(self) -> bool:
         return bool(self.bot_token and self.chat_id)
 
-    def send_tender_alert(self, tender: Tender, analysis: TenderAnalysis) -> bool:
+    def send_tender_alert(
+        self,
+        tender: Tender,
+        analysis: TenderAnalysis,
+        chat_id: str | None = None,
+    ) -> bool:
+        """Send an alert to an explicit chat or fall back to configured chat_id.
+
+        Per-user Telegram searches must not silently deliver to the administrator's
+        global ``TELEGRAM_CHAT_ID``.  ``chat_id`` is therefore an explicit override
+        used by the multi-user bot, while CLI/scheduled runs keep the legacy default.
+        """
         message = self.format_message(tender, analysis)
-        if not self.is_configured:
+        target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
+        if not self.bot_token or not target_chat_id:
             if self.dry_run_when_no_token:
                 logger.info(
                     "Telegram [DRY-RUN]: сообщение не отправлено (нет токена/chat_id)\n%s",
@@ -46,18 +58,20 @@ class TelegramNotifier:
                 )
                 return False
             raise RuntimeError("TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы в .env")
-        return self._send(message)
+        return self._send(message, chat_id=target_chat_id)
 
-    def send_text(self, text: str) -> bool:
-        if not self.is_configured:
+    def send_text(self, text: str, chat_id: str | None = None) -> bool:
+        target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
+        if not self.bot_token or not target_chat_id:
             logger.info("Telegram [DRY-RUN]: %s", text)
             return False
-        return self._send(text)
+        return self._send(text, chat_id=target_chat_id)
 
-    def _send(self, text: str) -> bool:
+    def _send(self, text: str, chat_id: str | None = None) -> bool:
+        target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         url = TELEGRAM_API.format(token=self.bot_token)
         payload = {
-            "chat_id": self.chat_id,
+            "chat_id": target_chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": False,
@@ -66,10 +80,10 @@ class TelegramNotifier:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
-            logger.info("Telegram: сообщение отправлено")
+            logger.info("Telegram: сообщение отправлено в chat_id=%s", target_chat_id)
             return True
         except httpx.HTTPError as exc:
-            logger.error("Telegram: ошибка отправки: %s", exc)
+            logger.error("Telegram: ошибка отправки в chat_id=%s: %s", target_chat_id, exc)
             return False
 
     @classmethod
