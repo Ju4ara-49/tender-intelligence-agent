@@ -228,3 +228,7 @@ def main() -> int:
     (OUT / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
     print("\n".join(summary_lines))
     return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
