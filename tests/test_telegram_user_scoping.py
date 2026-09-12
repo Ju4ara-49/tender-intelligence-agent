@@ -53,3 +53,21 @@ def test_owner_identity_is_configurable_and_whitelist_path_is_project_root(monke
     assert whitelist.exists()
     assert "owner-42" not in whitelist.read_text(encoding="utf-8")
     assert "123" in whitelist.read_text(encoding="utf-8")
+
+
+def test_owner_user_list_uses_instance_owner_identity_and_escapes_ids(monkeypatch):
+    from src.telegram_multiuser import MultiUserTelegramBot
+
+    bot = object.__new__(MultiUserTelegramBot)
+    bot.owner_telegram_id = "owner-42"
+    bot._allowed_user_ids = {"owner-42", "123&456"}
+    sent = []
+    bot._send = lambda chat_id, text, reply_markup=None: sent.append((chat_id, text, reply_markup))
+    bot._admin_keyboard = lambda: {"keyboard": []}
+
+    bot._show_users("owner-42")
+
+    assert len(sent) == 1
+    assert "owner-42" in sent[0][1]
+    assert "— владелец" in sent[0][1]
+    assert "123&amp;456" in sent[0][1]
