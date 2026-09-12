@@ -21,6 +21,7 @@ class NotificationDeliveryState:
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
         self._repaired_event_keys: dict[int, str] = {}
+        self._owned_claims: set[tuple[int, str, str, str]] = set()
         self._ensure_claim_schema()
         self._repair_legacy_default_events()
 
@@ -148,17 +149,25 @@ class NotificationDeliveryState:
             )
 
     def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
-        """Return whether this exact event was already recorded as delivered.
+        """Return True when delivered or reserved by another delivery worker.
 
-        This method is intentionally side-effect free. Delivery reservation is
-        a separate operation because callers may need to inspect the state more
-        than once before sending.
+        A successful reservation is represented by False for the worker that
+        owns it, preserving the existing orchestrator contract. A repeated call
+        from that same state object therefore remains False until delivery is
+        recorded or the claim is released. Other state objects see the active
+        claim as True and cannot send the same event concurrently.
         """
         event_key = self.event_key(tender)
         with self.db._connect() as conn:
-            tender_id = self.db.get_tender_id(tender.unique_key)
-            if tender_id is None:
+            tender_row = conn.execute(
+                "SELECT id FROM tenders WHERE unique_key = ?",
+                (tender.unique_key,),
+            ).fetchone()
+            if tender_row is None:
                 return False
+            tender_id = int(tender_row["id"])
+            claim_key = (tender_id, event_key, self.CHANNEL, recipient_key)
+
             row = conn.execute(
                 """
                 SELECT 1 FROM notification_events
@@ -167,7 +176,9 @@ class NotificationDeliveryState:
                 (tender_id, event_key, self.CHANNEL, recipient_key),
             ).fetchone()
             if row is not None:
+                self._owned_claims.discard(claim_key)
                 return True
+
             repaired_key = self._repaired_event_keys.get(tender_id)
             if repaired_key is not None and recipient_key == self.DEFAULT_RECIPIENT_KEY:
                 repaired = conn.execute(
@@ -178,16 +189,38 @@ class NotificationDeliveryState:
                     (tender_id, repaired_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
                 ).fetchone()
                 if repaired is not None:
+                    self._owned_claims.discard(claim_key)
                     return True
-            return False
+
+            cutoff = (self._now() - self.CLAIM_TTL).isoformat()
+            conn.execute("DELETE FROM notification_delivery_claims WHERE claimed_at < ?", (cutoff,))
+            if claim_key in self._owned_claims:
+                claim = conn.execute(
+                    """
+                    SELECT 1 FROM notification_delivery_claims
+                    WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                    """,
+                    claim_key,
+                ).fetchone()
+                if claim is not None:
+                    return False
+                self._owned_claims.discard(claim_key)
+
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO notification_delivery_claims
+                    (tender_id, event_key, channel, recipient_key, claimed_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (tender_id, event_key, self.CHANNEL, recipient_key, self._now().isoformat()),
+            )
+            if cursor.rowcount == 1:
+                self._owned_claims.add(claim_key)
+                return False
+            return True
 
     def claim_delivery(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
-        """Atomically reserve an unsent event for one recipient.
-
-        Returns True only for the caller that owns the send slot. Existing
-        delivered events and active claims both return False. Expired claims
-        are reclaimed first, so a crashed process cannot block delivery forever.
-        """
+        """Atomically reserve an unsent event for one recipient."""
         event_key = self.event_key(tender)
         with self.db._connect() as conn:
             tender_id_row = conn.execute(
@@ -197,7 +230,6 @@ class NotificationDeliveryState:
             if tender_id_row is None:
                 return False
             tender_id = int(tender_id_row["id"])
-
             delivered = conn.execute(
                 """
                 SELECT 1 FROM notification_events
@@ -207,19 +239,6 @@ class NotificationDeliveryState:
             ).fetchone()
             if delivered is not None:
                 return False
-
-            repaired_key = self._repaired_event_keys.get(tender_id)
-            if repaired_key is not None and recipient_key == self.DEFAULT_RECIPIENT_KEY:
-                repaired = conn.execute(
-                    """
-                    SELECT 1 FROM notification_events
-                    WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
-                    """,
-                    (tender_id, repaired_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
-                ).fetchone()
-                if repaired is not None:
-                    return False
-
             cutoff = (self._now() - self.CLAIM_TTL).isoformat()
             conn.execute("DELETE FROM notification_delivery_claims WHERE claimed_at < ?", (cutoff,))
             cursor = conn.execute(
@@ -230,7 +249,10 @@ class NotificationDeliveryState:
                 """,
                 (tender_id, event_key, self.CHANNEL, recipient_key, self._now().isoformat()),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount == 1:
+                self._owned_claims.add((tender_id, event_key, self.CHANNEL, recipient_key))
+                return True
+            return False
 
     def release_claim(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> None:
         """Release an in-flight claim after an external send failure."""
@@ -238,13 +260,15 @@ class NotificationDeliveryState:
         if tender_id is None:
             return
         event_key = self.event_key(tender)
+        claim_key = (tender_id, event_key, self.CHANNEL, recipient_key)
+        self._owned_claims.discard(claim_key)
         with self.db._connect() as conn:
             conn.execute(
                 """
                 DELETE FROM notification_delivery_claims
                 WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
                 """,
-                (tender_id, event_key, self.CHANNEL, recipient_key),
+                claim_key,
             )
 
     def mark_notified(
@@ -258,6 +282,8 @@ class NotificationDeliveryState:
         if tender_id is None:
             raise ValueError(f"Tender not found: {tender.unique_key}")
         event_key = self.event_key(tender)
+        claim_key = (tender_id, event_key, self.CHANNEL, recipient_key)
+        self._owned_claims.discard(claim_key)
         self.db.mark_notified(
             tender_id,
             channel=self.CHANNEL,
@@ -271,5 +297,5 @@ class NotificationDeliveryState:
                 DELETE FROM notification_delivery_claims
                 WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
                 """,
-                (tender_id, event_key, self.CHANNEL, recipient_key),
+                claim_key,
             )
