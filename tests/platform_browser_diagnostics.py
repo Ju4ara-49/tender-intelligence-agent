@@ -6,8 +6,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 TARGETS = {
-    "rts_tender": "https://www.rts-tender.ru/poisk/",
-    "tmk": "https://zakupki.tmk-group.com/#tmk/front/index",
+    "rts_tender": "https://www.rts-tender.ru/",
+    "tmk": "https://zakupki.tmk-group.com/",
     "rosatom": "https://zakupki.rosatom.ru/?link=published_procurements",
 }
 QUERY = "подшипники"
