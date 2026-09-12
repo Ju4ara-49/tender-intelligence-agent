@@ -21,7 +21,14 @@ class NotificationDeliveryState:
         self._repair_legacy_default_events()
 
     @staticmethod
-    def event_key(tender: Tender) -> str:
+    def _normalized_fields(tender: Tender) -> dict:
+        raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
+        normalized = raw.get("_normalized") if isinstance(raw, dict) else {}
+        return normalized if isinstance(normalized, dict) else {}
+
+    @classmethod
+    def event_key(cls, tender: Tender) -> str:
+        normalized = cls._normalized_fields(tender)
         state = {
             "title": tender.title,
             "url": tender.url,
@@ -33,13 +40,21 @@ class NotificationDeliveryState:
             "published_at": tender.published_at.isoformat() if tender.published_at else None,
             "region": tender.region,
             "customer": tender.customer,
-            "customer_inn": tender.customer_inn,
+            "customer_inn": tender.customer_inn or normalized.get("customer_inn", ""),
             "law_type": tender.law_type,
-            "advance_required": tender.advance_required,
-            "advance_percent": tender.advance_percent,
-            "postpayment_days": tender.postpayment_days,
-            "application_security_percent": tender.application_security_percent,
-            "contract_security_percent": tender.contract_security_percent,
+            "advance_required": tender.advance_required if tender.advance_required is not None else normalized.get("advance_required", False),
+            "advance_percent": tender.advance_percent if tender.advance_percent is not None else normalized.get("advance_percent"),
+            "postpayment_days": tender.postpayment_days if tender.postpayment_days is not None else normalized.get("postpayment_days"),
+            "application_security_percent": (
+                tender.application_security_percent
+                if tender.application_security_percent is not None
+                else normalized.get("application_security_percent")
+            ),
+            "contract_security_percent": (
+                tender.contract_security_percent
+                if tender.contract_security_percent is not None
+                else normalized.get("contract_security_percent")
+            ),
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -98,14 +113,6 @@ class NotificationDeliveryState:
                     (row["tender_id"], row["channel"], self.DEFAULT_RECIPIENT_KEY),
                 ).fetchall()
                 if len(existing) == 1 and existing[0]["event_key"] == key:
-                    conn.execute(
-                        """
-                        DELETE FROM notification_events
-                        WHERE tender_id = ? AND channel = ? AND recipient_key = ?
-                          AND recipient_key = ?
-                        """,
-                        (row["tender_id"], row["channel"], self.LEGACY_RECIPIENT_KEY, self.LEGACY_RECIPIENT_KEY),
-                    )
                     continue
                 conn.execute(
                     """
