@@ -11,6 +11,7 @@ from src.collectors.browser_public_reliable import (
     ReliableRtsTenderCollector,
     ReliableTmkCollector,
 )
+from src.collectors.detail_contract import enforce_detail_contract
 from src.collectors.eis_reliable import ReliableEisZakupkiCollector
 from src.collectors.fabrikant_v3 import FabrikantV3Collector
 
@@ -49,6 +50,8 @@ def get_enabled_collectors(
             continue
 
         platform_config = instance.get_platform_config(config)
-        enabled.append(collector_cls(platform_config))
+        configured = collector_cls(platform_config)
+        enforce_detail_contract(configured)
+        enabled.append(configured)
 
     return enabled
