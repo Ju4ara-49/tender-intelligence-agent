@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -24,6 +24,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 NAVIGATION_TIMEOUT_MS = 30000
 NAVIGATION_ATTEMPTS = 3
 RETRY_DELAYS_SECONDS = (2, 5)
+TARGET_TIMEOUT_SECONDS = 150
 
 SEARCH_SELECTORS = (
     "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
@@ -147,11 +148,7 @@ def extract_result_evidence(text: str) -> dict[str, object]:
 
 
 def probe_target(name: str, url: str) -> tuple[str, dict[str, object], list[str], list[str], list[str]]:
-    """Run one target in an isolated Playwright instance.
-
-    Isolation lets a slow/hung public portal consume only its own retry budget instead
-    of blocking every later portal in a single serial browser session.
-    """
+    """Run one target in an isolated Playwright process."""
     entry: dict[str, object] = {"url": url, "query": QUERY}
     failures: list[str] = []
     ci_failures: list[str] = []
@@ -255,25 +252,68 @@ def probe_target(name: str, url: str) -> tuple[str, dict[str, object], list[str]
     return name, entry, failures, ci_failures, access_blocks
 
 
+def _probe_worker(name: str, url: str, queue) -> None:
+    try:
+        queue.put(probe_target(name, url))
+    except Exception as exc:
+        queue.put((name, {"url": url, "query": QUERY, "diagnostic_state": "worker_exception", "error": repr(exc)}, [f"{name}: {exc!r}"], [f"{name}: {exc!r}"], []))
+
+
 def main() -> int:
     report: dict[str, object] = {}
     failures: list[str] = []
     ci_failures: list[str] = []
     access_blocks: list[str] = []
 
-    # Four isolated browser workers keep the total diagnostic bounded while avoiding
-    # a shared browser/context that lets one public portal stall the remaining probes.
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="platform-probe") as executor:
-        futures = [executor.submit(probe_target, name, url) for name, url in TARGETS.items()]
-        for future in as_completed(futures):
-            name, entry, target_failures, target_ci_failures, target_access_blocks = future.result()
-            report[name] = entry
-            failures.extend(target_failures)
-            ci_failures.extend(target_ci_failures)
-            access_blocks.extend(target_access_blocks)
+    # Use OS processes rather than threads: sync Playwright has its own event-loop
+    # machinery and a stuck public portal must be killable independently. Each target
+    # gets a hard wall-clock budget, so the seven-platform probe cannot deadlock CI.
+    ctx = mp.get_context("spawn")
+    queue = ctx.Queue()
+    processes = {
+        name: ctx.Process(target=_probe_worker, args=(name, url, queue), name=f"platform-probe-{name}")
+        for name, url in TARGETS.items()
+    }
+    for process in processes.values():
+        process.start()
 
-    # Keep report ordering deterministic for CI artifacts and human review.
-    ordered_report = {name: report.get(name, {"diagnostic_state": "missing"}) for name in TARGETS}
+    for name, process in processes.items():
+        process.join(TARGET_TIMEOUT_SECONDS)
+        if process.is_alive():
+            process.terminate()
+            process.join(10)
+            report[name] = {
+                "url": TARGETS[name],
+                "query": QUERY,
+                "diagnostic_state": "external_timeout",
+                "failure_class": "external_access",
+                "error": f"target exceeded hard timeout of {TARGET_TIMEOUT_SECONDS}s",
+            }
+            message = f"{name}: external navigation timeout"
+            failures.append(message)
+            access_blocks.append(message)
+
+    while not queue.empty():
+        name, entry, target_failures, target_ci_failures, target_access_blocks = queue.get()
+        if name not in report:
+            report[name] = entry
+        failures.extend(target_failures)
+        ci_failures.extend(target_ci_failures)
+        access_blocks.extend(target_access_blocks)
+
+    for name in TARGETS:
+        report.setdefault(name, {
+            "url": TARGETS[name],
+            "query": QUERY,
+            "diagnostic_state": "missing",
+            "failure_class": "transport",
+        })
+        if report[name].get("diagnostic_state") == "missing":
+            message = f"{name}: probe produced no result"
+            failures.append(message)
+            ci_failures.append(message)
+
+    ordered_report = {name: report[name] for name in TARGETS}
     ordered_report["failures"] = failures
     ordered_report["ci_failures"] = ci_failures
     ordered_report["access_blocks"] = access_blocks
