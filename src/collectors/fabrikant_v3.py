@@ -143,13 +143,17 @@ class FabrikantV3Collector(FabrikantV2Collector):
         match = re.fullmatch(r"(\d{1,2})\s+([А-Яа-яЁё]+)\s+(20\d{2})(?:\s+(\d{1,2}):(\d{2}))?", value)
         if match and match.group(2).lower() in months:
             try:
-                return datetime(int(match.group(3)), months[match.group(2).lower()], int(match.group(1)), int(match.group(4) or 0), int(match.group(5) or 0))
+                hour = int(match.group(4)) if match.group(4) is not None else 12
+                minute = int(match.group(5)) if match.group(5) is not None else 0
+                return datetime(int(match.group(3)), months[match.group(2).lower()], int(match.group(1)), hour, minute)
             except ValueError:
                 return None
         match = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](20\d{2})(?:\s+(\d{1,2}):(\d{2}))?", value)
         if match:
             try:
-                return datetime(int(match.group(3)), int(match.group(2)), int(match.group(1)), int(match.group(4) or 0), int(match.group(5) or 0))
+                hour = int(match.group(4)) if match.group(4) is not None else 12
+                minute = int(match.group(5)) if match.group(5) is not None else 0
+                return datetime(int(match.group(3)), int(match.group(2)), int(match.group(1)), hour, minute)
             except ValueError:
                 return None
         return None
