@@ -86,7 +86,7 @@ class NotificationDeliveryState:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _repair_legacy_default_events(self) -> None:
-        """Migrate only legacy-recipient events without deleting canonical history."""
+        """Migrate legacy-recipient events while preserving their original event keys."""
         with self.db._connect() as conn:
             rows = conn.execute(
                 """
@@ -104,7 +104,11 @@ class NotificationDeliveryState:
             ).fetchall()
 
             for row in rows:
-                key = self._event_key_from_row(row)
+                # event_key is the immutable fingerprint that was stored when the
+                # notification was delivered. Recomputing it from the tender's
+                # current state would collapse historical events after a tender
+                # update and lose notification history.
+                key = str(row["event_key"])
                 tender_id = int(row["tender_id"])
                 self._repaired_event_keys[tender_id] = key
 
