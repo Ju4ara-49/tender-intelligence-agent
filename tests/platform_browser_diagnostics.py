@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -21,6 +22,9 @@ TARGETS = {
 QUERY = "подшипники"
 OUT = Path("output/platform_browser_diagnostics")
 OUT.mkdir(parents=True, exist_ok=True)
+NAVIGATION_TIMEOUT_MS = 30000
+NAVIGATION_ATTEMPTS = 3
+RETRY_DELAYS_SECONDS = (2, 5)
 
 SEARCH_SELECTORS = (
     "input[type='search']",
@@ -53,6 +57,35 @@ def classify_http_access(status: int | None) -> str | None:
     if status in ACCESS_BLOCK_STATUSES:
         return "access_block"
     return None
+
+
+def goto_with_retries(page, url: str, *, timeout_ms: int = NAVIGATION_TIMEOUT_MS, attempts: int = NAVIGATION_ATTEMPTS):
+    """Navigate with bounded retries for intermittent public-portal transport failures.
+
+    A single Chromium navigation timeout is not enough evidence that a public
+    portal is unavailable: the affected Russian procurement sites sometimes
+    have transient TLS/connectivity delays from hosted runners. We retry a
+    small fixed number of times, never bypassing WAF/CAPTCHA or access control.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = page.goto(url, wait_until="commit", timeout=timeout_ms)
+            return response, attempt
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts:
+                raise
+            time.sleep(RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)])
+            try:
+                page.close()
+            except Exception:
+                pass
+            # The caller cannot reuse a closed page, so recreate it through the
+            # page's browser context on the next attempt.
+            page = page.context.new_page()
+    assert last_error is not None
+    raise last_error
 
 
 def perform_search(page, query: str) -> dict[str, object]:
@@ -156,7 +189,8 @@ def main() -> int:
             page = context.new_page()
             entry: dict[str, object] = {"url": url, "query": QUERY}
             try:
-                response = page.goto(url, wait_until="commit", timeout=30000)
+                response, navigation_attempt = goto_with_retries(page, url)
+                entry["navigation_attempt"] = navigation_attempt
                 wait_for_initial_dom(page)
                 page.wait_for_timeout(5000)
                 try:
@@ -247,7 +281,8 @@ def main() -> int:
         summary_lines.append(
             f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` "
             f"status={entry.get('status')} result_count={entry.get('result_count')} "
-            f"links={entry.get('result_link_count', 0)}"
+            f"links={entry.get('result_link_count', 0)} "
+            f"navigation_attempt={entry.get('navigation_attempt', '-') }"
         )
     if failures:
         summary_lines.extend(["", "### Failures", *[f"- {item}" for item in failures]])
@@ -256,7 +291,3 @@ def main() -> int:
     (OUT / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
     print("\n".join(summary_lines))
     return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
