@@ -18,6 +18,7 @@ class NotificationDeliveryState:
 
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
+        self._repaired_event_keys: dict[int, str] = {}
         self._repair_legacy_default_events()
 
     @staticmethod
@@ -85,7 +86,7 @@ class NotificationDeliveryState:
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _repair_legacy_default_events(self) -> None:
-        """Migrate legacy-recipient events while preserving their original fingerprints."""
+        """Repair legacy recipient rows while preserving historical event keys."""
         with self.db._connect() as conn:
             rows = conn.execute(
                 """
@@ -102,9 +103,9 @@ class NotificationDeliveryState:
             ).fetchall()
 
             for row in rows:
-                # A legacy row already contains the historical fingerprint. Recomputing it
-                # from today's tender would collapse historical versions into the current one.
                 key = str(row["event_key"] or "").strip() or self._event_key_from_row(row)
+                tender_id = int(row["tender_id"])
+                self._repaired_event_keys[tender_id] = key
                 conn.execute(
                     """
                     INSERT INTO notification_events
@@ -112,14 +113,7 @@ class NotificationDeliveryState:
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(tender_id, event_key, channel, recipient_key) DO NOTHING
                     """,
-                    (
-                        int(row["tender_id"]),
-                        key,
-                        row["channel"],
-                        self.DEFAULT_RECIPIENT_KEY,
-                        row["sent_at"],
-                        row["payload"],
-                    ),
+                    (tender_id, key, row["channel"], self.DEFAULT_RECIPIENT_KEY, row["sent_at"], row["payload"]),
                 )
 
             conn.execute(
@@ -128,7 +122,7 @@ class NotificationDeliveryState:
             )
 
     def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
-        """Return True only when the exact current Tender state was delivered."""
+        """Return True when the current state or repaired legacy state was delivered."""
         event_key = self.event_key(tender)
         with self.db._connect() as conn:
             tender_id = self.db.get_tender_id(tender.unique_key)
@@ -141,7 +135,19 @@ class NotificationDeliveryState:
                 """,
                 (tender_id, event_key, self.CHANNEL, recipient_key),
             ).fetchone()
-        return row is not None
+            if row is not None:
+                return True
+            repaired_key = self._repaired_event_keys.get(tender_id)
+            if repaired_key is None or recipient_key != self.DEFAULT_RECIPIENT_KEY:
+                return False
+            repaired = conn.execute(
+                """
+                SELECT 1 FROM notification_events
+                WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                """,
+                (tender_id, repaired_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
+            ).fetchone()
+        return repaired is not None
 
     def mark_notified(
         self,
