@@ -226,6 +226,7 @@ class TenderDatabase:
 
         state = {
             "title": value("title"),
+            "description": value("description"),
             "url": value("url"),
             "price": value("price"),
             "currency": value("currency"),
@@ -251,7 +252,7 @@ class TenderDatabase:
         rows = conn.execute(
             """
             SELECT n.tender_id, n.channel, n.sent_at, n.payload,
-                   t.title, t.url, t.price, t.currency, t.start_date, t.end_date,
+                   t.title, t.description, t.url, t.price, t.currency, t.start_date, t.end_date,
                    t.deadline, t.published_at, t.region, t.customer,
                    t.customer_inn, t.law_type, t.raw_data
             FROM notifications n
@@ -292,7 +293,7 @@ class TenderDatabase:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, title, url, price, currency, start_date, end_date,
+                SELECT id, title, description, url, price, currency, start_date, end_date,
                        deadline, published_at, region, customer, customer_inn, law_type,
                        raw_data
                 FROM tenders WHERE unique_key = ?
@@ -478,7 +479,7 @@ class TenderDatabase:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             tender = conn.execute(
-                "SELECT id, title, url, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type, raw_data FROM tenders WHERE id = ?",
+                "SELECT id, title, description, url, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type, raw_data FROM tenders WHERE id = ?",
                 (tender_id,),
             ).fetchone()
             if tender is None:
