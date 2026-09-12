@@ -270,6 +270,16 @@ class TenderDatabase:
                 (row["tender_id"], event_key, row["channel"], self.DEFAULT_RECIPIENT_KEY, row["sent_at"], row["payload"]),
             )
 
+    @staticmethod
+    def _canonical_json(value) -> str:
+        """Serialize JSON-like data deterministically for semantic comparisons."""
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return value
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
     def next_search_number(self) -> int:
         with self._connect() as conn:
             conn.execute("INSERT OR IGNORE INTO search_counter(id, value) VALUES (1, 0)")
@@ -416,7 +426,7 @@ class TenderDatabase:
                     "deadline": previous["deadline"], "published_at": previous["published_at"],
                     "region": previous["region"], "customer": previous["customer"],
                     "customer_inn": previous["customer_inn"], "law_type": previous["law_type"],
-                    "raw_data": previous["raw_data"],
+                    "raw_data": self._canonical_json(previous["raw_data"]),
                 }
                 current_values = {
                     "title": snapshot["title"], "url": snapshot["url"], "description": snapshot["description"],
@@ -425,7 +435,7 @@ class TenderDatabase:
                     "deadline": snapshot["deadline"], "published_at": snapshot["published_at"],
                     "region": snapshot["region"], "customer": snapshot["customer"],
                     "customer_inn": snapshot["customer_inn"], "law_type": snapshot["law_type"],
-                    "raw_data": json.dumps(snapshot["raw_data"], ensure_ascii=False),
+                    "raw_data": self._canonical_json(snapshot["raw_data"]),
                 }
                 changed_fields = [field for field in tracked_fields if previous_values[field] != current_values[field]]
                 event_type = "updated"
