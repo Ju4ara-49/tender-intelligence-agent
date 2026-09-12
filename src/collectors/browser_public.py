@@ -57,13 +57,30 @@ class _BrowserTenderCollector(BaseCollector):
         logger.info("%s: найдено %d уникальных процедур", self.platform, len(merged))
         return list(merged.values())[: self.max_results]
 
+    @staticmethod
+    def _wait_for_initial_dom(page) -> None:
+        """Wait for the DOM without requiring all SPA resources to finish loading."""
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
+        try:
+            page.locator("body").wait_for(state="attached", timeout=5000)
+        except Exception:
+            pass
+
+    def _goto(self, page, url: str) -> None:
+        """Navigate to a JS-heavy portal without blocking on long-lived requests."""
+        page.goto(url, wait_until="commit", timeout=self.timeout_ms)
+        self._wait_for_initial_dom(page)
+
     def _search_one(self, query: str) -> list[Tender]:
         logger.info("%s: поиск по ключевому слову: %s", self.platform, query)
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
                 page = browser.new_page(locale="ru-RU")
-                page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                self._goto(page, self.BASE_URL)
                 page.wait_for_timeout(1800)
                 self._perform_search(page, query)
                 page.wait_for_timeout(3000)
@@ -97,7 +114,7 @@ class _BrowserTenderCollector(BaseCollector):
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
                 page = browser.new_page(locale="ru-RU")
-                page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                self._goto(page, url)
                 page.wait_for_timeout(2500)
                 self._open_information_sections(page)
                 page.wait_for_timeout(1200)
