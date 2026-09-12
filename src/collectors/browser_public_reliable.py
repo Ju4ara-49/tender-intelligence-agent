@@ -80,6 +80,14 @@ class ReliableBrowserSearchMixin:
             return []
 
         results = self._parse_results(html)
+        if search_control_found and not results:
+            # Keep the rendered page for parser diagnostics and make the
+            # zero-result state explicit. A successful click with a skeleton
+            # response must never be treated as a valid empty search.
+            logger.warning(
+                "%s: RESULT_PARSER_ZERO — submitted search produced no parsed procedures for %r",
+                self.platform, query,
+            )
         logger.info("%s: keyword=%r: search_control=%s, принято %d результатов", self.platform, query, search_control_found, len(results))
         if search_control_found and not results:
             logger.warning("%s: RESULT_PARSER_ZERO — поиск был отправлен, но парсер не нашёл процедур для %r", self.platform, query)
