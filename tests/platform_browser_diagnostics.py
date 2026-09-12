@@ -147,6 +147,8 @@ def extract_result_evidence(text: str) -> dict[str, object]:
 def main() -> int:
     report: dict[str, object] = {}
     failures: list[str] = []
+    ci_failures: list[str] = []
+    access_blocks: list[str] = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(locale="ru-RU")
@@ -176,7 +178,9 @@ def main() -> int:
                 if entry["waf"] or access_class:
                     entry["diagnostic_state"] = "waf_or_block" if entry["waf"] else "http_access_block"
                     entry["failure_class"] = "access_block"
-                    failures.append(f"{name}: access block (HTTP {entry['status']})" if access_class else f"{name}: WAF or access block")
+                    message = f"{name}: access block (HTTP {entry['status']})" if access_class else f"{name}: WAF or access block"
+                    failures.append(message)
+                    access_blocks.append(message)
                 else:
                     entry["search"] = perform_search(page, QUERY)
                     page.wait_for_timeout(5000)
@@ -195,39 +199,53 @@ def main() -> int:
                     if not control_found:
                         entry["diagnostic_state"] = "search_control_missing"
                         entry["failure_class"] = "search_adapter"
-                        failures.append(f"{name}: search control missing")
+                        message = f"{name}: search control missing"
+                        failures.append(message)
+                        ci_failures.append(message)
                     elif result_count is not None or links:
                         entry["diagnostic_state"] = "ok"
                     else:
                         entry["diagnostic_state"] = "search_returned_no_evidence"
                         entry["failure_class"] = "search_result_surface"
-                        failures.append(f"{name}: search returned no result evidence")
+                        message = f"{name}: search returned no result evidence"
+                        failures.append(message)
+                        ci_failures.append(message)
                 page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
             except Exception as exc:
                 entry["error"] = repr(exc)
                 entry["diagnostic_state"] = "exception"
                 entry["failure_class"] = "transport"
-                failures.append(f"{name}: {exc!r}")
+                message = f"{name}: {exc!r}"
+                failures.append(message)
+                ci_failures.append(message)
             finally:
                 page.close()
             report[name] = entry
         context.close()
         browser.close()
     report["failures"] = failures
+    report["ci_failures"] = ci_failures
+    report["access_blocks"] = access_blocks
+    report["access_block_count"] = len(access_blocks)
+    report["ci_failure_count"] = len(ci_failures)
     (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     summary_lines = ["## Platform browser diagnostics", "", f"Query: `{QUERY}`", ""]
     for name, entry in report.items():
-        if name == "failures":
+        if name in {"failures", "ci_failures", "access_blocks", "access_block_count", "ci_failure_count"}:
             continue
         summary_lines.append(f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` status={entry.get('status')} result_count={entry.get('result_count')} links={entry.get('result_link_count', 0)} navigation_attempt={entry.get('navigation_attempt', '-')}")
-    if failures:
-        summary_lines.extend(["", "### Failures", *[f"- {item}" for item in failures]])
-    else:
+    if access_blocks:
+        summary_lines.extend(["", "### External access blocks (inconclusive, not a Python failure)", *[f"- {item}" for item in access_blocks]])
+    if ci_failures:
+        summary_lines.extend(["", "### Diagnostic failures", *[f"- {item}" for item in ci_failures]])
+    elif not access_blocks:
         summary_lines.extend(["", "All supported public platform endpoints passed the browser search probe."])
+    else:
+        summary_lines.extend(["", "No internal diagnostic failure was detected; externally blocked portals require a network-accessible recheck."])
     (OUT / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
     print("\n".join(summary_lines))
-    return 1 if failures else 0
+    return 1 if ci_failures else 0
 
 
 if __name__ == "__main__":
