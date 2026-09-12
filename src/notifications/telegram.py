@@ -20,6 +20,7 @@ class TelegramNotifier:
     PLATFORM_NAMES = {
         "eis": "ЕИС",
         "b2b_center": "B2B-Center",
+        "fabrikant": "Фабрикант",
         "fabricant": "Фабрикант",
         "rts_tender": "РТС-тендер",
         "tmk": "ТМК",
