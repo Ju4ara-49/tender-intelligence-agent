@@ -60,3 +60,26 @@ def test_rich_delivery_state_accepts_identical_state(tmp_path):
 
     assert state.was_notified(tender) is True
     assert db.count_notifications() == 1
+
+
+def test_legacy_notifications_migrate_with_the_same_fingerprint_as_delivery_state(tmp_path):
+    db = TenderDatabase(tmp_path / "legacy_migration.db")
+    tender = _tender()
+    tender.description = "Подробное описание закупки"
+    tender_id = db.save_tender(tender)
+
+    with db._connect() as conn:
+        conn.execute(
+            "INSERT INTO notifications (tender_id, channel, sent_at, payload) VALUES (?, 'telegram', ?, '{}')",
+            (tender_id, datetime.now(timezone.utc).isoformat()),
+        )
+
+    # Re-open the database so the legacy notification is migrated into
+    # notification_events. The non-empty description is intentional: older
+    # code used a different fingerprint and could silently resend the tender.
+    db = TenderDatabase(tmp_path / "legacy_migration.db")
+    state = NotificationDeliveryState(db)
+
+    assert db.was_notified(tender.unique_key) is True
+    assert state.was_notified(tender) is True
+    assert db.count_notifications() == 1
