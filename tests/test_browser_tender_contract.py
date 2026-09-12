@@ -39,3 +39,22 @@ def test_browser_detail_populates_common_tender_contract_fields():
     assert tender.postpayment_days == 15
     assert tender.application_security_percent == 2.0
     assert tender.contract_security_percent == 5.0
+
+
+def test_browser_detail_extracts_spaced_customer_inn():
+    html = """
+    <html><body>
+      <h1>Поставка запасных частей</h1>
+      Заказчик: ООО Ромашка
+      ИНН: 78 12 345678
+      Регион поставки: Санкт-Петербург
+      НМЦ: 100 000 руб.
+      Дата окончания: 20.09.2026 18:00
+    </body></html>
+    """
+    tender = ReliableRtsTenderCollector()._parse_detail(
+        html,
+        "1234568",
+        "https://www.rts-tender.ru/procedure/1234568",
+    )
+    assert tender.customer_inn == "7812345678"
