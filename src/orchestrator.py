@@ -256,7 +256,16 @@ class Orchestrator:
         platforms: list[str] | None = None,
         exclude_keywords: list[str] | None = None,
         regions: list[str] | None = None,
+        notification_recipient_key: str | None = None,
+        notification_chat_id: str | None = None,
     ) -> dict[str, int]:
+        """Run one search and optionally scope Telegram delivery to its recipient.
+
+        ``notification_recipient_key`` separates notification history between
+        profiles. ``notification_chat_id`` routes the actual Telegram message to
+        the same user's chat. Both are optional so CLI/scheduled calls retain the
+        configured global Telegram destination.
+        """
         search_number = self._get_next_search_number()
         stats = {
             "search_number": search_number, "found": 0, "soft_filtered": 0, "filtered": 0,
@@ -274,9 +283,11 @@ class Orchestrator:
         enabled_platforms = platforms if platforms is not None else self.criteria_store.get_enabled_platforms(user_id)
         exclusions = exclude_keywords if exclude_keywords is not None else criteria.exclude_keywords
         selected_regions = regions if regions is not None else criteria.regions
+        recipient_key = str(notification_recipient_key).strip() if notification_recipient_key else NotificationDeliveryState.DEFAULT_RECIPIENT_KEY
         logger.info(
-            "Поиск: user_id=%s | keywords=%s | platforms=%s | regions=%s",
-            user_id, search_keywords, enabled_platforms, selected_regions,
+            "Поиск: user_id=%s | keywords=%s | platforms=%s | regions=%s | notification_recipient=%s | notification_chat=%s",
+            user_id, search_keywords, enabled_platforms, selected_regions, recipient_key,
+            notification_chat_id or self.notifier.chat_id or "<none>",
         )
 
         self.keyword_filter = KeywordFilter(include=search_keywords, exclude=exclusions, min_text_length=min_text)
@@ -360,7 +371,7 @@ class Orchestrator:
             if tender_id is None:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
                 continue
-            if self.notification_state.was_notified(tender):
+            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
             try:
@@ -373,11 +384,11 @@ class Orchestrator:
             stats["analyzed"] += 1
             if analysis.relevance_score < criteria.min_ai_score:
                 continue
-            if self.notification_state.was_notified(tender):
+            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
-            if self.notifier.send_tender_alert(tender, analysis):
-                self.notification_state.mark_notified(tender)
+            if self.notifier.send_tender_alert(tender, analysis, chat_id=notification_chat_id):
+                self.notification_state.mark_notified(tender, recipient_key=recipient_key)
                 stats["notified"] += 1
 
         try:
@@ -412,6 +423,8 @@ class Orchestrator:
                 platforms=profile.platforms or None,
                 exclude_keywords=profile.exclusions,
                 regions=profile.regions,
+                notification_recipient_key=f"profile:{profile.id}",
+                notification_chat_id=user_id,
             )
             self.profile_store.record_run(user_id, profile.id, stats, started_at=started_at)
             results.append(stats)
