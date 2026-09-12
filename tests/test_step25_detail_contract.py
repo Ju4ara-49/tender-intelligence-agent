@@ -45,3 +45,49 @@ def test_notification_state_is_recipient_aware(tmp_path) -> None:
             (tender_id,),
         ).fetchall()
     assert {row["recipient_key"] for row in rows} == {"user-a"}
+
+
+def test_detail_metadata_survives_raw_data_round_trip() -> None:
+    tender = Tender(
+        platform="test",
+        external_id="docs-1",
+        title="Test",
+        url="https://example.test/docs-1",
+        documents=[{"name": "Извещение", "url": "https://example.test/doc.pdf"}],
+        field_sources={"customer": "detail.customer"},
+    )
+    restored = Tender(
+        platform=tender.platform,
+        external_id=tender.external_id,
+        title=tender.title,
+        url=tender.url,
+        raw_data=tender.raw_data,
+    )
+    assert restored.documents == tender.documents
+    assert restored.field_sources == tender.field_sources
+
+
+def test_detail_contract_extracts_spaced_inn() -> None:
+    from src.collectors.detail_contract import enforce_detail_contract
+
+    tender = Tender(
+        platform="dummy",
+        external_id="2",
+        title="Title",
+        url="https://example.test/2",
+        customer="ООО Тест",
+        description="ИНН: 77 01 234567",
+        price=100,
+        deadline=datetime(2026, 9, 20, 12, 0),
+    )
+
+    class Collector:
+        platform = "dummy"
+
+        def get_details(self, external_id):
+            return tender
+
+    collector = Collector()
+    enforce_detail_contract(collector)
+    result = collector.get_details("2")
+    assert result.customer_inn == "7701234567"
