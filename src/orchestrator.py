@@ -131,13 +131,21 @@ class Orchestrator:
             tender.raw_data["detail_diagnostics"] = diagnostics[:4000]
         return self._normalize_tender_datetimes(tender)
 
-    def _enrich_tender(self, collector, tender: Tender) -> tuple[Tender, str]:
+    def _enrich_tender(self, collector, tender: Tender) -> tuple[Tender, bool]:
+        """Load detail data and return a backward-compatible success flag.
+
+        The tender itself carries the richer ``detail_status`` value (success,
+        partial, failed).  Returning a boolean here preserves the public helper
+        contract used by older callers/tests while the orchestrator derives the
+        detailed statistics from ``enriched.detail_status``.
+        """
         get_details = getattr(collector, "get_details", None)
         if not callable(get_details) or not tender.external_id:
             tender.detail_status = "partial"
             tender.raw_data["details_loaded"] = False
             tender.raw_data["detail_status"] = "partial"
-            return self._normalize_tender_datetimes(tender), "partial"
+            tender = self._normalize_tender_datetimes(tender)
+            return tender, False
         try:
             logger.info(
                 "%s: загружаем детали тендера %s",
@@ -146,26 +154,27 @@ class Orchestrator:
             detailed = get_details(tender.external_id)
             if detailed is None:
                 tender = self._set_detail_failure(tender, "get_details returned None")
-                return self._normalize_tender_datetimes(tender), "failed"
+                return self._normalize_tender_datetimes(tender), False
             tender = self._merge_detail(tender, detailed)
             logger.info(
                 "%s: детали %s | price=%s | customer=%s | deadline=%s | status=%s",
                 getattr(collector, "platform", "unknown"), tender.external_id,
                 tender.price, bool(tender.customer), tender.deadline, tender.detail_status,
             )
-            return tender, tender.detail_status
+            return tender, tender.detail_status == "success"
         except Exception as exc:
             logger.exception(
                 "%s: ошибка загрузки деталей %s",
                 getattr(collector, "platform", "unknown"), tender.external_id,
             )
             tender = self._set_detail_failure(tender, f"{type(exc).__name__}: {exc}")
-            return self._normalize_tender_datetimes(tender), "failed"
+            return self._normalize_tender_datetimes(tender), False
 
-    def _search_platform(self, collector, keywords: list[str]) -> tuple[str, list[Tender]]:
+    @staticmethod
+    def _search_platform(collector, keywords: list[str]) -> tuple[str, list[Tender]]:
         platform = getattr(collector, "platform", "unknown")
         try:
-            config = self.settings.config.get("collectors", {}).get(platform, {})
+            config = collector.config if hasattr(collector, "config") else {}
             lookback_days = int(config.get("lookback_days", 3))
             since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
             found = collector.search(keywords=keywords, since=since) or []
@@ -301,10 +310,11 @@ class Orchestrator:
         for collector, tender in soft_pairs:
             if self.stop_requested:
                 break
-            enriched, detail_status = self._enrich_tender(collector, tender)
-            stats["details_loaded"] += int(detail_status == "success")
+            enriched, detail_loaded = self._enrich_tender(collector, tender)
+            detail_status = str(getattr(enriched, "detail_status", "partial") or "partial")
+            stats["details_loaded"] += int(detail_status == "success" and detail_loaded)
             stats["details_partial"] += int(detail_status == "partial")
-            stats["details_failed"] += int(detail_status == "failed")
+            stats["details_failed"] += int(detail_status == "failed" or not detail_loaded and detail_status == "failed")
             enriched_pairs.append((collector, enriched))
 
             # Persist the discovery/detail result before strict filtering so a
