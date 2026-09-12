@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-# This is intentionally the complete supported-platform smoke matrix.  The
+# This is intentionally the complete supported-platform smoke matrix. The
 # regular unit tests exercise collectors offline; this probe checks that every
 # public platform is reachable and exposes a usable search surface.
 TARGETS = {
@@ -111,6 +112,31 @@ def wait_for_initial_dom(page) -> None:
         pass
 
 
+def extract_result_evidence(text: str) -> dict[str, object]:
+    """Detect an explicit result state even when the portal has no result links.
+
+    A legitimate search may return zero procedures. The previous probe treated
+    that as a failure merely because no <a> elements were present, which made a
+    valid Fabrikant 223-FZ empty result look like a parser/transport failure.
+    """
+    normalized = " ".join(text.split())
+    patterns = (
+        r"\bВсего\s*:\s*([0-9][0-9\s]*)\b",
+        r"\bАктуальных\s+лотов\s*:\s*([0-9][0-9\s]*)\b",
+        r"\bПоказаны\s+первые\s+([0-9][0-9\s]*)\s+запис(?:и|ей)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized, re.I)
+        if not match:
+            continue
+        raw = re.sub(r"\s+", "", match.group(1))
+        try:
+            return {"result_count": int(raw), "result_count_evidence": match.group(0)}
+        except ValueError:
+            continue
+    return {"result_count": None, "result_count_evidence": None}
+
+
 def main() -> int:
     report: dict[str, object] = {}
     failures: list[str] = []
@@ -146,6 +172,7 @@ def main() -> int:
 
                 if entry["waf"]:
                     entry["diagnostic_state"] = "waf_or_block"
+                    entry["failure_class"] = "access_block"
                     failures.append(f"{name}: WAF or access block")
                 else:
                     entry["search"] = perform_search(page, QUERY)
@@ -155,6 +182,8 @@ def main() -> int:
                     except Exception:
                         pass
                     result_text = page.locator("body").inner_text(timeout=5000)
+                    result_evidence = extract_result_evidence(result_text)
+                    entry.update(result_evidence)
                     links = page.locator("a[href]").evaluate_all(
                         "els => els.map(e => ({text:(e.innerText||'').trim().slice(0,300),href:e.href})).filter(x => x.text || x.href).slice(0,200)"
                     )
@@ -162,19 +191,29 @@ def main() -> int:
                     entry["result_links"] = links
                     entry["result_link_count"] = len(links)
                     control_found = bool(entry["search"].get("control_found"))
+                    result_count = entry.get("result_count")
                     if not control_found:
                         entry["diagnostic_state"] = "search_control_missing"
+                        entry["failure_class"] = "search_adapter"
                         failures.append(f"{name}: search control missing")
-                    elif not links:
-                        entry["diagnostic_state"] = "search_returned_no_links"
-                        failures.append(f"{name}: search returned no links")
-                    else:
+                    elif result_count is not None:
+                        # Explicit result counts, including zero, prove that the
+                        # query reached a real result surface. Zero is not itself
+                        # a collector failure: the chosen smoke keyword may simply
+                        # have no current matches on that platform.
                         entry["diagnostic_state"] = "ok"
+                    elif links:
+                        entry["diagnostic_state"] = "ok"
+                    else:
+                        entry["diagnostic_state"] = "search_returned_no_evidence"
+                        entry["failure_class"] = "search_result_surface"
+                        failures.append(f"{name}: search returned no result evidence")
 
                 page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
             except Exception as exc:
                 entry["error"] = repr(exc)
                 entry["diagnostic_state"] = "exception"
+                entry["failure_class"] = "transport"
                 failures.append(f"{name}: {exc!r}")
             finally:
                 page.close()
@@ -193,7 +232,8 @@ def main() -> int:
             continue
         summary_lines.append(
             f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` "
-            f"status={entry.get('status')} links={entry.get('result_link_count', 0)}"
+            f"status={entry.get('status')} result_count={entry.get('result_count')} "
+            f"links={entry.get('result_link_count', 0)}"
         )
     if failures:
         summary_lines.extend(["", "### Failures", *[f"- {item}" for item in failures]])
