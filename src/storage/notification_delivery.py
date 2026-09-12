@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 
 from src.models.tender import Tender
 from src.storage.database import TenderDatabase
@@ -15,11 +16,34 @@ class NotificationDeliveryState:
     CHANNEL = "telegram"
     DEFAULT_RECIPIENT_KEY = TenderDatabase.DEFAULT_RECIPIENT_KEY
     LEGACY_RECIPIENT_KEY = "__legacy__"
+    CLAIM_TTL = timedelta(minutes=10)
 
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
         self._repaired_event_keys: dict[int, str] = {}
+        self._ensure_claim_schema()
         self._repair_legacy_default_events()
+
+    def _ensure_claim_schema(self) -> None:
+        """Create an atomic in-flight delivery reservation table."""
+        with self.db._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notification_delivery_claims (
+                    tender_id INTEGER NOT NULL,
+                    event_key TEXT NOT NULL,
+                    channel TEXT NOT NULL DEFAULT 'telegram',
+                    recipient_key TEXT NOT NULL DEFAULT '__default__',
+                    claimed_at TEXT NOT NULL,
+                    PRIMARY KEY (tender_id, event_key, channel, recipient_key),
+                    FOREIGN KEY (tender_id) REFERENCES tenders(id)
+                )
+                """
+            )
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(timezone.utc)
 
     @staticmethod
     def _normalized_fields(tender: Tender) -> dict:
@@ -104,14 +128,9 @@ class NotificationDeliveryState:
             ).fetchall()
 
             for row in rows:
-                # event_key is the immutable fingerprint that was stored when the
-                # notification was delivered. Recomputing it from the tender's
-                # current state would collapse historical events after a tender
-                # update and lose notification history.
                 key = str(row["event_key"])
                 tender_id = int(row["tender_id"])
                 self._repaired_event_keys[tender_id] = key
-
                 existing = conn.execute(
                     """
                     SELECT 1 FROM notification_events
@@ -143,12 +162,18 @@ class NotificationDeliveryState:
             )
 
     def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
-        """Return True only when the exact current Tender state was delivered."""
+        """Return True when delivered; otherwise atomically reserve the send slot.
+
+        The reservation closes the check-then-send race between concurrent
+        orchestrators. A stale reservation is automatically reclaimable after
+        ``CLAIM_TTL`` so a crashed process cannot block delivery forever.
+        """
         event_key = self.event_key(tender)
         with self.db._connect() as conn:
             tender_id = self.db.get_tender_id(tender.unique_key)
             if tender_id is None:
                 return False
+
             row = conn.execute(
                 """
                 SELECT 1 FROM notification_events
@@ -160,16 +185,31 @@ class NotificationDeliveryState:
                 return True
 
             repaired_key = self._repaired_event_keys.get(tender_id)
-            if repaired_key is None or recipient_key != self.DEFAULT_RECIPIENT_KEY:
-                return False
-            repaired = conn.execute(
+            if repaired_key is not None and recipient_key == self.DEFAULT_RECIPIENT_KEY:
+                repaired = conn.execute(
+                    """
+                    SELECT 1 FROM notification_events
+                    WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                    """,
+                    (tender_id, repaired_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
+                ).fetchone()
+                if repaired is not None:
+                    return True
+
+            cutoff = (self._now() - self.CLAIM_TTL).isoformat()
+            conn.execute(
+                "DELETE FROM notification_delivery_claims WHERE claimed_at < ?",
+                (cutoff,),
+            )
+            cursor = conn.execute(
                 """
-                SELECT 1 FROM notification_events
-                WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                INSERT OR IGNORE INTO notification_delivery_claims
+                    (tender_id, event_key, channel, recipient_key, claimed_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (tender_id, repaired_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
-            ).fetchone()
-        return repaired is not None
+                (tender_id, event_key, self.CHANNEL, recipient_key, self._now().isoformat()),
+            )
+            return cursor.rowcount == 0
 
     def mark_notified(
         self,
@@ -177,14 +217,20 @@ class NotificationDeliveryState:
         payload: dict | None = None,
         recipient_key: str = DEFAULT_RECIPIENT_KEY,
     ) -> None:
-        """Record the exact current Tender fingerprint."""
+        """Record the exact current Tender fingerprint and release its claim."""
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             raise ValueError(f"Tender not found: {tender.unique_key}")
+        event_key = self.event_key(tender)
         self.db.mark_notified(
             tender_id,
             channel=self.CHANNEL,
             payload=payload,
-            event_key=self.event_key(tender),
+            event_key=event_key,
             recipient_key=recipient_key,
         )
+        with self.db._connect() as conn:
+            conn.execute(
+                "DELETE FROM notification_delivery_claims WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?",
+                (tender_id, event_key, self.CHANNEL, recipient_key),
+            )
