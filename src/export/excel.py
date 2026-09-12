@@ -74,8 +74,8 @@ def export_tenders_to_excel(
 
         procurement_method = raw_data.get("procurement_method", "")
         platform_names = {
-            "eis": "ЕИС", "b2b_center": "B2B-Center", "rts_tender": "РТС-тендер",
-            "fabricant": "Фабрикант", "tmk": "ТМК", "rosatom": "Росатом",
+            "eis": "ЕИС", "b2b_center": "B2B-Center", "fabrikant": "Фабрикант",
+            "fabricant": "Фабрикант", "rts_tender": "РТС-тендер", "tmk": "ТМК", "rosatom": "Росатом",
         }
         platform = platform_names.get(row["platform"] or "", row["platform"] or "")
         recommendation_names = {
