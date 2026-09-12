@@ -72,9 +72,39 @@ class KeywordFilter:
                 return False
         return True
 
+    @staticmethod
+    def _b2b_details_are_complete(tender: Tender) -> bool:
+        """Require successful detail loading before strict B2B-Center matching.
+
+        B2B-Center discovery intentionally returns lightweight rows.  Those rows
+        are not safe for final filtering because title-only data can produce false
+        positives and missing commercial fields can bypass downstream criteria.
+        The detail collector marks a successful load with ``details_loaded=True``.
+        """
+        if tender.platform != "b2b_center":
+            return True
+
+        raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
+        if raw.get("details_loaded") is not True:
+            return False
+
+        # These fields are the minimum contract used by the B2B quality gate.
+        # Empty customer/price/deadline means the detail page was not parsed
+        # completely enough for a strict match, even if the page itself loaded.
+        if not str(tender.customer or "").strip():
+            return False
+        if tender.price is None:
+            return False
+        if tender.deadline is None and tender.end_date is None:
+            return False
+        return True
+
     def matches_strict(self, tender: Tender) -> bool:
         """Финальный INCLUDE-фильтр по полному тексту тендера."""
         if not self.matches_soft(tender):
+            return False
+        if not self._b2b_details_are_complete(tender):
+            logger.debug("Пропуск %s: B2B-Center details incomplete", tender.unique_key)
             return False
         if not self.include:
             return True
