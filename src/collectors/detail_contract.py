@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-
 from src.models.tender import Tender
 
 
@@ -22,14 +20,15 @@ def _extract_inn(tender: Tender) -> str:
                 return match.group(0)
     text_parts = [tender.description, str(raw.get("details", ""))]
     text = " ".join(text_parts)
+    digit_pattern = r"(\d(?:\s*\d){9}(?:\s*\d\s*\d)?)"
     patterns = (
-        r"(?:ИНН|И\.Н\.Н\.)\s*[:№]?\s*(\d{10}(?:\d{2})?)\b",
-        r"\bИНН\s*(\d{10}(?:\d{2})?)\b",
+        rf"(?:ИНН|И\.Н\.Н\.)\s*[:№]?\s*{digit_pattern}\b",
+        rf"\bИНН\s*{digit_pattern}\b",
     )
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
-            return match.group(1)
+            return re.sub(r"\s+", "", match.group(1))
     return ""
 
 
