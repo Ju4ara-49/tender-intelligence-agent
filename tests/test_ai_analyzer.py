@@ -124,6 +124,35 @@ class TenderAnalyzerTests(unittest.TestCase):
         self.assertTrue(analysis.is_stub)
         self.assertIn("JSON", analysis.summary)
 
+    def test_non_numeric_score_becomes_stub_instead_of_crashing_pipeline(self) -> None:
+        analyzer = TenderAnalyzer(
+            model="qwen3:8b", ollama_url="http://localhost:11434", use_stub_when_no_key=True
+        )
+        fake_response = _FakeResponse(
+            status_code=200,
+            json_data={"message": {"content": '{"relevance_score":"unknown","recommendation":"participate"}'}},
+        )
+        with patch("src.ai.analyzer.requests.post", return_value=fake_response):
+            analysis = analyzer.analyze(_make_tender())
+        self.assertTrue(analysis.is_stub)
+        self.assertIn("relevance_score", analysis.summary)
+
+    def test_invalid_recommendation_and_risks_are_normalized(self) -> None:
+        analyzer = TenderAnalyzer(model="qwen3:8b", ollama_url="http://localhost:11434")
+        fake_response = _FakeResponse(
+            status_code=200,
+            json_data={
+                "message": {
+                    "content": '{"relevance_score":150,"recommendation":"maybe","risks":"Есть риск"}'
+                }
+            },
+        )
+        with patch("src.ai.analyzer.requests.post", return_value=fake_response):
+            analysis = analyzer.analyze(_make_tender())
+        self.assertEqual(analysis.relevance_score, 100)
+        self.assertEqual(analysis.recommendation, "review")
+        self.assertEqual(analysis.risks, ["Есть риск"])
+
 
 if __name__ == "__main__":
     unittest.main()
