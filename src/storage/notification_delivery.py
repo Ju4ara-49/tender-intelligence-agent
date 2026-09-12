@@ -134,18 +134,18 @@ class NotificationDeliveryState:
             )
 
     def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
-        """Return True when the currently persisted tender state was delivered to this recipient."""
-        current = self.db._current_notification_event_key(tender.unique_key)
-        if current is None:
-            return False
-        tender_id, key = current
+        """Return True when the current Tender object state was delivered to this recipient."""
+        event_key = self.event_key(tender)
         with self.db._connect() as conn:
+            tender_id = self.db.get_tender_id(tender.unique_key)
+            if tender_id is None:
+                return False
             row = conn.execute(
                 """
                 SELECT 1 FROM notification_events
                 WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
                 """,
-                (tender_id, key, self.CHANNEL, recipient_key),
+                (tender_id, event_key, self.CHANNEL, recipient_key),
             ).fetchone()
         return row is not None
 
@@ -155,7 +155,7 @@ class NotificationDeliveryState:
         payload: dict | None = None,
         recipient_key: str = DEFAULT_RECIPIENT_KEY,
     ) -> None:
-        """Record the fingerprint calculated from the persisted tender row."""
+        """Record the exact current Tender fingerprint."""
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             raise ValueError(f"Tender not found: {tender.unique_key}")
@@ -163,5 +163,6 @@ class NotificationDeliveryState:
             tender_id,
             channel=self.CHANNEL,
             payload=payload,
+            event_key=self.event_key(tender),
             recipient_key=recipient_key,
         )
