@@ -101,3 +101,13 @@ def test_max_postpayment_and_security_accept_values_inside_limits() -> None:
     tender = _tender(postpayment_days=30, application_security_percent=5, contract_security_percent=10)
     criteria = TenderCriteria(max_postpayment_days=30, max_application_security_percent=5, max_contract_security_percent=10)
     assert Orchestrator._passes_criteria(tender, criteria) == (True, "")
+
+
+def test_regions_ignores_blank_configuration_values() -> None:
+    tender = _tender(region="Санкт-Петербург")
+    assert Orchestrator._passes_regions(tender, [" ", "", "  "]) is True
+
+
+def test_regions_rejects_missing_tender_region_when_filter_is_real() -> None:
+    tender = _tender(region="")
+    assert Orchestrator._passes_regions(tender, ["Санкт-Петербург"]) is False
