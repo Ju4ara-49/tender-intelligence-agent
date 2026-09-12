@@ -16,7 +16,8 @@ from src.collectors.eis_reliable import ReliableEisZakupkiCollector
 from src.collectors.fabrikant_v3 import FabrikantV3Collector
 
 
-# Все поддерживаемые площадки. Конкретное включение управляется Telegram.
+# Все поддерживаемые площадки. Конкретное включение определяется одновременно
+# конфигурацией приложения и пользовательским выбором в Telegram.
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
     ReliableEisZakupkiCollector,
     ReliableB2BCenterCollector,
@@ -31,22 +32,27 @@ def get_enabled_collectors(
     config: dict,
     enabled_platforms: list[str] | None = None,
 ) -> list[BaseCollector]:
-    """Создать экземпляры выбранных сборщиков.
+    """Создать экземпляры реально разрешённых сборщиков.
 
-    Если Telegram передал список площадок, это явный пользовательский выбор
-    и он имеет приоритет над enabled-флагом в config.yaml.
+    Без явного пользовательского списка используются только площадки с
+    ``enabled: true`` в config.yaml. При наличии списка из Telegram он
+    дополнительно ограничивает этот набор: пользователь не может включить
+    площадку, которую администратор отключил в конфигурации.
     """
     enabled: list[BaseCollector] = []
     selected = None
     if enabled_platforms is not None:
-        selected = {str(platform).strip() for platform in enabled_platforms if str(platform).strip()}
+        selected = {
+            str(platform).strip()
+            for platform in enabled_platforms
+            if str(platform).strip()
+        }
 
     for collector_cls in ALL_COLLECTORS:
         instance = collector_cls()
-        if selected is not None:
-            if instance.platform not in selected:
-                continue
-        elif not instance.is_enabled(config):
+        if not instance.is_enabled(config):
+            continue
+        if selected is not None and instance.platform not in selected:
             continue
 
         platform_config = instance.get_platform_config(config)
