@@ -50,6 +50,7 @@ class Tender:
     def __post_init__(self) -> None:
         """Normalize timestamps and recover common commercial terms from detail text."""
         self.to_utc()
+        self._restore_detail_metadata()
         self._enrich_commercial_terms()
         self._persist_normalized_fields()
 
@@ -69,6 +70,33 @@ class Tender:
             setattr(self, field_name, value.astimezone(timezone.utc))
         self._persist_normalized_fields()
         return self
+
+    def _restore_detail_metadata(self) -> None:
+        """Restore persisted detail documents/provenance from raw_data."""
+        raw = self.raw_data if isinstance(self.raw_data, dict) else {}
+        if not self.documents:
+            documents = raw.get("documents")
+            if isinstance(documents, list):
+                restored = []
+                for item in documents:
+                    if not isinstance(item, dict):
+                        continue
+                    normalized = {
+                        str(key): str(value).strip()
+                        for key, value in item.items()
+                        if value is not None and str(value).strip()
+                    }
+                    if normalized:
+                        restored.append(normalized)
+                self.documents = restored
+        if not self.field_sources:
+            sources = raw.get("field_sources")
+            if isinstance(sources, dict):
+                self.field_sources = {
+                    str(key): str(value).strip()
+                    for key, value in sources.items()
+                    if value is not None and str(value).strip()
+                }
 
     def _enrich_commercial_terms(self) -> None:
         """Fill unified commercial fields from Russian tender detail text.
@@ -121,6 +149,10 @@ class Tender:
         """
         if not isinstance(self.raw_data, dict):
             self.raw_data = {}
+        if self.documents:
+            self.raw_data["documents"] = [dict(item) for item in self.documents]
+        if self.field_sources:
+            self.raw_data["field_sources"] = dict(self.field_sources)
         self.raw_data["_normalized"] = {
             "advance_required": bool(self.advance_required),
             "advance_percent": self.advance_percent,
