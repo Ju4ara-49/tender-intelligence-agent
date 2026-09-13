@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing as mp
+import queue as queue_module
 import re
 import time
 from pathlib import Path
@@ -268,20 +269,34 @@ def main() -> int:
     access_blocks: list[str] = []
 
     # Start all probes together and enforce one global wall-clock budget. The
-    # previous sequential join could spend 150s per dead portal and make CI
-    # unnecessarily long. Results are collected by process identity rather than
-    # Queue.empty(), which is racy for multiprocessing queues.
+    # parent drains the queue while children run; otherwise a large diagnostic
+    # payload can fill the IPC pipe and keep a completed child alive forever.
     ctx = mp.get_context("spawn")
-    queue = ctx.Queue()
+    result_queue = ctx.Queue()
     processes = {
-        name: ctx.Process(target=_probe_worker, args=(name, url, queue), name=f"platform-probe-{name}")
+        name: ctx.Process(target=_probe_worker, args=(name, url, result_queue), name=f"platform-probe-{name}")
         for name, url in TARGETS.items()
     }
     for process in processes.values():
+        process.daemon = True
         process.start()
 
+    received: set[str] = set()
     deadline = time.monotonic() + TARGET_TIMEOUT_SECONDS
     while processes and time.monotonic() < deadline:
+        while True:
+            try:
+                name, entry, target_failures, target_ci_failures, target_access_blocks = result_queue.get_nowait()
+            except queue_module.Empty:
+                break
+            if name in received:
+                continue
+            received.add(name)
+            report[name] = entry
+            failures.extend(target_failures)
+            ci_failures.extend(target_ci_failures)
+            access_blocks.extend(target_access_blocks)
+
         finished = [name for name, process in processes.items() if not process.is_alive()]
         for name in finished:
             processes[name].join(timeout=1)
@@ -291,7 +306,7 @@ def main() -> int:
 
     for name, process in list(processes.items()):
         process.terminate()
-        process.join(10)
+        process.join(5)
         report[name] = {
             "url": TARGETS[name],
             "query": QUERY,
@@ -304,12 +319,10 @@ def main() -> int:
         failures.append(message)
         access_blocks.append(message)
 
-    expected = set(TARGETS)
-    received: set[str] = set()
-    while received != expected:
+    while True:
         try:
-            name, entry, target_failures, target_ci_failures, target_access_blocks = queue.get(timeout=1)
-        except Exception:
+            name, entry, target_failures, target_ci_failures, target_access_blocks = result_queue.get_nowait()
+        except queue_module.Empty:
             break
         if name in received:
             continue
