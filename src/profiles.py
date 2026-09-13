@@ -187,6 +187,26 @@ class SearchProfileStore:
             enabled=bool(row["enabled"]), created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
+    @staticmethod
+    def _validate_values(profile: SearchProfile) -> None:
+        """Reject impossible ranges before persistence."""
+        ranges = (
+            ("min_price", profile.min_price, "max_price", profile.max_price),
+            ("min_application_security_percent", profile.min_application_security_percent, "max_application_security_percent", profile.max_application_security_percent),
+            ("min_contract_security_percent", profile.min_contract_security_percent, "max_contract_security_percent", profile.max_contract_security_percent),
+        )
+        for min_name, minimum, max_name, maximum in ranges:
+            if minimum is not None and maximum is not None and float(minimum) > float(maximum):
+                raise ValueError(f"{min_name} не может быть больше {max_name}")
+        if not 0 <= float(profile.min_advance_percent) <= 100:
+            raise ValueError("min_advance_percent должен быть от 0 до 100")
+        if profile.max_postpayment_days is not None and profile.max_postpayment_days < 0:
+            raise ValueError("max_postpayment_days должен быть неотрицательным")
+        if profile.min_submission_days < 0:
+            raise ValueError("min_submission_days должен быть неотрицательным")
+        if not 0 <= profile.min_ai_score <= 100:
+            raise ValueError("min_ai_score должен быть от 0 до 100")
+
     def create(self, user_id: str | int, profile: SearchProfile | None = None, **values) -> SearchProfile:
         user_id = str(user_id).strip()
         if not user_id:
