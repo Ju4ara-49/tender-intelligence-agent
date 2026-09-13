@@ -94,25 +94,6 @@ class NotificationDeliveryState:
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def event_key(self, tender: Tender) -> str:
-        """Return the authoritative fingerprint for the persisted tender state."""
-        tender_id = self.db.get_tender_id(tender.unique_key)
-        if tender_id is not None:
-            with self.db._connect() as conn:
-                row = conn.execute(
-                    """
-                    SELECT id, title, description, url, price, currency, start_date,
-                           end_date, deadline, published_at, region, customer,
-                           customer_inn, law_type, raw_data
-                    FROM tenders
-                    WHERE id = ?
-                    """,
-                    (tender_id,),
-                ).fetchone()
-            if row is not None:
-                return self.db._notification_event_key_from_row(row)
-        return self._fingerprint_tender(tender)
-
     def _persisted_event_key(self, tender: Tender) -> str:
         """Use the database row as the source of truth for saved state."""
         current = self.db._current_notification_event_key(tender.unique_key)
