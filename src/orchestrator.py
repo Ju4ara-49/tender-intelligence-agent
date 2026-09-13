@@ -372,6 +372,16 @@ class Orchestrator:
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
+            # Partial detail is persisted for diagnostics/export, but must never
+            # reach AI/Telegram as a fully qualified tender. The shared detail
+            # contract marks missing mandatory fields as partial precisely to
+            # prevent incomplete records from being treated as actionable.
+            if str(getattr(tender, "detail_status", "partial") or "partial").lower() != "success":
+                logger.debug(
+                    "Detail contract: пропуск %s:%s для уведомления | status=%s | diagnostics=%s",
+                    tender.platform, tender.external_id, tender.detail_status, tender.detail_diagnostics,
+                )
+                continue
             if not self._passes_regions(tender, selected_regions):
                 stats["excluded_by_region"] += 1
                 continue
