@@ -22,7 +22,6 @@ class NotificationDeliveryState:
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
         self._claim_token = uuid.uuid4().hex
-        self._repaired_event_keys: dict[int, str] = {}
         self._owned_claims: set[tuple[int, str, str, str]] = set()
         self._ensure_claim_schema()
         self._repair_legacy_default_events()
@@ -137,7 +136,6 @@ class NotificationDeliveryState:
             for row in rows:
                 key = str(row["event_key"])
                 tender_id = int(row["tender_id"])
-                self._repaired_event_keys[tender_id] = key
                 conn.execute(
                     """
                     INSERT INTO notification_events
@@ -188,19 +186,6 @@ class NotificationDeliveryState:
             if row is not None:
                 self._owned_claims.discard(claim_key)
                 return True
-
-            repaired_key = self._repaired_event_keys.get(tender_id)
-            if repaired_key is not None and recipient_key == self.DEFAULT_RECIPIENT_KEY:
-                repaired = conn.execute(
-                    """
-                    SELECT 1 FROM notification_events
-                    WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
-                    """,
-                    (tender_id, repaired_key, self.CHANNEL, self.DEFAULT_RECIPIENT_KEY),
-                ).fetchone()
-                if repaired is not None:
-                    self._owned_claims.discard(claim_key)
-                    return True
 
             cutoff = (self._now() - self.CLAIM_TTL).isoformat()
             conn.execute("DELETE FROM notification_delivery_claims WHERE claimed_at < ?", (cutoff,))
