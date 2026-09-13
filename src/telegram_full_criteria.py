@@ -193,7 +193,7 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             f"Площадки: {html.escape(', '.join(self._platform_name(p) for p in profile.platforms) or 'все разрешённые')}",
             f"Регионы: {html.escape(', '.join(profile.regions) or 'все')}",
             f"Цена: {self._fmt(profile.min_price)} — {self._fmt(profile.max_price)}",
-            f"Аванс: {("обязателен" if profile.advance_required else "не обязателен")}; от {self._fmt(profile.min_advance_percent)}%",
+            f"Аванс: {'обязателен' if profile.advance_required else 'не обязателен'}; от {self._fmt(profile.min_advance_percent)}%",
             f"Постоплата до: {self._fmt(profile.max_postpayment_days)} дн.",
             f"Обеспечение заявки: {self._fmt(profile.min_application_security_percent)}–{self._fmt(profile.max_application_security_percent)}%",
             f"Обеспечение контракта: {self._fmt(profile.min_contract_security_percent)}–{self._fmt(profile.max_contract_security_percent)}%",
