@@ -55,12 +55,7 @@ class NotificationDeliveryState:
 
     @classmethod
     def _event_key_from_row(cls, row) -> str:
-        """Return the persisted legacy fingerprint without recalculating it.
-
-        The tender row can already represent a newer state than the legacy event.
-        Recomputing the fingerprint from the current tender would collapse history
-        and make a previously delivered state look like the current state.
-        """
+        """Preserve the persisted legacy fingerprint instead of recalculating it."""
         return str(row["event_key"])
 
     def _repair_legacy_default_events(self) -> None:
@@ -76,44 +71,22 @@ class NotificationDeliveryState:
                 """,
                 (self.LEGACY_RECIPIENT_KEY,),
             ).fetchall()
-
             for row in rows:
                 key = self._event_key_from_row(row)
                 tender_id = int(row["tender_id"])
                 self._repaired_event_keys[tender_id] = key
-
-                existing = conn.execute(
+                conn.execute(
                     """
-                    SELECT 1 FROM notification_events
-                    WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
+                    INSERT INTO notification_events
+                        (tender_id, event_key, channel, recipient_key, sent_at, payload)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tender_id, event_key, channel, recipient_key) DO NOTHING
                     """,
-                    (tender_id, key, row["channel"], self.DEFAULT_RECIPIENT_KEY),
-                ).fetchone()
-                if existing is None:
-                    conn.execute(
-                        """
-                        INSERT INTO notification_events
-                            (tender_id, event_key, channel, recipient_key, sent_at, payload)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(tender_id, event_key, channel, recipient_key) DO NOTHING
-                        """,
-                        (
-                            tender_id,
-                            key,
-                            row["channel"],
-                            self.DEFAULT_RECIPIENT_KEY,
-                            row["sent_at"],
-                            row["payload"],
-                        ),
-                    )
-
-            conn.execute(
-                "DELETE FROM notification_events WHERE recipient_key = ?",
-                (self.LEGACY_RECIPIENT_KEY,),
-            )
+                    (tender_id, key, row["channel"], self.DEFAULT_RECIPIENT_KEY, row["sent_at"], row["payload"]),
+                )
+            conn.execute("DELETE FROM notification_events WHERE recipient_key = ?", (self.LEGACY_RECIPIENT_KEY,))
 
     def was_notified(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
-        """Return True only when the exact current Tender state was delivered."""
         event_key = self.event_key(tender)
         with self.db._connect() as conn:
             tender_id = self.db.get_tender_id(tender.unique_key)
@@ -128,7 +101,6 @@ class NotificationDeliveryState:
             ).fetchone()
             if row is not None:
                 return True
-
             repaired_key = self._repaired_event_keys.get(tender_id)
             if repaired_key is None or recipient_key != self.DEFAULT_RECIPIENT_KEY:
                 return False
@@ -141,20 +113,8 @@ class NotificationDeliveryState:
             ).fetchone()
         return repaired is not None
 
-    def mark_notified(
-        self,
-        tender: Tender,
-        payload: dict | None = None,
-        recipient_key: str = DEFAULT_RECIPIENT_KEY,
-    ) -> None:
-        """Record the exact current Tender fingerprint."""
+    def mark_notified(self, tender: Tender, payload: dict | None = None, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> None:
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             raise ValueError(f"Tender not found: {tender.unique_key}")
-        self.db.mark_notified(
-            tender_id,
-            channel=self.CHANNEL,
-            payload=payload,
-            event_key=self.event_key(tender),
-            recipient_key=recipient_key,
-        )
+        self.db.mark_notified(tender_id, channel=self.CHANNEL, payload=payload, event_key=self.event_key(tender), recipient_key=recipient_key)
