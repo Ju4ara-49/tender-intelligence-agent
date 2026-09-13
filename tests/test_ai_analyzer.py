@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import requests
 
-from src.ai.analyzer import TenderAnalyzer
+from src.ai.analyzer import OllamaModelNotFoundError, OllamaResponseError, TenderAnalyzer
 from src.models.tender import Tender
 
 
@@ -83,11 +83,21 @@ class TenderAnalyzerTests(unittest.TestCase):
         analyzer = TenderAnalyzer(
             model="does-not-exist", ollama_url="http://localhost:11434", use_stub_when_no_key=False
         )
-        fake_response = _FakeResponse(status_code=404, text="model not found")
+        fake_response = _FakeResponse(status_code=404, text="model 'does-not-exist' not found")
         with patch("src.ai.analyzer.requests.post", return_value=fake_response):
-            with self.assertRaises(Exception) as ctx:
+            with self.assertRaises(OllamaModelNotFoundError) as ctx:
                 analyzer.analyze(_make_tender())
-        self.assertIn("404", str(ctx.exception))
+        self.assertIn("ollama pull", str(ctx.exception))
+
+    def test_endpoint_404_is_not_misdiagnosed_as_missing_model(self) -> None:
+        analyzer = TenderAnalyzer(
+            model="qwen3:8b", ollama_url="http://localhost:11434", use_stub_when_no_key=False
+        )
+        fake_response = _FakeResponse(status_code=404, text="404 page not found")
+        with patch("src.ai.analyzer.requests.post", return_value=fake_response):
+            with self.assertRaises(OllamaResponseError) as ctx:
+                analyzer.analyze(_make_tender())
+        self.assertIn("endpoint", str(ctx.exception))
 
     def test_connection_error_falls_back_to_stub_when_allowed(self) -> None:
         analyzer = TenderAnalyzer(
