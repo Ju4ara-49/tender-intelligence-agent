@@ -111,3 +111,16 @@ def test_profile_store_rejects_impossible_ranges(tmp_path):
         assert "min_price" in str(exc)
 
     assert store.get("u", profile.id).max_price == 200
+
+
+
+def test_profile_store_rejects_negative_and_nonfinite_numeric_values(tmp_path):
+    import math
+    db = TenderDatabase(tmp_path / "profiles_numeric.db")
+    store = SearchProfileStore(db)
+    for kwargs in ({"min_price": -1}, {"max_price": -1}, {"min_advance_percent": math.nan}, {"min_ai_score": 101}):
+        try:
+            store.create("u", name="bad-" + str(len(kwargs)), **kwargs)
+            assert False, "expected invalid numeric profile value to be rejected"
+        except ValueError:
+            pass
