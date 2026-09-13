@@ -112,10 +112,17 @@ class TenderAnalyzer:
 
         if response.status_code == 404:
             response_text = str(response.text or "").strip()
-            raise OllamaModelNotFoundError(
-                f"Ollama вернул HTTP 404 для модели '{self.model}' по адресу {url}. "
-                f"Проверьте, что Ollama доступен и модель установлена: `ollama pull {self.model}`. "
-                f"Ответ сервера: {response_text[:200] or '<пусто>'}"
+            lowered = response_text.casefold()
+            if "model" in lowered and "not found" in lowered:
+                raise OllamaModelNotFoundError(
+                    f"Ollama не нашёл модель '{self.model}' по адресу {url}. "
+                    f"Проверьте, что модель установлена: ollama pull {self.model}. "
+                    f"Ответ сервера: {response_text[:200] or '<пусто>'}"
+                )
+            raise OllamaResponseError(
+                f"Ollama вернул HTTP 404 для endpoint {url}; модель '{self.model}' "
+                f"не удалось диагностировать как отсутствующую. Ответ сервера: "
+                f"{response_text[:200] or '<пусто>'}"
             )
         if response.status_code >= 400:
             raise OllamaResponseError(f"Ollama вернул HTTP {response.status_code}: {response.text[:300]}")
