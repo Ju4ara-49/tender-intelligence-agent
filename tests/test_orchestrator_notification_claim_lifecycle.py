@@ -132,3 +132,22 @@ def test_run_cycle_marks_delivery_and_leaves_no_claim(tmp_path, monkeypatch):
     assert notifier.calls == 1
     assert _claim_count(db) == 0
     assert runner.notification_state.was_notified(tender) is True
+
+
+def test_run_cycle_never_notifies_partial_detail(tmp_path, monkeypatch):
+    analyzer = _FakeAnalyzer(score=90)
+    notifier = _FakeNotifier(True)
+    runner, collector, tender, db = _make_orchestrator(tmp_path, analyzer, notifier)
+
+    partial = deepcopy(tender)
+    partial.detail_status = "partial"
+    partial.detail_diagnostics = "customer missing"
+    collector.get_details = lambda external_id: partial
+
+    stats = _run(monkeypatch, runner, collector)
+
+    assert stats["notified"] == 0
+    assert analyzer.calls == 0
+    assert notifier.calls == 0
+    assert _claim_count(db) == 0
+    assert db.get_tender_id(tender.unique_key) is not None
