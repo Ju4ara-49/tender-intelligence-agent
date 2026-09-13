@@ -1,4 +1,8 @@
-"""CRM/Kanban state for stored tenders."""
+"""CRM/Kanban state for stored tenders.
+
+The board is intentionally persistent and additive: status, assignee, labels,
+history, and deadline reminders live outside the core tender row.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
