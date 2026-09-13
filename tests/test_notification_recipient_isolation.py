@@ -84,3 +84,38 @@ def test_recipient_event_is_not_migrated_back_to_default_after_database_reopen(t
     reopened_state = NotificationDeliveryState(reopened)
     assert reopened_state.was_notified(tender, recipient_key="chat-a") is True
     assert reopened_state.was_notified(tender, recipient_key=NotificationDeliveryState.DEFAULT_RECIPIENT_KEY) is False
+
+
+def test_telegram_notifier_rejects_http_200_with_api_error(monkeypatch) -> None:
+    import httpx
+
+    notifier = TelegramNotifier(bot_token="token", chat_id="chat-a")
+    tender = Tender(
+        platform="test",
+        external_id="3",
+        title="Tender",
+        url="https://example.test/3",
+        price=100,
+        deadline=datetime(2030, 1, 1),
+    )
+    analysis = TenderAnalysis(relevance_score=90, summary="Подходит", recommendation="participate")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": False, "error_code": 403, "description": "Forbidden"}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: FakeClient())
+    assert notifier.send_tender_alert(tender, analysis) is False
