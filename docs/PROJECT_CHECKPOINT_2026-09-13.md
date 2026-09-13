@@ -1,10 +1,10 @@
 # Контрольная точка проекта — 13.09.2026
 
-## Текущий HEAD
+## Последний проверенный код
 
 `58641e983ab0240169e8005e43a1712ab69c9d69`
 
-Контрольная точка зафиксирована после реализации Telegram CRUD UI для сохранённых профилей поиска (`Ключи`).
+Последующий docs-only commit обновляет только эту контрольную точку и не меняет проверенный код.
 
 Последние изменения этого цикла:
 
@@ -12,12 +12,12 @@
 2. `1f6db46` — harden CRM Telegram status transitions.
 3. `cf06c18` — tests for Russian CRM status aliases.
 4. `b4b851a` — deterministic CRM status keyboard order.
-5. `f884e52` — полноценный Telegram UI для CRUD профилей поиска: создание, просмотр, редактирование, включение/выключение, дублирование и удаление.
+5. `c327846` — полноценный Telegram UI для CRUD профилей поиска: создание, просмотр, редактирование, включение/выключение, дублирование и удаление.
 6. `58641e9` — регрессионные тесты Telegram UI профилей и ограничений callback payload.
 
-## Результат проверки кода
+## CI — GREEN
 
-GitHub Actions `Tender Intelligence Agent CI`, run #570, для `58641e9` завершён успешно.
+GitHub Actions `Tender Intelligence Agent CI`, run **#570**, для кода `58641e9` завершён успешно.
 
 Успешно завершены все обязательные этапы:
 
@@ -33,11 +33,29 @@ GitHub Actions `Tender Intelligence Agent CI`, run #570, для `58641e9` зав
 - загрузка test SQLite artifact;
 - финальный CI quality gate.
 
-Отдельно добавлены regression tests для Telegram `Ключи`: keyboard, CRUD callback routing и ограничение длины Telegram callback payload.
+Результат: **0 внутренних CI failures**.
+
+## Browser diagnostics — GREEN по внутренней диагностике
+
+Browser diagnostics run **#316**, код `58641e9`, завершён успешно.
+
+Результаты артефакта:
+
+- B2B-Center — `ok`;
+- Фабрикант 223 — `ok`;
+- Фабрикант 44 — `ok`;
+- Росатом — `ok`;
+- ЕИС — `external_timeout`;
+- РТС-тендер — `external_timeout`;
+- ТМК — `external_timeout`;
+- `ci_failures = []`;
+- `access_blocks` содержат только три внешних timeout.
+
+Следовательно, browser diagnostics не обнаружил ни одного внутреннего parser/adapter/CI failure. Три портала не дали доказательство из GitHub-hosted Chromium из-за внешнего transport/navigation timeout; это не преобразовано в ложный `ok` и отдельно зафиксировано как внешнее ограничение.
 
 ## Telegram «Ключи»
 
-Полноценный CRUD UI теперь доступен в production-классе `FullCriteriaTelegramBot`:
+Полноценный CRUD UI доступен в production-классе `FullCriteriaTelegramBot`:
 
 - `Ключи` открывает список профилей пользователя;
 - создание нового профиля копирует текущие критерии пользователя;
@@ -78,8 +96,6 @@ CRM-доска имеет полноценный Telegram adapter:
 
 `UniPro` отсутствует.
 
-Browser diagnostics для текущего кода выполняется отдельным workflow run #315. Предыдущий run #314 дал положительное внешнее browser-доказательство для B2B-Center, Фабриканта (223/44) и Росатома; ЕИС, РТС-тендер и ТМК получили `external_timeout`, классифицированный как внешнее ограничение GitHub-hosted окружения, при `ci_failures = 0`.
-
 ## Алгоритм продолжения работы
 
 При следующем продолжении не начинать аудит заново. Работать циклом:
@@ -90,6 +106,6 @@ Browser diagnostics для текущего кода выполняется от
 
 `collectors → detail contract → filters/criteria → dedup/storage/notification delivery → AI → Telegram → CRM → Excel → scheduler → Windows/runtime → CI/Actions`.
 
-Правило остановки: **не останавливаться на формулировке «работа не завершена»**. Если прямой путь проверки заблокирован внешней системой, переходить к альтернативному воспроизводимому тесту, fixture/contract test, browser-проверке доступной части или другому способу доказательства. Реальный внутренний тестовый failure обязан быть устранён и перепроверен до следующего слоя.
+Правило остановки: **не останавливаться на формулировке «работа не завершена»**. Если прямой путь проверки заблокирован внешней системой, переходить к альтернативному воспроизводимому тесту, fixture/contract test, browser-проверке доступной части или другому способу доказательства. Реальный внутренний test/CI failure обязан быть устранён и перепроверен до следующего слоя.
 
 Внешние timeout/WAF/ограничения GitHub-hosted runner фиксировать отдельно и не маскировать их под успешный сбор данных.
