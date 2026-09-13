@@ -42,16 +42,30 @@ jobs:
 
       - name: Validate diagnostics artifacts
         if: always()
+        env:
+          PYTHONPATH: .
         run: |
           test -s output/platform_browser_diagnostics/report.json
           test -s output/platform_browser_diagnostics/summary.md
-          test -s output/platform_browser_diagnostics/eis.png
-          test -s output/platform_browser_diagnostics/b2b_center.png
-          test -s output/platform_browser_diagnostics/fabrikant_223.png
-          test -s output/platform_browser_diagnostics/fabrikant_44.png
-          test -s output/platform_browser_diagnostics/rts_tender.png
-          test -s output/platform_browser_diagnostics/tmk.png
-          test -s output/platform_browser_diagnostics/rosatom.png
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          out = Path("output/platform_browser_diagnostics")
+          report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+          targets = ("eis", "b2b_center", "fabrikant_223", "fabrikant_44", "rts_tender", "tmk", "rosatom")
+          for name in targets:
+              entry = report.get(name)
+              assert isinstance(entry, dict), f"missing report entry: {name}"
+              state = entry.get("diagnostic_state")
+              # Access blocks/timeouts are valid external diagnostics and may not
+              # have a screenshot because their process can be terminated. For
+              # every probe that reached a page, however, the screenshot is a
+              # mandatory artifact so parser/UI failures remain inspectable.
+              if state not in {"external_timeout", "http_access_block", "waf_or_block", "missing"}:
+                  screenshot = out / f"{name}.png"
+                  assert screenshot.is_file() and screenshot.stat().st_size > 0, f"missing screenshot: {name}"
+          PY
 
       - name: Upload diagnostics
         if: always()
