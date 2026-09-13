@@ -218,6 +218,7 @@ class SearchProfileStore:
             for key, value in values.items():
                 if hasattr(profile, key):
                     setattr(profile, key, value)
+        self._validate_values(profile)
         now = self._now()
         profile.created_at = profile.created_at or now
         profile.updated_at = now
