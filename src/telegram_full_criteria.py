@@ -5,20 +5,24 @@ import html
 import logging
 import time
 
+from src.crm.telegram import handle_callback as handle_crm_callback
+from src.crm.telegram import handle_message as handle_crm_message
 from src.telegram_criteria_multiuser import CriteriaAwareResponsiveTelegramBot
 
 BTN_REGIONS = "Регионы"
 BTN_EXCLUDE = "Исключить слова"
+BTN_CRM = "CRM тендера"
 
 
 class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
-    """Commercial criteria plus region and exclusion-word controls."""
+    """Commercial criteria plus region/exclusion/CRM controls."""
 
     @staticmethod
     def _keyboard() -> dict:
         base = CriteriaAwareResponsiveTelegramBot._keyboard()
         keyboard = list(base["keyboard"])
         keyboard.insert(4, [{"text": BTN_REGIONS}, {"text": BTN_EXCLUDE}])
+        keyboard.insert(5, [{"text": BTN_CRM}])
         base["keyboard"] = keyboard
         return base
 
@@ -33,6 +37,11 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             or text.startswith("/add_user") or text.startswith("/remove_user")
         ):
             return super()._handle_message(message)
+        if text == BTN_CRM:
+            self._ask_value(chat_id, "crm_tender_id", "Введите внутренний ID тендера из базы.\n\nНапример:\n<code>123</code>")
+            return
+        if handle_crm_message(self, chat_id, text):
+            return
         if text == BTN_REGIONS:
             self._ask_value(chat_id, "regions", "Введите регионы через запятую.\n\nНапример:\n<code>Санкт-Петербург, Ленинградская область, Москва</code>\n\n<code>нет</code> = все регионы.")
             return
@@ -41,8 +50,26 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             return
         super()._handle_message(message)
 
+    def _handle_callback(self, callback: dict) -> None:
+        data = str(callback.get("data", ""))
+        message = callback.get("message") or {}
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        callback_id = str(callback.get("id", ""))
+        if chat_id and self._is_allowed(chat_id) and handle_crm_callback(self, chat_id, data):
+            self._answer_callback(callback_id)
+            return
+        super()._handle_callback(callback)
+
     def _handle_value_input(self, chat_id: str, text: str) -> bool:
         field = self._waiting_for.get(chat_id)
+        if field == "crm_tender_id":
+            self._waiting_for.pop(chat_id, None)
+            if not text.strip().isdigit() or int(text.strip()) <= 0:
+                self._send(chat_id, "ID тендера должен быть положительным целым числом.", self._keyboard())
+                return True
+            if handle_crm_message(self, chat_id, f"/tender {int(text.strip())}"):
+                return True
+            return True
         if field not in {"regions", "exclude_keywords"}:
             return super()._handle_value_input(chat_id, text)
         raw = text.strip()
