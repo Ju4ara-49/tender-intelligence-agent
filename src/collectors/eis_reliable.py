@@ -34,4 +34,8 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
             tender.contract_security_percent = float(conditions["contract_security_percent"])
 
         tender.raw_data["commercial_conditions"] = conditions
+        # Commercial fields are mutated after Tender.__post_init__. Refresh the
+        # persisted normalized snapshot so DB and notification fingerprints use
+        # the same state as the final EIS detail result.
+        tender._persist_normalized_fields()
         return tender
