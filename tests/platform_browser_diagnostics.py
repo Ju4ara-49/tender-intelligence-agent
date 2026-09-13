@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
+import queue as queue_module
 import re
 import time
 from pathlib import Path
@@ -23,6 +25,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 NAVIGATION_TIMEOUT_MS = 30000
 NAVIGATION_ATTEMPTS = 3
 RETRY_DELAYS_SECONDS = (2, 5)
+TARGET_TIMEOUT_SECONDS = 150
 
 SEARCH_SELECTORS = (
     "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
@@ -34,6 +37,22 @@ SEARCH_SELECTORS = (
 )
 SEARCH_LABELS = ("Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти", "Применить")
 ACCESS_BLOCK_STATUSES = frozenset({401, 403, 429})
+EXTERNAL_NAVIGATION_MARKERS = (
+    "err_connection_reset", "err_connection_refused", "err_connection_closed",
+    "err_name_not_resolved", "err_internet_disconnected", "err_timed_out",
+    "err_address_unreachable", "net::err_", "connection reset", "connection refused",
+    "connection closed", "name or service not known", "temporary failure in name resolution",
+)
+
+def classify_navigation_exception(exc: Exception) -> str:
+    """Classify runner/network failures separately from probe/parser failures."""
+    message = repr(exc).lower()
+    if any(marker in message for marker in EXTERNAL_NAVIGATION_MARKERS):
+        return "external_access"
+    if isinstance(exc, PlaywrightTimeoutError):
+        return "external_access"
+    return "transport"
+
 
 
 def visible(locator) -> bool:
@@ -145,19 +164,22 @@ def extract_result_evidence(text: str) -> dict[str, object]:
     return {"result_count": None, "result_count_evidence": None}
 
 
-def main() -> int:
-    report: dict[str, object] = {}
+def probe_target(name: str, url: str) -> tuple[str, dict[str, object], list[str], list[str], list[str]]:
+    """Run one target in an isolated Playwright process."""
+    entry: dict[str, object] = {"url": url, "query": QUERY}
     failures: list[str] = []
     ci_failures: list[str] = []
     access_blocks: list[str] = []
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(locale="ru-RU")
-        context.set_default_timeout(5000)
-        context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
-        for name, url in TARGETS.items():
+    page = None
+    browser = None
+    context = None
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(locale="ru-RU")
+            context.set_default_timeout(5000)
+            context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
             page = context.new_page()
-            entry: dict[str, object] = {"url": url, "query": QUERY}
             try:
                 response, navigation_attempt = goto_with_retries(page, url)
                 entry["navigation_attempt"] = navigation_attempt
@@ -213,16 +235,7 @@ def main() -> int:
                         message = f"{name}: search returned no result evidence"
                         failures.append(message)
                         ci_failures.append(message)
-                # A full-page screenshot can become unbounded on infinite-scroll
-                # portals and was able to stall the entire 7-platform diagnostic.
-                # The report already contains text/DOM evidence, so a viewport
-                # screenshot is sufficient and has a deterministic size.
-                page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=10000)
             except PlaywrightTimeoutError as exc:
-                # A CI runner can be unable to reach a public portal even when the
-                # production collector itself is healthy. A navigation timeout is
-                # therefore external-access evidence, not proof of a Python/parser
-                # failure. Keep it visible in the report, but do not make CI red.
                 entry["error"] = repr(exc)
                 entry["diagnostic_state"] = "external_timeout"
                 entry["failure_class"] = "external_access"
@@ -231,27 +244,142 @@ def main() -> int:
                 access_blocks.append(message)
             except Exception as exc:
                 entry["error"] = repr(exc)
-                entry["diagnostic_state"] = "exception"
-                entry["failure_class"] = "transport"
-                message = f"{name}: {exc!r}"
-                failures.append(message)
-                ci_failures.append(message)
+                failure_class = classify_navigation_exception(exc)
+                entry["failure_class"] = failure_class
+                if failure_class == "external_access":
+                    entry["diagnostic_state"] = "external_access"
+                    message = f"{name}: external navigation/network error: {exc!r}"
+                    failures.append(message)
+                    access_blocks.append(message)
+                else:
+                    entry["diagnostic_state"] = "exception"
+                    message = f"{name}: {exc!r}"
+                    failures.append(message)
+                    ci_failures.append(message)
             finally:
-                page.close()
+                if page is not None:
+                    try:
+                        page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=10000)
+                        entry["screenshot_created"] = True
+                    except Exception as exc:
+                        entry["screenshot_created"] = False
+                        entry["screenshot_error"] = repr(exc)
+                if context is not None:
+                    context.close()
+                if browser is not None:
+                    browser.close()
+    except Exception as exc:
+        entry["error"] = repr(exc)
+        entry["diagnostic_state"] = "browser_exception"
+        entry["failure_class"] = "transport"
+        message = f"{name}: {exc!r}"
+        failures.append(message)
+        ci_failures.append(message)
+    return name, entry, failures, ci_failures, access_blocks
+
+
+def _probe_worker(name: str, url: str, queue) -> None:
+    try:
+        queue.put(probe_target(name, url))
+    except Exception as exc:
+        queue.put((name, {"url": url, "query": QUERY, "diagnostic_state": "worker_exception", "error": repr(exc)}, [f"{name}: {exc!r}"], [f"{name}: {exc!r}"], []))
+
+
+def main() -> int:
+    report: dict[str, object] = {}
+    failures: list[str] = []
+    ci_failures: list[str] = []
+    access_blocks: list[str] = []
+
+    # Start all probes together and enforce one global wall-clock budget. The
+    # parent drains the queue while children run; otherwise a large diagnostic
+    # payload can fill the IPC pipe and keep a completed child alive forever.
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    processes = {
+        name: ctx.Process(target=_probe_worker, args=(name, url, result_queue), name=f"platform-probe-{name}")
+        for name, url in TARGETS.items()
+    }
+    for process in processes.values():
+        process.daemon = True
+        process.start()
+
+    received: set[str] = set()
+    deadline = time.monotonic() + TARGET_TIMEOUT_SECONDS
+    while processes and time.monotonic() < deadline:
+        while True:
+            try:
+                name, entry, target_failures, target_ci_failures, target_access_blocks = result_queue.get_nowait()
+            except queue_module.Empty:
+                break
+            if name in received:
+                continue
+            received.add(name)
             report[name] = entry
-        context.close()
-        browser.close()
-    report["failures"] = failures
-    report["ci_failures"] = ci_failures
-    report["access_blocks"] = access_blocks
-    report["access_block_count"] = len(access_blocks)
-    report["ci_failure_count"] = len(ci_failures)
-    (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    summary_lines = ["## Platform browser diagnostics", "", f"Query: `{QUERY}`", ""]
-    for name, entry in report.items():
-        if name in {"failures", "ci_failures", "access_blocks", "access_block_count", "ci_failure_count"}:
+            failures.extend(target_failures)
+            ci_failures.extend(target_ci_failures)
+            access_blocks.extend(target_access_blocks)
+
+        finished = [name for name, process in processes.items() if not process.is_alive()]
+        for name in finished:
+            processes[name].join(timeout=1)
+            del processes[name]
+        if processes:
+            time.sleep(0.2)
+
+    for name, process in list(processes.items()):
+        process.terminate()
+        process.join(5)
+        report[name] = {
+            "url": TARGETS[name],
+            "query": QUERY,
+            "diagnostic_state": "external_timeout",
+            "failure_class": "external_access",
+            "error": f"target exceeded hard timeout of {TARGET_TIMEOUT_SECONDS}s",
+            "screenshot_created": False,
+        }
+        message = f"{name}: external navigation timeout"
+        failures.append(message)
+        access_blocks.append(message)
+
+    while True:
+        try:
+            name, entry, target_failures, target_ci_failures, target_access_blocks = result_queue.get_nowait()
+        except queue_module.Empty:
+            break
+        if name in received:
             continue
+        received.add(name)
+        report[name] = entry
+        failures.extend(target_failures)
+        ci_failures.extend(target_ci_failures)
+        access_blocks.extend(target_access_blocks)
+
+    for name in TARGETS:
+        report.setdefault(name, {
+            "url": TARGETS[name],
+            "query": QUERY,
+            "diagnostic_state": "missing",
+            "failure_class": "transport",
+            "screenshot_created": False,
+        })
+        if report[name].get("diagnostic_state") == "missing":
+            message = f"{name}: probe produced no result"
+            failures.append(message)
+            ci_failures.append(message)
+
+    ordered_report = {name: report[name] for name in TARGETS}
+    ordered_report["failures"] = failures
+    ordered_report["ci_failures"] = ci_failures
+    ordered_report["access_blocks"] = access_blocks
+    ordered_report["access_block_count"] = len(access_blocks)
+    ordered_report["ci_failure_count"] = len(ci_failures)
+    (OUT / "report.json").write_text(json.dumps(ordered_report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(ordered_report, ensure_ascii=False, indent=2))
+
+    summary_lines = ["## Platform browser diagnostics", "", f"Query: `{QUERY}`", ""]
+    for name in TARGETS:
+        entry = ordered_report[name]
         summary_lines.append(f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` status={entry.get('status')} result_count={entry.get('result_count')} links={entry.get('result_link_count', 0)} navigation_attempt={entry.get('navigation_attempt', '-')}")
     if access_blocks:
         summary_lines.extend(["", "### External access blocks / timeouts (inconclusive, not a Python failure)", *[f"- {item}" for item in access_blocks]])

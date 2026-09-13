@@ -10,11 +10,11 @@ import time
 from pathlib import Path
 
 from src.orchestrator import Orchestrator
+from src.settings import PROJECT_ROOT
 from src.telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
-OWNER_TELEGRAM_ID = "838120236"
-WHITELIST_FILE = Path("data/telegram_allowed_users.json")
+WHITELIST_FILE = PROJECT_ROOT / "data" / "telegram_allowed_users.json"
 BTN_ADMIN = "👑 Управление доступом"
 BTN_ADMIN_ADD = "➕ Добавить пользователя"
 BTN_ADMIN_REMOVE = "➖ Удалить пользователя"
@@ -32,6 +32,7 @@ class MultiUserTelegramBot(TelegramBot):
         self._search_lock = threading.Lock()
         self._whitelist_lock = threading.Lock()
         self._admin_waiting: dict[str, str] = {}
+        self.owner_telegram_id = os.getenv("TELEGRAM_OWNER_USER_ID", "").strip() or self.admin_chat_id
         self._allowed_user_ids = self._load_allowed_user_ids()
         logger.info("Telegram-доступ: whitelist включён; разрешённых пользователей=%d", len(self._allowed_user_ids))
 
@@ -44,20 +45,19 @@ class MultiUserTelegramBot(TelegramBot):
                     allowed.update(str(x).strip() for x in data if str(x).strip())
         except Exception:
             logger.exception("Telegram-доступ: не удалось прочитать %s", WHITELIST_FILE)
-        allowed.add(OWNER_TELEGRAM_ID)
-        if self.admin_chat_id:
-            allowed.add(self.admin_chat_id)
+        if self.owner_telegram_id:
+            allowed.add(self.owner_telegram_id)
         return allowed
 
     def _save_allowed_user_ids(self) -> None:
         WHITELIST_FILE.parent.mkdir(parents=True, exist_ok=True)
         WHITELIST_FILE.write_text(
-            json.dumps(sorted(x for x in self._allowed_user_ids if x != OWNER_TELEGRAM_ID), ensure_ascii=False, indent=2),
+            json.dumps(sorted(x for x in self._allowed_user_ids if x != self.owner_telegram_id), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
     def _is_owner(self, chat_id: str) -> bool:
-        return str(chat_id).strip() == OWNER_TELEGRAM_ID
+        return str(chat_id).strip() == self.owner_telegram_id
 
     def _is_allowed(self, chat_id: str) -> bool:
         return str(chat_id).strip() in self._allowed_user_ids
@@ -75,7 +75,7 @@ class MultiUserTelegramBot(TelegramBot):
     def _show_users(self, chat_id: str) -> None:
         users = sorted(self._allowed_user_ids)
         lines = ["<b>👥 Разрешённые пользователи</b>", "", f"Всего: {len(users)}", ""]
-        lines.extend(f"• <code>{x}</code>{' — владелец' if x == OWNER_TELEGRAM_ID else ''}" for x in users)
+        lines.extend(f"• <code>{html.escape(x)}</code>{' — владелец' if x == self.owner_telegram_id else ''}" for x in users)
         self._send(chat_id, "\n".join(lines), self._admin_keyboard())
 
     def _add_user(self, chat_id: str, user_id: str) -> None:
@@ -83,17 +83,17 @@ class MultiUserTelegramBot(TelegramBot):
             self._allowed_user_ids.add(user_id)
             self._save_allowed_user_ids()
         self._admin_waiting.pop(chat_id, None)
-        self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> добавлен.", self._admin_keyboard())
+        self._send(chat_id, f"✅ Пользователь <code>{html.escape(user_id)}</code> добавлен.", self._admin_keyboard())
 
     def _remove_user(self, chat_id: str, user_id: str) -> None:
-        if user_id == OWNER_TELEGRAM_ID:
+        if user_id == self.owner_telegram_id:
             self._send(chat_id, "⛔ Владельца удалить нельзя.", self._admin_keyboard())
             return
         with self._whitelist_lock:
             self._allowed_user_ids.discard(user_id)
             self._save_allowed_user_ids()
         self._admin_waiting.pop(chat_id, None)
-        self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> удалён.", self._admin_keyboard())
+        self._send(chat_id, f"✅ Пользователь <code>{html.escape(user_id)}</code> удалён.", self._admin_keyboard())
 
     def _admin_command(self, chat_id: str, text: str) -> bool:
         if not self._is_owner(chat_id):
@@ -210,8 +210,6 @@ class MultiUserTelegramBot(TelegramBot):
         started_at = time.monotonic()
         self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.", self._keyboard())
         try:
-            # Критерии, keywords и площадки передаются в Orchestrator явно.
-            # Никакого общего user context для потока не используется.
             stats = orchestrator.run_cycle(user_id=chat_id)
             self._send_search_results(chat_id, orchestrator)
             elapsed = int(time.monotonic() - started_at)

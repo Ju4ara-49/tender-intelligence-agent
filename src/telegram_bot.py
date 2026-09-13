@@ -24,7 +24,13 @@ BTN_PRICE_FROM = "Цена от:"
 BTN_PRICE_TO = "Цена до:"
 BTN_SCORE = "Балл:"
 BTN_DAYS = "Срок:"
+BTN_ADVANCE = "Аванс"
+BTN_POSTPAYMENT = "Постоплата"
+BTN_APP_SECURITY = "Обеспечение заявки"
+BTN_CONTRACT_SECURITY = "Обеспечение контракта"
+BTN_REGIONS = "Регионы"
 BTN_KEYWORDS = "Ключевые слова"
+BTN_EXCLUDE = "Исключающие слова"
 BTN_PLATFORMS = "Площадки"
 BTN_RESET = "Сброс"
 BTN_SEARCH = "Поиск"
@@ -74,7 +80,18 @@ class TelegramBot:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, json=params)
             response.raise_for_status()
-            return response.json()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise RuntimeError(f"Telegram API вернул некорректный JSON для {method}") from exc
+            if not isinstance(data, dict) or data.get("ok") is not True:
+                description = data.get("description") if isinstance(data, dict) else None
+                error_code = data.get("error_code") if isinstance(data, dict) else None
+                suffix = f" ({error_code})" if error_code is not None else ""
+                raise RuntimeError(
+                    f"Telegram API {method} завершился ошибкой{suffix}: {description or 'unknown error'}"
+                )
+            return data
 
     def _send(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict | None:
         try:
@@ -82,14 +99,14 @@ class TelegramBot:
             if reply_markup is not None:
                 params["reply_markup"] = reply_markup
             return self._call("sendMessage", request_timeout=10.0, **params)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             logger.error("Telegram-бот: ошибка отправки chat_id=%s: %s", chat_id, exc)
             return None
 
     def _answer_callback(self, callback_query_id: str) -> None:
         try:
             self._call("answerCallbackQuery", request_timeout=10.0, callback_query_id=callback_query_id)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             logger.error("Telegram-бот: ошибка callback: %s", exc)
 
     @staticmethod
@@ -97,11 +114,14 @@ class TelegramBot:
         return {
             "keyboard": [
                 [{"text": BTN_PRICE_FROM}, {"text": BTN_PRICE_TO}],
-                [{"text": BTN_STOP}, {"text": BTN_DAYS}],
+                [{"text": BTN_ADVANCE}, {"text": BTN_POSTPAYMENT}],
+                [{"text": BTN_APP_SECURITY}, {"text": BTN_CONTRACT_SECURITY}],
+                [{"text": BTN_DAYS}, {"text": BTN_SCORE}],
+                [{"text": BTN_REGIONS}, {"text": BTN_EXCLUDE}],
                 [{"text": BTN_KEYWORDS}, {"text": BTN_PLATFORMS}],
-                [{"text": BTN_RESET}],
-                [{"text": BTN_SEARCH}, {"text": BTN_SETTINGS}],
-                [{"text": BTN_SCORE}, {"text": BTN_HELP}],
+                [{"text": BTN_RESET}, {"text": BTN_SETTINGS}],
+                [{"text": BTN_SEARCH}, {"text": BTN_STOP}],
+                [{"text": BTN_HELP}],
             ],
             "resize_keyboard": True,
             "is_persistent": True,
@@ -159,6 +179,15 @@ class TelegramBot:
                 self._answer_callback(callback_id)
                 self._ask_value(chat_id, "keywords", "Введите ключевые слова через запятую.\n\nНапример:\n<code>подшипники, муфты, запасные части</code>")
                 return
+            elif data == "exclude:clear":
+                self.criteria_store.set_exclude_keywords(chat_id, [])
+                self._answer_callback(callback_id)
+                self._send(chat_id, "Исключающие слова очищены.", self._keyboard())
+                return
+            elif data == "exclude:edit":
+                self._answer_callback(callback_id)
+                self._ask_value(chat_id, "exclude_keywords", "Введите исключающие слова через запятую.\n\nНапример:\n<code>мебель, продукты питания</code>")
+                return
             self._answer_callback(callback_id)
         except Exception:
             logger.exception("Telegram-бот: ошибка callback=%s", data)
@@ -201,6 +230,12 @@ class TelegramBot:
         keyboard = {"inline_keyboard": [[{"text": "Изменить", "callback_data": "keywords:edit"}], [{"text": "Очистить", "callback_data": "keywords:clear"}]]}
         self._send(chat_id, text, keyboard)
 
+    def _show_exclude_keywords(self, chat_id: str) -> None:
+        values = self.criteria_store.get_exclude_keywords(chat_id)
+        text = "<b>Исключающие слова</b>\n\n" + ("\n".join(f"{i}. {v}" for i, v in enumerate(values, 1)) if values else "Не заданы.")
+        keyboard = {"inline_keyboard": [[{"text": "Изменить", "callback_data": "exclude:edit"}], [{"text": "Очистить", "callback_data": "exclude:clear"}]]}
+        self._send(chat_id, text, keyboard)
+
     def _handle_message(self, message: dict) -> None:
         chat_id = str(message.get("chat", {}).get("id", ""))
         text = (message.get("text") or "").strip()
@@ -209,7 +244,11 @@ class TelegramBot:
         logger.info("Telegram-бот: получено сообщение chat_id=%s: %s", chat_id, text)
         try:
             if chat_id in self._waiting_for:
-                menu_buttons = {BTN_PRICE_FROM, BTN_PRICE_TO, BTN_SCORE, BTN_DAYS, BTN_KEYWORDS, BTN_PLATFORMS, BTN_RESET, BTN_SEARCH, BTN_SETTINGS, BTN_STOP, BTN_HELP}
+                menu_buttons = {
+                    BTN_PRICE_FROM, BTN_PRICE_TO, BTN_SCORE, BTN_DAYS, BTN_ADVANCE, BTN_POSTPAYMENT,
+                    BTN_APP_SECURITY, BTN_CONTRACT_SECURITY, BTN_REGIONS, BTN_EXCLUDE, BTN_KEYWORDS,
+                    BTN_PLATFORMS, BTN_RESET, BTN_SEARCH, BTN_SETTINGS, BTN_STOP, BTN_HELP,
+                }
                 if text not in menu_buttons and self._handle_value_input(chat_id, text):
                     return
                 self._waiting_for.pop(chat_id, None)
@@ -226,11 +265,23 @@ class TelegramBot:
             elif text == BTN_PRICE_TO:
                 self._ask_value(chat_id, "max_price", "Введите максимальную цену.\n\nНапример:\n<code>5000000</code>")
             elif text == BTN_SCORE:
-                self._ask_value(chat_id, "min_ai_score", "Введите минимальный балл AI.\n\nНапример:\n<code>70</code>")
+                self._ask_value(chat_id, "min_ai_score", "Введите минимальный балл AI от 0 до 100.\n\nНапример:\n<code>70</code>")
             elif text == BTN_DAYS:
-                self._ask_value(chat_id, "min_submission_days", "Введите минимальное количество дней до дедлайна.\n\nНапример:\n<code>7</code>")
+                self._ask_value(chat_id, "min_submission_days", "Введите минимальное количество дней до дедлайна. По умолчанию 7.\n\nНапример:\n<code>7</code>")
+            elif text == BTN_ADVANCE:
+                self._ask_value(chat_id, "advance_required", "Нужен аванс? Введите <code>да</code> или <code>нет</code>.")
+            elif text == BTN_POSTPAYMENT:
+                self._ask_value(chat_id, "max_postpayment_days", "Введите максимальную отсрочку платежа в днях.\n\nНапример:\n<code>30</code>\n\nВведите 0, если постоплата не допускается.")
+            elif text == BTN_APP_SECURITY:
+                self._ask_value(chat_id, "max_application_security_percent", "Введите максимальное обеспечение заявки в процентах.\n\nНапример:\n<code>5</code>")
+            elif text == BTN_CONTRACT_SECURITY:
+                self._ask_value(chat_id, "max_contract_security_percent", "Введите максимальное обеспечение контракта в процентах.\n\nНапример:\n<code>30</code>")
+            elif text == BTN_REGIONS:
+                self._ask_value(chat_id, "regions", "Введите регионы через запятую.\n\nНапример:\n<code>Москва, Санкт-Петербург, Ленинградская область</code>")
             elif text == BTN_KEYWORDS:
                 self._show_keywords(chat_id)
+            elif text == BTN_EXCLUDE:
+                self._show_exclude_keywords(chat_id)
             elif text == BTN_PLATFORMS:
                 self._show_platforms(chat_id)
             elif text == BTN_RESET:
@@ -249,35 +300,72 @@ class TelegramBot:
         field = self._waiting_for.get(chat_id)
         if not field:
             return False
-        if field == "keywords":
+        if field in {"keywords", "exclude_keywords", "regions"}:
             values = [x.strip() for x in text.split(",") if x.strip()]
             if not values:
-                self._send(chat_id, "Введите хотя бы одно ключевое слово через запятую.", self._keyboard())
+                self._send(chat_id, "Введите хотя бы одно значение через запятую.", self._keyboard())
                 return True
-            self.criteria_store.set_keywords(chat_id, values)
+            if field == "keywords":
+                self.criteria_store.set_keywords(chat_id, values)
+                label = "Ключевые слова"
+            elif field == "exclude_keywords":
+                self.criteria_store.set_exclude_keywords(chat_id, values)
+                label = "Исключающие слова"
+            else:
+                self.criteria_store.set_regions(chat_id, values)
+                label = "Регионы"
             self._waiting_for.pop(chat_id, None)
-            self._send(chat_id, "<b>Ключевые слова сохранены.</b>\n\n" + "\n".join(f"• {x}" for x in values), self._keyboard())
+            self._send(chat_id, f"<b>{label} сохранены.</b>\n\n" + "\n".join(f"• {x}" for x in values), self._keyboard())
+            return True
+        if field == "advance_required":
+            value = text.strip().casefold()
+            if value in {"да", "д", "yes", "y", "1", "true"}:
+                self.criteria_store.update(chat_id, advance_required=True)
+                self._waiting_for.pop(chat_id, None)
+                self._ask_value(chat_id, "min_advance_percent", "Введите минимальный размер аванса в процентах.\n\nНапример:\n<code>30</code>")
+                return True
+            if value in {"нет", "н", "no", "n", "0", "false"}:
+                self.criteria_store.update(chat_id, advance_required=False, min_advance_percent=0.0)
+                self._waiting_for.pop(chat_id, None)
+                self._send(chat_id, "<b>Аванс:</b> не требуется.", self._keyboard())
+                return True
+            self._send(chat_id, "Введите «да» или «нет».", self._keyboard())
             return True
         raw = text.strip()
         if ":" in raw:
             raw = raw.split(":", 1)[1].strip()
         try:
-            value = float(raw.replace(" ", "").replace(",", ".")) if field in {"min_price", "max_price"} else int(raw)
+            if field in {"min_price", "max_price", "min_advance_percent", "max_application_security_percent", "max_contract_security_percent"}:
+                value = float(raw.replace(" ", "").replace(",", "."))
+            else:
+                value = int(raw)
             if value < 0:
                 raise ValueError
         except ValueError:
-            self._send(chat_id, "Некорректное значение. Введите число ещё раз.", self._keyboard())
+            self._send(chat_id, "Некорректное значение. Введите неотрицательное число ещё раз.", self._keyboard())
             return True
-        self.criteria_store.update(chat_id, **{field: value})
+        try:
+            self.criteria_store.update(chat_id, **{field: value})
+        except ValueError as exc:
+            self._send(chat_id, f"Некорректный критерий: {exc}", self._keyboard())
+            return True
         self._waiting_for.pop(chat_id, None)
-        labels = {"min_price": "Цена от", "max_price": "Цена до", "min_ai_score": "Балл", "min_submission_days": "Срок"}
+        labels = {
+            "min_price": "Цена от", "max_price": "Цена до", "min_ai_score": "Балл", "min_submission_days": "Срок",
+            "min_advance_percent": "Минимальный аванс", "max_postpayment_days": "Максимальная постоплата",
+            "max_application_security_percent": "Максимальное обеспечение заявки",
+            "max_contract_security_percent": "Максимальное обеспечение контракта",
+        }
         display = int(value) if isinstance(value, float) and value.is_integer() else value
-        self._send(chat_id, f"<b>{labels[field]}:</b> {display}\n\nКритерий сохранён.", self._keyboard())
+        suffix = " %" if field in {"min_advance_percent", "max_application_security_percent", "max_contract_security_percent"} else (" дн." if field in {"min_submission_days", "max_postpayment_days"} else "")
+        self._send(chat_id, f"<b>{labels.get(field, field)}:</b> {display}{suffix}\n\nКритерий сохранён.", self._keyboard())
         return True
 
     def _cmd_settings(self, chat_id: str) -> None:
         c = self.criteria_store.get(chat_id)
         keywords = self.criteria_store.get_keywords(chat_id)
+        exclusions = self.criteria_store.get_exclude_keywords(chat_id)
+        regions = self.criteria_store.get_regions(chat_id)
         platforms = self.criteria_store.get_enabled_platforms(chat_id)
 
         def fmt(v):
@@ -286,22 +374,49 @@ class TelegramBot:
             return f"{int(v):,}".replace(",", " ") if float(v).is_integer() else str(v)
 
         keywords_text = ", ".join(keywords) if keywords else "из config/keywords.yaml"
-        names = ", ".join(PLATFORM_NAMES.get(p, p) for p in platforms)
+        exclusions_text = ", ".join(exclusions) if exclusions else "не заданы"
+        regions_text = ", ".join(regions) if regions else "все регионы"
+        names = ", ".join(PLATFORM_NAMES.get(p, p) for p in platforms) or "не выбраны"
+        advance_text = "требуется" if c.advance_required else "не требуется"
+        if c.advance_required and c.min_advance_percent:
+            advance_text += f", от {fmt(c.min_advance_percent)}%"
         text = (
             "<b>Текущие критерии поиска</b>\n\n"
             f"Цена от: {fmt(c.min_price)}\nЦена до: {fmt(c.max_price)}\n"
+            f"Аванс: {advance_text}\n"
+            f"Постоплата до: {fmt(c.max_postpayment_days)} дн.\n"
+            f"Обеспечение заявки до: {fmt(c.max_application_security_percent)}%\n"
+            f"Обеспечение контракта до: {fmt(c.max_contract_security_percent)}%\n"
             f"Балл: {c.min_ai_score}\nСрок: {c.min_submission_days} дн.\n"
-            f"Ключевые слова: {keywords_text}\nПлощадки: {names}\n\n"
+            f"Регионы: {regions_text}\n"
+            f"Ключевые слова: {keywords_text}\n"
+            f"Исключающие слова: {exclusions_text}\n"
+            f"Площадки: {names}\n\n"
             "Измените нужный параметр кнопками ниже."
         )
         self._send(chat_id, text, self._keyboard())
 
     def _cmd_reset(self, chat_id: str) -> None:
-        self.criteria_store.update(chat_id, min_price=None, max_price=None, min_ai_score=70, min_submission_days=7)
+        self.criteria_store.update(
+            chat_id,
+            min_price=None,
+            max_price=None,
+            advance_required=False,
+            min_advance_percent=0.0,
+            max_postpayment_days=None,
+            min_ai_score=70,
+            min_submission_days=7,
+            min_application_security_percent=0.0,
+            max_application_security_percent=5.0,
+            min_contract_security_percent=0.0,
+            max_contract_security_percent=None,
+        )
         self.criteria_store.set_keywords(chat_id, [])
+        self.criteria_store.set_exclude_keywords(chat_id, [])
+        self.criteria_store.set_regions(chat_id, [])
         self.criteria_store.set_enabled_platforms(chat_id, list(PLATFORM_NAMES))
         self._waiting_for.pop(chat_id, None)
-        self._send(chat_id, "<b>Критерии поиска сброшены.</b>\n\nЦена от: не задано\nЦена до: не задано\nБалл: 70\nСрок: 7 дн.\nКлючевые слова: из config/keywords.yaml\nПлощадки: все доступные", self._keyboard())
+        self._send(chat_id, "<b>Критерии поиска сброшены.</b>\n\nЦена: без ограничения\nАванс: не требуется\nПостоплата: без ограничения\nОбеспечение заявки: до 5%\nБалл: 70\nСрок: 7 дн.\nРегионы: все\nКлючевые слова: из config/keywords.yaml\nИсключающие слова: не заданы\nПлощадки: все доступные", self._keyboard())
 
     def _cmd_search(self, chat_id: str) -> None:
         thread = self._search_threads.get(chat_id)
@@ -363,6 +478,6 @@ class TelegramBot:
             f"Тендеров в базе: {db.count_tenders()}\n"
             f"Отправлено уведомлений всего: {db.count_notifications()}\n"
             f"AI: {self.settings.ai_model} ({self.settings.ai_provider})\n"
-            f"Telegram: {'настроен' if self.settings.telegram_bot_token else 'dry-run'}"
+            f"Telegram: {'настроен' if self.settings.telegram_bot_token and self.settings.telegram_chat_id else 'dry-run'}"
         )
         self._send(chat_id, text, self._keyboard())

@@ -225,21 +225,13 @@ class TenderDatabase:
             normalized = {}
 
         state = {
-            "title": value("title"),
-            "url": value("url"),
-            "price": value("price"),
-            "currency": value("currency"),
-            "start_date": value("start_date"),
-            "end_date": value("end_date"),
-            "deadline": value("deadline"),
-            "published_at": value("published_at"),
-            "region": value("region"),
-            "customer": value("customer"),
+            "title": value("title"), "description": value("description"), "url": value("url"),
+            "price": value("price"), "currency": value("currency"), "start_date": value("start_date"),
+            "end_date": value("end_date"), "deadline": value("deadline"), "published_at": value("published_at"),
+            "region": value("region"), "customer": value("customer"),
             "customer_inn": value("customer_inn") or normalized.get("customer_inn", ""),
-            "law_type": value("law_type"),
-            "advance_required": normalized.get("advance_required", False),
-            "advance_percent": normalized.get("advance_percent"),
-            "postpayment_days": normalized.get("postpayment_days"),
+            "law_type": value("law_type"), "advance_required": normalized.get("advance_required", False),
+            "advance_percent": normalized.get("advance_percent"), "postpayment_days": normalized.get("postpayment_days"),
             "application_security_percent": normalized.get("application_security_percent"),
             "contract_security_percent": normalized.get("contract_security_percent"),
         }
@@ -251,11 +243,16 @@ class TenderDatabase:
         rows = conn.execute(
             """
             SELECT n.tender_id, n.channel, n.sent_at, n.payload,
-                   t.title, t.url, t.price, t.currency, t.start_date, t.end_date,
+                   t.title, t.description, t.url, t.price, t.currency, t.start_date, t.end_date,
                    t.deadline, t.published_at, t.region, t.customer,
                    t.customer_inn, t.law_type, t.raw_data
             FROM notifications n
             JOIN tenders t ON t.id = n.tender_id
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM notification_events e
+                WHERE e.tender_id = n.tender_id
+            )
             """
         ).fetchall()
         for row in rows:
@@ -269,6 +266,16 @@ class TenderDatabase:
                 (row["tender_id"], event_key, row["channel"], self.DEFAULT_RECIPIENT_KEY, row["sent_at"], row["payload"]),
             )
 
+    @staticmethod
+    def _canonical_json(value) -> str:
+        """Serialize JSON-like data deterministically for semantic comparisons."""
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return value
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
     def next_search_number(self) -> int:
         with self._connect() as conn:
             conn.execute("INSERT OR IGNORE INTO search_counter(id, value) VALUES (1, 0)")
@@ -277,6 +284,38 @@ class TenderDatabase:
             if row is None:
                 raise RuntimeError("Не удалось получить номер поиска")
             return int(row["value"])
+
+    def count_tenders(self) -> int:
+        """Return the number of stored unique tenders."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM tenders").fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    def count_notifications(
+        self,
+        channel: str | None = None,
+        recipient_key: str | None = None,
+    ) -> int:
+        """Count delivered notification events, not the legacy one-row mirror.
+
+        The legacy ``notifications`` table is intentionally one row per tender
+        and cannot represent several recipients. ``notification_events`` is the
+        authoritative recipient-aware delivery ledger.
+        """
+        query = "SELECT COUNT(*) AS count FROM notification_events"
+        conditions: list[str] = []
+        params: list[str] = []
+        if channel is not None:
+            conditions.append("channel = ?")
+            params.append(str(channel))
+        if recipient_key is not None:
+            conditions.append("recipient_key = ?")
+            params.append(str(recipient_key))
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        with self._connect() as conn:
+            row = conn.execute(query, params).fetchone()
+        return int(row["count"]) if row is not None else 0
 
     def exists(self, unique_key: str) -> bool:
         with self._connect() as conn:
@@ -288,37 +327,41 @@ class TenderDatabase:
             row = conn.execute("SELECT id FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return int(row["id"]) if row is not None else None
 
-    def _current_notification_event_key(self, unique_key: str) -> tuple[int, str] | None:
+    def _current_notification_event_key_by_id(self, tender_id: int) -> str | None:
+        """Return the current notification fingerprint for an existing tender id."""
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, title, url, price, currency, start_date, end_date,
-                       deadline, published_at, region, customer, customer_inn, law_type,
-                       raw_data
-                FROM tenders WHERE unique_key = ?
+                SELECT id, title, description, url, price, currency, start_date,
+                       end_date, deadline, published_at, region, customer,
+                       customer_inn, law_type, raw_data
+                FROM tenders
+                WHERE id = ?
                 """,
+                (tender_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._notification_event_key_from_row(row)
+
+    def _current_notification_event_key(self, unique_key: str) -> tuple[int, str] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, title, description, url, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type, raw_data FROM tenders WHERE unique_key = ?",
                 (unique_key,),
             ).fetchone()
         if row is None:
             return None
         return int(row["id"]), self._notification_event_key_from_row(row)
 
-    def was_notified(
-        self,
-        unique_key: str,
-        channel: str = "telegram",
-        recipient_key: str = DEFAULT_RECIPIENT_KEY,
-    ) -> bool:
+    def was_notified(self, unique_key: str, channel: str = "telegram", recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
         current = self._current_notification_event_key(unique_key)
         if current is None:
             return False
         tender_id, event_key = current
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT 1 FROM notification_events
-                WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?
-                """,
+                "SELECT 1 FROM notification_events WHERE tender_id = ? AND event_key = ? AND channel = ? AND recipient_key = ?",
                 (tender_id, event_key, channel, recipient_key),
             ).fetchone()
         return row is not None
@@ -326,75 +369,48 @@ class TenderDatabase:
     @staticmethod
     def _tender_snapshot(tender: Tender) -> dict:
         return {
-            "platform": tender.platform,
-            "external_id": tender.external_id,
-            "unique_key": tender.unique_key,
-            "title": tender.title,
-            "url": tender.url,
-            "description": tender.description,
-            "price": tender.price,
-            "currency": tender.currency,
-            "start_date": tender.start_date.isoformat() if tender.start_date else None,
+            "platform": tender.platform, "external_id": tender.external_id, "unique_key": tender.unique_key,
+            "title": tender.title, "url": tender.url, "description": tender.description, "price": tender.price,
+            "currency": tender.currency, "start_date": tender.start_date.isoformat() if tender.start_date else None,
             "end_date": tender.end_date.isoformat() if tender.end_date else None,
             "deadline": tender.deadline.isoformat() if tender.deadline else None,
             "published_at": tender.published_at.isoformat() if tender.published_at else None,
-            "region": tender.region,
-            "customer": tender.customer,
-            "customer_inn": tender.customer_inn,
-            "law_type": tender.law_type,
-            "detail_status": tender.detail_status,
-            "detail_diagnostics": tender.detail_diagnostics,
-            "raw_data": tender.raw_data,
+            "region": tender.region, "customer": tender.customer, "customer_inn": tender.customer_inn,
+            "law_type": tender.law_type, "detail_status": tender.detail_status,
+            "detail_diagnostics": tender.detail_diagnostics, "raw_data": tender.raw_data,
         }
 
     def save_tender(self, tender: Tender) -> int:
+        # Callers may mutate normalized/commercial Tender fields directly
+        # between runs. Persist the canonical snapshot before calculating
+        # notification fingerprints or writing SQLite, otherwise a changed
+        # payment/security condition can be silently missed.
+        tender._persist_normalized_fields()
         now = datetime.now(timezone.utc).isoformat()
         snapshot = self._tender_snapshot(tender)
-        tracked_fields = (
-            "title", "url", "description", "price", "currency", "start_date", "end_date",
-            "deadline", "published_at", "region", "customer", "customer_inn", "law_type",
-            "raw_data",
-        )
+        tracked_fields = ("title", "url", "description", "price", "currency", "start_date", "end_date", "deadline", "published_at", "region", "customer", "customer_inn", "law_type", "detail_status", "detail_diagnostics", "raw_data")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             previous = conn.execute("SELECT * FROM tenders WHERE unique_key = ?", (tender.unique_key,)).fetchone()
             conn.execute(
                 """
-                INSERT INTO tenders (
-                    platform, external_id, unique_key, title, url, description,
-                    price, currency, start_date, end_date, deadline, published_at,
-                    region, customer, customer_inn, law_type, detail_status, detail_diagnostics,
-                    raw_data, first_seen_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tenders (platform, external_id, unique_key, title, url, description, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type, detail_status, detail_diagnostics, raw_data, first_seen_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(unique_key) DO UPDATE SET
-                    platform = excluded.platform,
-                    external_id = excluded.external_id,
-                    title = excluded.title,
-                    url = excluded.url,
-                    description = excluded.description,
-                    price = excluded.price,
-                    currency = excluded.currency,
-                    start_date = excluded.start_date,
-                    end_date = excluded.end_date,
-                    deadline = excluded.deadline,
-                    published_at = excluded.published_at,
-                    region = excluded.region,
-                    customer = excluded.customer,
-                    customer_inn = excluded.customer_inn,
-                    law_type = excluded.law_type,
-                    detail_status = excluded.detail_status,
-                    detail_diagnostics = excluded.detail_diagnostics,
-                    raw_data = excluded.raw_data,
-                    updated_at = excluded.updated_at
+                    platform=excluded.platform, external_id=excluded.external_id, title=excluded.title,
+                    url=excluded.url, description=excluded.description, price=excluded.price,
+                    currency=excluded.currency, start_date=excluded.start_date, end_date=excluded.end_date,
+                    deadline=excluded.deadline, published_at=excluded.published_at, region=excluded.region,
+                    customer=excluded.customer, customer_inn=excluded.customer_inn, law_type=excluded.law_type,
+                    detail_status=excluded.detail_status, detail_diagnostics=excluded.detail_diagnostics,
+                    raw_data=excluded.raw_data, updated_at=excluded.updated_at
                 """,
                 (
-                    tender.platform, tender.external_id, tender.unique_key, tender.title, tender.url,
-                    tender.description, tender.price, tender.currency,
-                    tender.start_date.isoformat() if tender.start_date else None,
-                    tender.end_date.isoformat() if tender.end_date else None,
-                    tender.deadline.isoformat() if tender.deadline else None,
-                    tender.published_at.isoformat() if tender.published_at else None,
-                    tender.region, tender.customer, tender.customer_inn, tender.law_type,
-                    tender.detail_status, tender.detail_diagnostics,
+                    tender.platform, tender.external_id, tender.unique_key, tender.title, tender.url, tender.description,
+                    tender.price, tender.currency, tender.start_date.isoformat() if tender.start_date else None,
+                    tender.end_date.isoformat() if tender.end_date else None, tender.deadline.isoformat() if tender.deadline else None,
+                    tender.published_at.isoformat() if tender.published_at else None, tender.region, tender.customer,
+                    tender.customer_inn, tender.law_type, tender.detail_status, tender.detail_diagnostics,
                     json.dumps(tender.raw_data, ensure_ascii=False), now, now,
                 ),
             )
@@ -402,96 +418,58 @@ class TenderDatabase:
             if row is None:
                 raise RuntimeError(f"Tender was not saved: {tender.unique_key}")
             tender_id = int(row["id"])
-
             if previous is None:
-                changed_fields = ["created"]
-                event_type = "created"
+                changed_fields, event_type = ["created"], "created"
             else:
                 previous_values = {
-                    "title": previous["title"], "url": previous["url"], "description": previous["description"],
-                    "price": previous["price"], "currency": previous["currency"],
-                    "start_date": previous["start_date"], "end_date": previous["end_date"],
-                    "deadline": previous["deadline"], "published_at": previous["published_at"],
-                    "region": previous["region"], "customer": previous["customer"],
-                    "customer_inn": previous["customer_inn"], "law_type": previous["law_type"],
-                    "raw_data": previous["raw_data"],
+                    "title": previous["title"], "url": previous["url"], "description": previous["description"], "price": previous["price"], "currency": previous["currency"],
+                    "start_date": previous["start_date"], "end_date": previous["end_date"], "deadline": previous["deadline"], "published_at": previous["published_at"],
+                    "region": previous["region"], "customer": previous["customer"], "customer_inn": previous["customer_inn"], "law_type": previous["law_type"],
+                    "detail_status": previous["detail_status"], "detail_diagnostics": previous["detail_diagnostics"], "raw_data": self._canonical_json(previous["raw_data"]),
                 }
                 current_values = {
-                    "title": snapshot["title"], "url": snapshot["url"], "description": snapshot["description"],
-                    "price": snapshot["price"], "currency": snapshot["currency"],
-                    "start_date": snapshot["start_date"], "end_date": snapshot["end_date"],
-                    "deadline": snapshot["deadline"], "published_at": snapshot["published_at"],
-                    "region": snapshot["region"], "customer": snapshot["customer"],
-                    "customer_inn": snapshot["customer_inn"], "law_type": snapshot["law_type"],
-                    "raw_data": json.dumps(snapshot["raw_data"], ensure_ascii=False),
+                    "title": snapshot["title"], "url": snapshot["url"], "description": snapshot["description"], "price": snapshot["price"], "currency": snapshot["currency"],
+                    "start_date": snapshot["start_date"], "end_date": snapshot["end_date"], "deadline": snapshot["deadline"], "published_at": snapshot["published_at"],
+                    "region": snapshot["region"], "customer": snapshot["customer"], "customer_inn": snapshot["customer_inn"], "law_type": snapshot["law_type"],
+                    "detail_status": snapshot["detail_status"], "detail_diagnostics": snapshot["detail_diagnostics"], "raw_data": self._canonical_json(snapshot["raw_data"]),
                 }
                 changed_fields = [field for field in tracked_fields if previous_values[field] != current_values[field]]
                 event_type = "updated"
-
             if changed_fields:
                 conn.execute(
-                    """
-                    INSERT INTO tender_history (tender_id, changed_at, event_type, changed_fields, snapshot)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
+                    "INSERT INTO tender_history (tender_id, changed_at, event_type, changed_fields, snapshot) VALUES (?, ?, ?, ?, ?)",
                     (tender_id, now, event_type, json.dumps(changed_fields, ensure_ascii=False), json.dumps(snapshot, ensure_ascii=False)),
                 )
         return tender_id
 
     def get_tender_history(self, tender_id: int) -> list[sqlite3.Row]:
         with self._connect() as conn:
-            return conn.execute(
-                "SELECT id, tender_id, changed_at, event_type, changed_fields, snapshot FROM tender_history WHERE tender_id = ? ORDER BY changed_at ASC, id ASC",
-                (tender_id,),
-            ).fetchall()
+            return conn.execute("SELECT id, tender_id, changed_at, event_type, changed_fields, snapshot FROM tender_history WHERE tender_id = ? ORDER BY changed_at ASC, id ASC", (tender_id,)).fetchall()
 
     def save_analysis(self, tender_id: int, analysis: TenderAnalysis) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO analyses (
-                    tender_id, relevance_score, summary, recommendation,
-                    risks, budget_note, deadline_note, is_stub, analyzed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(tender_id) DO UPDATE SET
-                    relevance_score = excluded.relevance_score,
-                    summary = excluded.summary,
-                    recommendation = excluded.recommendation,
-                    risks = excluded.risks,
-                    budget_note = excluded.budget_note,
-                    deadline_note = excluded.deadline_note,
-                    is_stub = excluded.is_stub,
-                    analyzed_at = excluded.analyzed_at
+                INSERT INTO analyses (tender_id, relevance_score, summary, recommendation, risks, budget_note, deadline_note, is_stub, analyzed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tender_id) DO UPDATE SET relevance_score=excluded.relevance_score, summary=excluded.summary, recommendation=excluded.recommendation, risks=excluded.risks, budget_note=excluded.budget_note, deadline_note=excluded.deadline_note, is_stub=excluded.is_stub, analyzed_at=excluded.analyzed_at
                 """,
                 (tender_id, analysis.relevance_score, analysis.summary, analysis.recommendation, json.dumps(analysis.risks, ensure_ascii=False), analysis.budget_note, analysis.deadline_note, 1 if analysis.is_stub else 0, now),
             )
 
-    def mark_notified(
-        self,
-        tender_id: int,
-        channel: str = "telegram",
-        payload: dict | None = None,
-        event_key: str | None = None,
-        recipient_key: str = DEFAULT_RECIPIENT_KEY,
-    ) -> None:
+    def mark_notified(self, tender_id: int, channel: str = "telegram", payload: dict | None = None, event_key: str | None = None, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
-            tender = conn.execute(
-                "SELECT id, title, url, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type, raw_data FROM tenders WHERE id = ?",
-                (tender_id,),
-            ).fetchone()
+            tender = conn.execute("SELECT id, title, description, url, price, currency, start_date, end_date, deadline, published_at, region, customer, customer_inn, law_type, raw_data FROM tenders WHERE id = ?", (tender_id,)).fetchone()
             if tender is None:
                 raise ValueError(f"Tender not found: {tender_id}")
             event_key = event_key or self._notification_event_key_from_row(tender)
             conn.execute(
                 """
-                INSERT INTO notification_events
-                    (tender_id, event_key, channel, recipient_key, sent_at, payload)
+                INSERT INTO notification_events (tender_id, event_key, channel, recipient_key, sent_at, payload)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(tender_id, event_key, channel, recipient_key) DO UPDATE SET
-                    sent_at = excluded.sent_at,
-                    payload = excluded.payload
+                ON CONFLICT(tender_id, event_key, channel, recipient_key) DO UPDATE SET sent_at=excluded.sent_at, payload=excluded.payload
                 """,
                 (tender_id, event_key, channel, recipient_key, now, json.dumps(payload or {}, ensure_ascii=False)),
             )
@@ -499,20 +477,7 @@ class TenderDatabase:
                 """
                 INSERT INTO notifications (tender_id, channel, sent_at, payload)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(tender_id) DO UPDATE SET
-                    channel = excluded.channel,
-                    sent_at = excluded.sent_at,
-                    payload = excluded.payload
+                ON CONFLICT(tender_id) DO UPDATE SET channel=excluded.channel, sent_at=excluded.sent_at, payload=excluded.payload
                 """,
                 (tender_id, channel, now, json.dumps(payload or {}, ensure_ascii=False)),
             )
-
-    def count_tenders(self) -> int:
-        with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS c FROM tenders").fetchone()
-        return int(row["c"])
-
-    def count_notifications(self) -> int:
-        with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS c FROM notification_events").fetchone()
-        return int(row["c"])

@@ -89,6 +89,15 @@ class TenderAnalyzerTests(unittest.TestCase):
                 analyzer.analyze(_make_tender())
         self.assertIn("404", str(ctx.exception))
 
+    def test_endpoint_404_is_not_misreported_as_missing_model(self) -> None:
+        analyzer = TenderAnalyzer(model="qwen3:8b", ollama_url="http://localhost:11434")
+        fake_response = _FakeResponse(status_code=404, text="route not found")
+        with patch("src.ai.analyzer.requests.post", return_value=fake_response):
+            with self.assertRaises(Exception) as ctx:
+                analyzer.analyze(_make_tender())
+        self.assertIn("endpoint", str(ctx.exception))
+        self.assertNotIsInstance(ctx.exception, __import__("src.ai.analyzer", fromlist=["OllamaModelNotFoundError"]).OllamaModelNotFoundError)
+
     def test_connection_error_falls_back_to_stub_when_allowed(self) -> None:
         analyzer = TenderAnalyzer(
             model="qwen3:8b", ollama_url="http://localhost:11434", use_stub_when_no_key=True

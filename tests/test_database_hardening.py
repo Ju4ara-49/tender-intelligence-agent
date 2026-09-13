@@ -55,3 +55,14 @@ def test_sqlite_wal_and_busy_timeout_are_enabled(tmp_path):
         busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
     assert str(journal_mode).lower() == "wal"
     assert busy_timeout >= 10000
+
+
+def test_concurrent_identical_tender_saves_create_only_one_history_event(tmp_path):
+    db = TenderDatabase(tmp_path / "concurrent_tender.sqlite3")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ids = list(pool.map(lambda _: db.save_tender(_tender()), range(20)))
+
+    assert len(set(ids)) == 1
+    history = db.get_tender_history(ids[0])
+    assert len(history) == 1
+    assert history[0]["event_type"] == "created"

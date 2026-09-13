@@ -27,10 +27,17 @@ class TelegramNotifier:
         "rosatom": "Росатом",
     }
 
-    def __init__(self, bot_token: str = "", chat_id: str = "", dry_run_when_no_token: bool = True) -> None:
+    def __init__(
+        self,
+        bot_token: str = "",
+        chat_id: str = "",
+        dry_run_when_no_token: bool = True,
+        enabled: bool = True,
+    ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.dry_run_when_no_token = dry_run_when_no_token
+        self.enabled = bool(enabled)
 
     @property
     def is_configured(self) -> bool:
@@ -48,6 +55,9 @@ class TelegramNotifier:
         global ``TELEGRAM_CHAT_ID``.  ``chat_id`` is therefore an explicit override
         used by the multi-user bot, while CLI/scheduled runs keep the legacy default.
         """
+        if not self.enabled:
+            logger.info("Telegram: уведомления отключены настройкой notifications.telegram.enabled=false")
+            return False
         message = self.format_message(tender, analysis)
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         if not self.bot_token or not target_chat_id:
@@ -61,6 +71,9 @@ class TelegramNotifier:
         return self._send(message, chat_id=target_chat_id)
 
     def send_text(self, text: str, chat_id: str | None = None) -> bool:
+        if not self.enabled:
+            logger.info("Telegram: уведомления отключены настройкой notifications.telegram.enabled=false")
+            return False
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         if not self.bot_token or not target_chat_id:
             logger.info("Telegram [DRY-RUN]: %s", text)
@@ -80,9 +93,20 @@ class TelegramNotifier:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise RuntimeError("Telegram API вернул некорректный JSON") from exc
+                if not isinstance(data, dict) or data.get("ok") is not True:
+                    description = data.get("description") if isinstance(data, dict) else None
+                    error_code = data.get("error_code") if isinstance(data, dict) else None
+                    suffix = f" ({error_code})" if error_code is not None else ""
+                    raise RuntimeError(
+                        f"Telegram API завершился ошибкой{suffix}: {description or 'unknown error'}"
+                    )
             logger.info("Telegram: сообщение отправлено в chat_id=%s", target_chat_id)
             return True
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             logger.error("Telegram: ошибка отправки в chat_id=%s: %s", target_chat_id, exc)
             return False
 

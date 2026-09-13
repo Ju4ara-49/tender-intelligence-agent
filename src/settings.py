@@ -86,38 +86,66 @@ class AppSettings:
 
     @property
     def scheduler_interval_minutes(self) -> int:
-        return int(
-            self.config.get("scheduler", {}).get(
-                "interval_minutes",
-                60,
-            )
-        )
+        raw = self.config.get("scheduler", {}).get("interval_minutes", 60)
+        try:
+            interval = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("scheduler.interval_minutes must be a positive integer") from None
+        if isinstance(raw, bool) or interval <= 0:
+            raise ValueError("scheduler.interval_minutes must be a positive integer")
+        return interval
 
     @property
     def run_on_start(self) -> bool:
-        return bool(
+        return _as_bool(
             self.config.get("scheduler", {}).get(
                 "run_on_start",
                 True,
-            )
+            ),
+            default=True,
+        )
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return _as_bool(
+            self.config.get("notifications", {}).get("telegram", {}).get("enabled", True),
+            default=True,
         )
 
     @property
     def telegram_dry_run(self) -> bool:
-        return bool(
+        return _as_bool(
             self.config.get("notifications", {})
             .get("telegram", {})
-            .get("dry_run_when_no_token", True)
+            .get("dry_run_when_no_token", True),
+            default=True,
         )
 
     @property
     def ai_use_stub(self) -> bool:
-        return bool(
+        return _as_bool(
             self.config.get("ai", {}).get(
                 "use_stub_when_no_key",
                 False,
-            )
+            ),
+            default=False,
         )
+
+
+def _as_bool(value: Any, *, default: bool) -> bool:
+    """Normalize YAML/env-like booleans without Python's bool("false") trap."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    normalized = str(value).strip().casefold()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return default
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

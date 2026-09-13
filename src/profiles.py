@@ -33,6 +33,27 @@ class SearchProfile:
     created_at: str = ""
     updated_at: str = ""
 
+    def __post_init__(self) -> None:
+        criteria = self.criteria()
+        self.min_price = criteria.min_price
+        self.max_price = criteria.max_price
+        self.advance_required = criteria.advance_required
+        self.min_advance_percent = criteria.min_advance_percent
+        self.max_postpayment_days = criteria.max_postpayment_days
+        self.min_submission_days = criteria.min_submission_days
+        self.min_application_security_percent = criteria.min_application_security_percent
+        self.max_application_security_percent = criteria.max_application_security_percent
+        self.min_contract_security_percent = criteria.min_contract_security_percent
+        self.max_contract_security_percent = criteria.max_contract_security_percent
+        self.min_ai_score = criteria.min_ai_score
+        self.exclusions = criteria.exclude_keywords
+        self.regions = criteria.regions
+        self.name = str(self.name).strip()
+        if not self.name:
+            raise ValueError("name профиля не может быть пустым")
+        if not isinstance(self.enabled, bool):
+            raise ValueError("enabled должен быть bool")
+
     def criteria(self) -> TenderCriteria:
         return TenderCriteria(
             min_price=self.min_price,
@@ -128,9 +149,6 @@ class SearchProfileStore:
                 """
             )
 
-            # Existing installations may have these tables from the pre-profile
-            # schema. CREATE TABLE IF NOT EXISTS does not add new columns, so
-            # migrate every field used by the current dataclasses explicitly.
             profile_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({self.PROFILES_TABLE})").fetchall()}
             profile_migrations = {
                 "keywords": "TEXT NOT NULL DEFAULT '[]'",
@@ -187,6 +205,10 @@ class SearchProfileStore:
             enabled=bool(row["enabled"]), created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
+    @staticmethod
+    def _validate_profile(profile: SearchProfile) -> SearchProfile:
+        return SearchProfile(**asdict(profile))
+
     def create(self, user_id: str | int, profile: SearchProfile | None = None, **values) -> SearchProfile:
         user_id = str(user_id).strip()
         if not user_id:
@@ -198,6 +220,7 @@ class SearchProfileStore:
             for key, value in values.items():
                 if hasattr(profile, key):
                     setattr(profile, key, value)
+            profile = self._validate_profile(profile)
         now = self._now()
         profile.created_at = profile.created_at or now
         profile.updated_at = now
@@ -208,7 +231,7 @@ class SearchProfileStore:
             "max_contract_security_percent", "min_ai_score", "enabled", "created_at", "updated_at",
         )
         values_tuple = (
-            profile.user_id, profile.name.strip(), self._json(profile.keywords), self._json(profile.exclusions),
+            profile.user_id, profile.name, self._json(profile.keywords), self._json(profile.exclusions),
             self._json(profile.platforms), self._json(profile.regions), profile.min_price, profile.max_price,
             int(profile.advance_required), profile.min_advance_percent, profile.max_postpayment_days,
             profile.min_submission_days, profile.min_application_security_percent, profile.max_application_security_percent,
@@ -248,18 +271,39 @@ class SearchProfileStore:
             if result is None:
                 raise KeyError(profile_id)
             return result
-        if "name" in values:
-            values["name"] = str(values["name"]).strip()
-        for key in {"keywords", "exclusions", "platforms", "regions"} & values.keys():
-            values[key] = self._json(values[key])
-        for key in {"advance_required", "enabled"} & values.keys():
-            values[key] = int(bool(values[key]))
-        values["updated_at"] = self._now()
-        assignments = ", ".join(f"{key} = ?" for key in values)
+        current = self.get(user_id, profile_id)
+        if current is None:
+            raise KeyError(profile_id)
+        merged = asdict(current)
+        merged.update(values)
+        merged["user_id"] = str(user_id).strip()
+        candidate = self._validate_profile(SearchProfile(**merged))
+        candidate.updated_at = self._now()
+        stored = {
+            "name": candidate.name,
+            "keywords": self._json(candidate.keywords),
+            "exclusions": self._json(candidate.exclusions),
+            "platforms": self._json(candidate.platforms),
+            "regions": self._json(candidate.regions),
+            "min_price": candidate.min_price,
+            "max_price": candidate.max_price,
+            "advance_required": int(candidate.advance_required),
+            "min_advance_percent": candidate.min_advance_percent,
+            "max_postpayment_days": candidate.max_postpayment_days,
+            "min_submission_days": candidate.min_submission_days,
+            "min_application_security_percent": candidate.min_application_security_percent,
+            "max_application_security_percent": candidate.max_application_security_percent,
+            "min_contract_security_percent": candidate.min_contract_security_percent,
+            "max_contract_security_percent": candidate.max_contract_security_percent,
+            "min_ai_score": candidate.min_ai_score,
+            "enabled": int(candidate.enabled),
+            "updated_at": candidate.updated_at,
+        }
+        assignments = ", ".join(f"{key} = ?" for key in stored)
         with self.db._connect() as conn:
             cursor = conn.execute(
                 f"UPDATE {self.PROFILES_TABLE} SET {assignments} WHERE id = ? AND user_id = ?",
-                (*values.values(), profile_id, str(user_id).strip()),
+                (*stored.values(), profile_id, str(user_id).strip()),
             )
             if cursor.rowcount != 1:
                 raise KeyError(profile_id)
@@ -319,41 +363,59 @@ class SearchProfileStore:
             ),
         )
 
-    def record_run(self, user_id: str | int, profile_id: int, stats: dict[str, int], started_at: str | None = None) -> None:
-        if self.get(user_id, profile_id) is None:
-            raise KeyError(profile_id)
-        finished_at = self._now()
-        started_at = started_at or finished_at
+    def record_run(self, user_id: str | int, profile_id: int, stats: dict[str, int], *, started_at: str | None = None) -> None:
+        user_id = str(user_id).strip()
+        if not user_id:
+            raise ValueError("user_id обязателен")
+        started = started_at or self._now()
+        finished = self._now()
         with self.db._connect() as conn:
+            owner = conn.execute(
+                f"SELECT 1 FROM {self.PROFILES_TABLE} WHERE id = ? AND user_id = ?", (profile_id, user_id)
+            ).fetchone()
+            if owner is None:
+                raise KeyError(profile_id)
             conn.execute(
                 f"""
                 INSERT INTO {self.RUNS_TABLE} (
-                    profile_id, search_number, started_at, finished_at, found, filtered, new_count,
-                    analyzed, notified, duplicates, excluded_by_criteria
+                    profile_id, search_number, started_at, finished_at, found, filtered,
+                    new_count, analyzed, notified, duplicates, excluded_by_criteria
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    profile_id, stats.get("search_number"), started_at, finished_at,
-                    stats.get("found", 0), stats.get("filtered", 0), stats.get("new", 0),
-                    stats.get("analyzed", 0), stats.get("notified", 0), stats.get("skipped_duplicate", 0),
-                    stats.get("excluded_by_criteria", 0),
+                    profile_id,
+                    stats.get("search_number"),
+                    started,
+                    finished,
+                    int(stats.get("found", 0)),
+                    int(stats.get("filtered", 0)),
+                    int(stats.get("new", stats.get("new_count", 0))),
+                    int(stats.get("analyzed", 0)),
+                    int(stats.get("notified", 0)),
+                    int(stats.get("skipped_duplicate", stats.get("duplicates", 0))),
+                    int(stats.get("excluded_by_criteria", 0)),
                 ),
             )
 
-    def stats(self, user_id: str | int, profile_id: int) -> dict[str, int | None]:
-        if self.get(user_id, profile_id) is None:
-            raise KeyError(profile_id)
+    def stats(self, user_id: str | int, profile_id: int) -> dict[str, int]:
+        user_id = str(user_id).strip()
         with self.db._connect() as conn:
             row = conn.execute(
                 f"""
-                SELECT COUNT(*) AS runs, COALESCE(SUM(found), 0) AS found,
-                       COALESCE(SUM(filtered), 0) AS filtered, COALESCE(SUM(new_count), 0) AS new_count,
-                       COALESCE(SUM(analyzed), 0) AS analyzed, COALESCE(SUM(notified), 0) AS notified,
+                SELECT COUNT(*) AS runs,
+                       COALESCE(SUM(found), 0) AS found,
+                       COALESCE(SUM(filtered), 0) AS filtered,
+                       COALESCE(SUM(new_count), 0) AS new_count,
+                       COALESCE(SUM(analyzed), 0) AS analyzed,
+                       COALESCE(SUM(notified), 0) AS notified,
                        COALESCE(SUM(duplicates), 0) AS duplicates,
-                       COALESCE(SUM(excluded_by_criteria), 0) AS excluded_by_criteria,
-                       MAX(finished_at) AS last_run_at
-                FROM {self.RUNS_TABLE} WHERE profile_id = ?
+                       COALESCE(SUM(excluded_by_criteria), 0) AS excluded_by_criteria
+                FROM {self.RUNS_TABLE} r
+                JOIN {self.PROFILES_TABLE} p ON p.id = r.profile_id
+                WHERE r.profile_id = ? AND p.user_id = ?
                 """,
-                (profile_id,),
+                (profile_id, user_id),
             ).fetchone()
-        return {key: row[key] for key in row.keys()}
+        if row is None:
+            return {"runs": 0, "found": 0, "filtered": 0, "new_count": 0, "analyzed": 0, "notified": 0, "duplicates": 0, "excluded_by_criteria": 0}
+        return {key: int(row[key]) for key in ("runs", "found", "filtered", "new_count", "analyzed", "notified", "duplicates", "excluded_by_criteria")}

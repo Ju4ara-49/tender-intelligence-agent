@@ -34,4 +34,9 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
             tender.contract_security_percent = float(conditions["contract_security_percent"])
 
         tender.raw_data["commercial_conditions"] = conditions
+        # The base Tender persists _normalized during construction, but this
+        # adapter mutates commercial fields afterwards. Refresh it so SQLite
+        # event fingerprints and recipient delivery fingerprints see the same
+        # state and do not diverge after an EIS detail enrichment.
+        tender._persist_normalized_fields()
         return tender

@@ -34,3 +34,40 @@ def test_empty_user_id_uses_only_explicit_default_not_stack_introspection(tmp_pa
     assert store.normalize_user_id(None) == "default"
     assert store.normalize_user_id("  ") == "default"
     assert store.normalize_user_id("12345") == "12345"
+
+
+def test_owner_identity_is_configurable_and_whitelist_path_is_project_root(monkeypatch, tmp_path):
+    import src.telegram_multiuser as module
+    from src.telegram_multiuser import MultiUserTelegramBot
+
+    monkeypatch.setenv("TELEGRAM_OWNER_USER_ID", "owner-42")
+    bot = object.__new__(MultiUserTelegramBot)
+    bot.owner_telegram_id = "owner-42"
+    bot._allowed_user_ids = {"owner-42", "123"}
+    assert bot._is_owner("owner-42")
+    assert not bot._is_owner("838120236")
+
+    whitelist = tmp_path / "data" / "telegram_allowed_users.json"
+    monkeypatch.setattr(module, "WHITELIST_FILE", whitelist)
+    bot._save_allowed_user_ids()
+    assert whitelist.exists()
+    assert "owner-42" not in whitelist.read_text(encoding="utf-8")
+    assert "123" in whitelist.read_text(encoding="utf-8")
+
+
+def test_owner_user_list_uses_instance_owner_identity_and_escapes_ids(monkeypatch):
+    from src.telegram_multiuser import MultiUserTelegramBot
+
+    bot = object.__new__(MultiUserTelegramBot)
+    bot.owner_telegram_id = "owner-42"
+    bot._allowed_user_ids = {"owner-42", "123&456"}
+    sent = []
+    bot._send = lambda chat_id, text, reply_markup=None: sent.append((chat_id, text, reply_markup))
+    bot._admin_keyboard = lambda: {"keyboard": []}
+
+    bot._show_users("owner-42")
+
+    assert len(sent) == 1
+    assert "owner-42" in sent[0][1]
+    assert "— владелец" in sent[0][1]
+    assert "123&amp;456" in sent[0][1]

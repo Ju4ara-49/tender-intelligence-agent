@@ -54,13 +54,14 @@ def main() -> int:
         from src.storage.database import TenderDatabase
 
         db = TenderDatabase(settings.database_path)
-        print(f"Тендеров в базе:      {db.count_tenders()}")
+        telegram_ready = bool(settings.telegram_bot_token and settings.telegram_chat_id)
+        print(f"Тендеров в базе:        {db.count_tenders()}")
         print(f"Отправлено уведомлений: {db.count_notifications()}")
-        print(f"Telegram настроен:    {'да' if settings.telegram_bot_token else 'нет (dry-run)'}")
+        print(f"Telegram настроен:      {'да' if telegram_ready else 'нет (dry-run)'}")
         if settings.ai_provider.lower() == "ollama":
-            print(f"ИИ настроен:          {'да' if settings.ollama_url else 'нет'} (Ollama / {settings.ai_model})")
+            print(f"ИИ endpoint задан:      {'да' if settings.ollama_url else 'нет'} (Ollama / {settings.ai_model})")
         else:
-            print(f"ИИ настроен:          {'да' if settings.ai_api_key else 'нет'} ({settings.ai_provider} / {settings.ai_model})")
+            print(f"ИИ настроен:            {'да' if settings.ai_api_key else 'нет'} ({settings.ai_provider} / {settings.ai_model})")
         return 0
 
     if args.command == "once":

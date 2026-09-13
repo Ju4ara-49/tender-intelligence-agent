@@ -47,6 +47,7 @@ class Orchestrator:
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
             dry_run_when_no_token=settings.telegram_dry_run,
+            enabled=settings.telegram_enabled,
         )
         self.email_notifier = EmailNotifier(
             enabled=settings.email_enabled,
@@ -241,12 +242,18 @@ class Orchestrator:
 
     @staticmethod
     def _passes_regions(tender: Tender, regions: list[str] | None) -> bool:
-        if not regions:
+        valid_regions = [
+            str(region).strip().casefold()
+            for region in (regions or [])
+            if str(region).strip()
+        ]
+        # A profile containing only empty region values is equivalent to no filter.
+        if not valid_regions:
             return True
         tender_region = (tender.region or "").strip().casefold()
         if not tender_region:
             return False
-        return any(region.strip().casefold() in tender_region for region in regions if region.strip())
+        return any(region in tender_region for region in valid_regions)
 
     def run_cycle(
         self,
@@ -366,6 +373,16 @@ class Orchestrator:
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
+            # Partial detail is persisted for diagnostics/export, but must never
+            # reach AI/Telegram as a fully qualified tender. The shared detail
+            # contract marks missing mandatory fields as partial precisely to
+            # prevent incomplete records from being treated as actionable.
+            if str(getattr(tender, "detail_status", "partial") or "partial").lower() != "success":
+                logger.debug(
+                    "Detail contract: пропуск %s:%s для уведомления | status=%s | diagnostics=%s",
+                    tender.platform, tender.external_id, tender.detail_status, tender.detail_diagnostics,
+                )
+                continue
             if not self._passes_regions(tender, selected_regions):
                 stats["excluded_by_region"] += 1
                 continue
@@ -382,22 +399,37 @@ class Orchestrator:
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
+
+            # was_notified() reserves the delivery slot for this worker. From
+            # this point every exit path must either mark the event as delivered
+            # or release the reservation, otherwise a failed AI/send path can
+            # suppress retries until the claim TTL expires.
             try:
-                analysis = self.analyzer.analyze(tender)
-            except Exception as exc:
-                stats["ai_failed"] += 1
-                logger.exception("AI: ошибка анализа %s: %s", tender.unique_key, exc)
-                continue
-            self.db.save_analysis(tender_id, analysis)
-            stats["analyzed"] += 1
-            if analysis.relevance_score < criteria.min_ai_score:
-                continue
-            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
-                stats["skipped_duplicate"] += 1
-                continue
-            if self.notifier.send_tender_alert(tender, analysis, chat_id=target_chat_id):
-                self.notification_state.mark_notified(tender, recipient_key=recipient_key)
-                stats["notified"] += 1
+                try:
+                    analysis = self.analyzer.analyze(tender)
+                except Exception as exc:
+                    stats["ai_failed"] += 1
+                    logger.exception("AI: ошибка анализа %s: %s", tender.unique_key, exc)
+                    self.notification_state.release_claim(tender, recipient_key=recipient_key)
+                    continue
+
+                self.db.save_analysis(tender_id, analysis)
+                stats["analyzed"] += 1
+                if analysis.relevance_score < criteria.min_ai_score:
+                    self.notification_state.release_claim(tender, recipient_key=recipient_key)
+                    continue
+
+                sent = self.notifier.send_tender_alert(tender, analysis, chat_id=target_chat_id)
+                if sent:
+                    self.notification_state.mark_notified(tender, recipient_key=recipient_key)
+                    stats["notified"] += 1
+                else:
+                    self.notification_state.release_claim(tender, recipient_key=recipient_key)
+            except Exception:
+                # The claim must never survive an unexpected failure in
+                # persistence, notification, or any future code added here.
+                self.notification_state.release_claim(tender, recipient_key=recipient_key)
+                raise
 
         try:
             output_dir = Path(self.settings.config.get("export", {}).get("output_dir", "output"))
@@ -418,7 +450,14 @@ class Orchestrator:
         user_id = str(user_id).strip()
         profiles = self.profile_store.list(user_id, enabled_only=True)
         if not profiles:
-            profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
+            # Do not silently execute a disabled profile. A default profile is
+            # synthesized only for a brand-new user with no profiles at all.
+            existing_profiles = self.profile_store.list(user_id, enabled_only=False)
+            if not existing_profiles:
+                profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
+            else:
+                logger.info("Профили пользователя %s существуют, но все отключены; поиск не запускаем.", user_id)
+                return []
         results: list[dict[str, int]] = []
         for profile in profiles:
             if self.stop_requested:

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from src.models.tender import Tender
+from src.models.tender import Tender, TenderAnalysis
+from src.notifications.telegram import TelegramNotifier
 from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 
@@ -60,3 +61,70 @@ def test_rich_delivery_state_accepts_identical_state(tmp_path):
 
     assert state.was_notified(tender) is True
     assert db.count_notifications() == 1
+
+
+def test_legacy_notifications_migrate_with_the_same_fingerprint_as_delivery_state(tmp_path):
+    db = TenderDatabase(tmp_path / "legacy_migration.db")
+    tender = _tender()
+    tender.description = "Подробное описание закупки"
+    tender_id = db.save_tender(tender)
+
+    with db._connect() as conn:
+        conn.execute(
+            "INSERT INTO notifications (tender_id, channel, sent_at, payload) VALUES (?, 'telegram', ?, '{}')",
+            (tender_id, datetime.now(timezone.utc).isoformat()),
+        )
+
+    # Re-open the database so the legacy notification is migrated into
+    # notification_events. The non-empty description is intentional: older
+    # code used a different fingerprint and could silently resend the tender.
+    db = TenderDatabase(tmp_path / "legacy_migration.db")
+    state = NotificationDeliveryState(db)
+
+    assert db.was_notified(tender.unique_key) is True
+    assert state.was_notified(tender) is True
+    assert db.count_notifications() == 1
+
+def test_disabled_telegram_notifier_does_not_attempt_delivery(monkeypatch):
+    import httpx
+
+    notifier = TelegramNotifier(bot_token="token", chat_id="chat", enabled=False)
+    called = {"post": False}
+
+    def fail_post(*args, **kwargs):
+        called["post"] = True
+        raise AssertionError("HTTP must not be called when Telegram is disabled")
+
+    monkeypatch.setattr(httpx, "Client", fail_post)
+    tender = Tender(
+        platform="test",
+        external_id="disabled-1",
+        title="Tender",
+        url="https://example.test/disabled-1",
+    )
+    analysis = TenderAnalysis(relevance_score=90, summary="ok", recommendation="participate")
+    assert notifier.send_tender_alert(tender, analysis) is False
+    assert called["post"] is False
+
+def test_migrated_legacy_notification_allows_changed_tender(tmp_path):
+    db_path = tmp_path / "legacy_changed.db"
+    db = TenderDatabase(db_path)
+    tender = _tender()
+    tender_id = db.save_tender(tender)
+    event_key = NotificationDeliveryState.event_key(tender)
+
+    with db._connect() as conn:
+        conn.execute(
+            "INSERT INTO notifications (tender_id, channel, sent_at, payload) VALUES (?, 'telegram', ?, '{}')",
+            (tender_id, datetime.now(timezone.utc).isoformat()),
+        )
+
+    # Migration happens when the database is reopened.
+    db = TenderDatabase(db_path)
+    state = NotificationDeliveryState(db)
+    assert state.was_notified(tender) is True
+
+    tender.price = 1750.0
+    db.save_tender(tender)
+    assert NotificationDeliveryState.event_key(tender) != event_key
+    assert state.was_notified(tender) is False
