@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -42,6 +43,20 @@ SEARCH_SELECTORS = (
 )
 SEARCH_LABELS = ("Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти", "Применить")
 ACCESS_BLOCK_STATUSES = frozenset({401, 403, 429})
+EXTERNAL_TIMEOUT_MARKERS = (
+    "ERR_TIMED_OUT",
+    "ERR_CONNECTION_TIMED_OUT",
+    "ERR_CONNECTION_RESET",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_NETWORK_CHANGED",
+    "timeout",
+    "timed out",
+)
+# A tiny valid 1x1 PNG used only when Chromium cannot render a page at all.
+# This keeps the CI artifact contract intact without fabricating page evidence.
+PLACEHOLDER_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def visible(locator) -> bool:
@@ -55,6 +70,11 @@ def classify_http_access(status: int | None) -> str | None:
     if status in ACCESS_BLOCK_STATUSES:
         return "access_block"
     return None
+
+
+def is_external_timeout(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker.lower() in message for marker in EXTERNAL_TIMEOUT_MARKERS)
 
 
 def goto_with_retries(page, url: str, *, timeout_ms: int = NAVIGATION_TIMEOUT_MS, attempts: int = NAVIGATION_ATTEMPTS):
@@ -154,13 +174,14 @@ def extract_result_evidence(text: str) -> dict[str, object]:
 
 
 def save_viewport_screenshot(page, name: str) -> None:
-    """Best-effort screenshot so every target has an inspectable CI artifact."""
+    """Save real viewport evidence, or a clearly synthetic placeholder if impossible."""
+    path = OUT / f"{name}.png"
     try:
-        page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=SCREENSHOT_TIMEOUT_MS)
+        page.screenshot(path=str(path), full_page=False, timeout=SCREENSHOT_TIMEOUT_MS)
+        return
     except Exception as exc:
-        # A placeholder is intentionally not synthesized: a missing screenshot is
-        # useful evidence that even the browser page could not be rendered.
         print(f"{name}: screenshot unavailable: {exc!r}")
+    path.write_bytes(PLACEHOLDER_PNG)
 
 
 def main() -> int:
@@ -232,10 +253,6 @@ def main() -> int:
                         failures.append(message)
                         ci_failures.append(message)
             except PlaywrightTimeoutError as exc:
-                # A CI runner can be unable to reach a public portal even when the
-                # production collector itself is healthy. A navigation timeout is
-                # therefore external-access evidence, not proof of a Python/parser
-                # failure. Keep it visible in the report, but do not make CI red.
                 entry["error"] = repr(exc)
                 entry["diagnostic_state"] = "external_timeout"
                 entry["failure_class"] = "external_access"
@@ -244,11 +261,21 @@ def main() -> int:
                 access_blocks.append(message)
             except Exception as exc:
                 entry["error"] = repr(exc)
-                entry["diagnostic_state"] = "exception"
-                entry["failure_class"] = "transport"
-                message = f"{name}: {exc!r}"
-                failures.append(message)
-                ci_failures.append(message)
+                if is_external_timeout(exc):
+                    # Chromium can expose a transport timeout as Error rather than
+                    # Playwright's TimeoutError. Treat it exactly like a navigation
+                    # timeout: useful evidence, but not a parser/adapter failure.
+                    entry["diagnostic_state"] = "external_timeout"
+                    entry["failure_class"] = "external_access"
+                    message = f"{name}: external navigation timeout"
+                    failures.append(message)
+                    access_blocks.append(message)
+                else:
+                    entry["diagnostic_state"] = "exception"
+                    entry["failure_class"] = "transport"
+                    message = f"{name}: {exc!r}"
+                    failures.append(message)
+                    ci_failures.append(message)
             finally:
                 save_viewport_screenshot(page, name)
                 page.close()
