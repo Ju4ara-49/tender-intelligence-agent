@@ -22,12 +22,17 @@ from src.storage.database import TenderDatabase
 _FIXED_DEADLINE = datetime(2030, 1, 20, 12, 0, tzinfo=timezone.utc)
 
 
-def _tender(price: float = 100.0, title: str = "Подшипник", deadline: datetime = _FIXED_DEADLINE) -> Tender:
+def _tender(
+    price: float = 100.0,
+    title: str = "Подшипник",
+    deadline: datetime = _FIXED_DEADLINE,
+    external_id: str = "123",
+) -> Tender:
     return Tender(
         platform="eis",
-        external_id="123" + str(abs(hash(title + str(price)))),
+        external_id=external_id,
         title=title,
-        url="https://example.test/tender/123",
+        url=f"https://example.test/tender/{external_id}",
         description="Тестовый тендер",
         price=price,
         deadline=deadline,
@@ -75,7 +80,6 @@ def test_crm_board_defaults_to_new_and_persists_status(tmp_path):
     db = TenderDatabase(tmp_path / "crm.sqlite3")
     tender_id = db.save_tender(_tender())
     board = TenderBoard(db)
-
     assert board.get_status(tender_id) == "new"
     assert board.set_status(tender_id, STATUS_REVIEWING) == STATUS_REVIEWING
     assert board.get_status(tender_id) == STATUS_REVIEWING
@@ -85,7 +89,6 @@ def test_crm_board_rejects_invalid_transition_and_supports_force(tmp_path):
     db = TenderDatabase(tmp_path / "crm.sqlite3")
     tender_id = db.save_tender(_tender())
     board = TenderBoard(db)
-
     with pytest.raises(InvalidStatusTransition):
         board.set_status(tender_id, STATUS_WON)
     assert board.set_status(tender_id, STATUS_WON, force=True) == STATUS_WON
@@ -93,25 +96,21 @@ def test_crm_board_rejects_invalid_transition_and_supports_force(tmp_path):
 
 def test_crm_board_full_workflow_and_terminal_states(tmp_path):
     db = TenderDatabase(tmp_path / "crm.sqlite3")
-    tender_id = db.save_tender(_tender())
+    tender_id = db.save_tender(_tender(external_id="workflow-win"))
     board = TenderBoard(db)
-
     for status in (STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS, STATUS_SUBMITTED, STATUS_WAITING, STATUS_WON):
         assert board.set_status(tender_id, status) == status
     assert board.get_status(tender_id) == STATUS_WON
     with pytest.raises(InvalidStatusTransition):
         board.set_status(tender_id, STATUS_REVIEWING)
 
-    tender2 = db.save_tender(_tender(title="Проигрыш"))
-    board.set_status(tender2, STATUS_REVIEWING)
-    board.set_status(tender2, STATUS_PARTICIPATING)
-    board.set_status(tender2, STATUS_DOCS)
-    board.set_status(tender2, STATUS_SUBMITTED)
-    board.set_status(tender2, STATUS_WAITING)
+    tender2 = db.save_tender(_tender(title="Проигрыш", external_id="workflow-loss"))
+    for status in (STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS, STATUS_SUBMITTED, STATUS_WAITING):
+        board.set_status(tender2, status)
     board.set_status(tender2, STATUS_LOST)
     assert board.set_status(tender2, STATUS_REVIEWING) == STATUS_REVIEWING
 
-    tender3 = db.save_tender(_tender(title="Пропуск"))
+    tender3 = db.save_tender(_tender(title="Пропуск", external_id="workflow-skip"))
     assert board.set_status(tender3, STATUS_SKIPPED) == STATUS_SKIPPED
     assert board.set_status(tender3, STATUS_REVIEWING) == STATUS_REVIEWING
 
@@ -120,13 +119,11 @@ def test_crm_board_assignment_and_labels_are_idempotent(tmp_path):
     db = TenderDatabase(tmp_path / "crm.sqlite3")
     tender_id = db.save_tender(_tender())
     board = TenderBoard(db)
-
     board.assign(tender_id, "  Иван  ")
     board.add_label(tender_id, " Юристу ")
     board.add_label(tender_id, "Юристу")
     board.add_label(tender_id, "Участвуем")
     entry = board.entry(tender_id)
-
     assert entry.assignee == "Иван"
     assert entry.labels == ["Участвуем", "Юристу"]
     board.remove_label(tender_id, "Юристу")
@@ -135,26 +132,23 @@ def test_crm_board_assignment_and_labels_are_idempotent(tmp_path):
 
 def test_crm_board_list_by_status_includes_implicit_new_tenders(tmp_path):
     db = TenderDatabase(tmp_path / "crm.sqlite3")
-    first = db.save_tender(_tender(title="Ранний", deadline=_FIXED_DEADLINE))
-    second = db.save_tender(_tender(title="Поздний", deadline=_FIXED_DEADLINE + timedelta(days=1)))
+    first = db.save_tender(_tender(title="Ранний", deadline=_FIXED_DEADLINE, external_id="list-new"))
+    second = db.save_tender(_tender(title="Поздний", deadline=_FIXED_DEADLINE + timedelta(days=1), external_id="list-review"))
     board = TenderBoard(db)
     board.set_status(second, STATUS_REVIEWING)
-
-    new_rows = board.list_by_status("new")
-    assert [row["id"] for row in new_rows] == [first]
+    assert [row["id"] for row in board.list_by_status("new")] == [first]
     assert board.list_by_status(STATUS_REVIEWING)[0]["id"] == second
 
 
 def test_crm_board_upcoming_deadlines_filters_active_window(tmp_path):
     db = TenderDatabase(tmp_path / "crm.sqlite3")
     now = datetime.now(timezone.utc)
-    due = db.save_tender(_tender(title="Скоро", deadline=now + timedelta(days=1)))
-    far = db.save_tender(_tender(title="Позже", deadline=now + timedelta(days=10)))
-    new_tender = db.save_tender(_tender(title="Новый", deadline=now + timedelta(days=1)))
+    due = db.save_tender(_tender(title="Скоро", deadline=now + timedelta(days=1), external_id="due"))
+    far = db.save_tender(_tender(title="Позже", deadline=now + timedelta(days=10), external_id="far"))
+    new_tender = db.save_tender(_tender(title="Новый", deadline=now + timedelta(days=1), external_id="new"))
     board = TenderBoard(db)
     board.set_status(due, STATUS_REVIEWING)
     board.set_status(far, STATUS_REVIEWING)
-
     rows = board.upcoming_deadlines(3)
     assert [row["id"] for row in rows] == [due]
     assert new_tender not in [row["id"] for row in rows]
