@@ -80,9 +80,20 @@ class TelegramNotifier:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise RuntimeError("Telegram API вернул некорректный JSON") from exc
+                if not isinstance(data, dict) or data.get("ok") is not True:
+                    description = data.get("description") if isinstance(data, dict) else None
+                    error_code = data.get("error_code") if isinstance(data, dict) else None
+                    suffix = f" ({error_code})" if error_code is not None else ""
+                    raise RuntimeError(
+                        f"Telegram API завершился ошибкой{suffix}: {description or 'unknown error'}"
+                    )
             logger.info("Telegram: сообщение отправлено в chat_id=%s", target_chat_id)
             return True
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             logger.error("Telegram: ошибка отправки в chat_id=%s: %s", target_chat_id, exc)
             return False
 
