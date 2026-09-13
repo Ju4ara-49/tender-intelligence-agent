@@ -1,5 +1,6 @@
+from src.profiles import SearchProfile
 from src.storage.database import TenderDatabase
-from src.telegram_full_criteria import BTN_EXCLUDE, BTN_REGIONS, FullCriteriaTelegramBot
+from src.telegram_full_criteria import BTN_EXCLUDE, BTN_PROFILES, BTN_REGIONS, FullCriteriaTelegramBot
 from src.telegram_settings import CriteriaStore
 
 
@@ -52,8 +53,28 @@ def test_old_criteria_table_migrates_without_regions_or_exclusions(tmp_path):
     assert store.get_exclude_keywords("legacy-user") == []
 
 
-def test_full_criteria_keyboard_contains_region_and_exclusion_controls():
+def test_full_criteria_keyboard_contains_region_exclusion_and_profile_controls():
     keyboard = FullCriteriaTelegramBot._keyboard()
     texts = {button["text"] for row in keyboard["keyboard"] for button in row}
     assert BTN_REGIONS in texts
     assert BTN_EXCLUDE in texts
+    assert BTN_PROFILES in texts
+
+
+def test_profile_keyboards_are_crud_safe_and_use_bounded_callback_ids():
+    profiles = [SearchProfile(id=7, user_id="u", name="Подшипники", enabled=True)]
+    listing = FullCriteriaTelegramBot._profiles_keyboard(profiles)
+    callbacks = [button["callback_data"] for row in listing["inline_keyboard"] for button in row]
+    assert "profiles:open:7" in callbacks
+    assert "profiles:create" in callbacks
+    assert "profiles:close" in callbacks
+    assert all(len(value) <= 64 for value in callbacks)
+
+    editor = FullCriteriaTelegramBot._profile_edit_keyboard(7)
+    edit_callbacks = [button["callback_data"] for row in editor["inline_keyboard"] for button in row]
+    assert "profiles:edit:7:name" in edit_callbacks
+    assert "profiles:edit:7:keywords" in edit_callbacks
+    assert "profiles:toggle:7" in edit_callbacks
+    assert "profiles:duplicate:7" in edit_callbacks
+    assert "profiles:delete:7" in edit_callbacks
+    assert all(len(value) <= 64 for value in edit_callbacks)
