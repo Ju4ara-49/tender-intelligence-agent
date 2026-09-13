@@ -254,6 +254,15 @@ class SearchProfileStore:
             values[key] = self._json(values[key])
         for key in {"advance_required", "enabled"} & values.keys():
             values[key] = int(bool(values[key]))
+
+        candidate = self.get(user_id, profile_id)
+        if candidate is None:
+            raise KeyError(profile_id)
+        for key, value in values.items():
+            if hasattr(candidate, key):
+                setattr(candidate, key, value)
+        self._validate_values(candidate)
+        values.pop("updated_at", None)
         values["updated_at"] = self._now()
         assignments = ", ".join(f"{key} = ?" for key in values)
         with self.db._connect() as conn:
