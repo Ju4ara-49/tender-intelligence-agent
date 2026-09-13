@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
@@ -196,6 +197,12 @@ class SearchProfileStore:
             ("min_contract_security_percent", profile.min_contract_security_percent, "max_contract_security_percent", profile.max_contract_security_percent),
         )
         for min_name, minimum, max_name, maximum in ranges:
+            for name, value in ((min_name, minimum), (max_name, maximum)):
+                if value is None:
+                    continue
+                number = float(value)
+                if not math.isfinite(number) or number < 0:
+                    raise ValueError(f"{name} должен быть неотрицательным конечным числом")
             if minimum is not None and maximum is not None and float(minimum) > float(maximum):
                 raise ValueError(f"{min_name} не может быть больше {max_name}")
         if not 0 <= float(profile.min_advance_percent) <= 100:
