@@ -327,6 +327,23 @@ class TenderDatabase:
             row = conn.execute("SELECT id FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return int(row["id"]) if row is not None else None
 
+    def _current_notification_event_key_by_id(self, tender_id: int) -> str | None:
+        """Return the current notification fingerprint for an existing tender id."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, title, description, url, price, currency, start_date,
+                       end_date, deadline, published_at, region, customer,
+                       customer_inn, law_type, raw_data
+                FROM tenders
+                WHERE id = ?
+                """,
+                (tender_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._notification_event_key_from_row(row)
+
     def _current_notification_event_key(self, unique_key: str) -> tuple[int, str] | None:
         with self._connect() as conn:
             row = conn.execute(
