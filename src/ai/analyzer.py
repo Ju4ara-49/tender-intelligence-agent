@@ -115,7 +115,7 @@ class TenderAnalyzer:
             lowered = response_text.casefold()
             if "model" in lowered and "not found" in lowered:
                 raise OllamaModelNotFoundError(
-                    f"Ollama не нашёл модель '{self.model}' по адресу {url}. "
+                    f"Ollama не нашёл модель '{self.model}' (HTTP 404) по адресу {url}. "
                     f"Проверьте, что модель установлена: ollama pull {self.model}. "
                     f"Ответ сервера: {response_text[:200] or '<пусто>'}"
                 )
