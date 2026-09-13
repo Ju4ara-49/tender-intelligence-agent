@@ -248,6 +248,11 @@ class TenderDatabase:
                    t.customer_inn, t.law_type, t.raw_data
             FROM notifications n
             JOIN tenders t ON t.id = n.tender_id
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM notification_events e
+                WHERE e.tender_id = n.tender_id
+            )
             """
         ).fetchall()
         for row in rows:
