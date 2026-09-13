@@ -80,7 +80,18 @@ class TelegramBot:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, json=params)
             response.raise_for_status()
-            return response.json()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise RuntimeError(f"Telegram API вернул некорректный JSON для {method}") from exc
+            if not isinstance(data, dict) or data.get("ok") is not True:
+                description = data.get("description") if isinstance(data, dict) else None
+                error_code = data.get("error_code") if isinstance(data, dict) else None
+                suffix = f" ({error_code})" if error_code is not None else ""
+                raise RuntimeError(
+                    f"Telegram API {method} завершился ошибкой{suffix}: {description or 'unknown error'}"
+                )
+            return data
 
     def _send(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict | None:
         try:
@@ -88,14 +99,14 @@ class TelegramBot:
             if reply_markup is not None:
                 params["reply_markup"] = reply_markup
             return self._call("sendMessage", request_timeout=10.0, **params)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             logger.error("Telegram-бот: ошибка отправки chat_id=%s: %s", chat_id, exc)
             return None
 
     def _answer_callback(self, callback_query_id: str) -> None:
         try:
             self._call("answerCallbackQuery", request_timeout=10.0, callback_query_id=callback_query_id)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             logger.error("Telegram-бот: ошибка callback: %s", exc)
 
     @staticmethod
