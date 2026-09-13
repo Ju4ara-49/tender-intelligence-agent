@@ -38,6 +38,11 @@ def get_enabled_collectors(
     ``enabled: true`` в config.yaml. При наличии списка из Telegram он
     дополнительно ограничивает этот набор: пользователь не может включить
     площадку, которую администратор отключил в конфигурации.
+
+    Важное правило: отсутствие секции площадки в конфигурации означает
+    ``disabled``, а не ``enabled``. Это особенно важно для браузерных
+    сборщиков, у которых исторически был более разрешительный ``is_enabled``.
+    Реестр является последней точкой авторизации включения площадки.
     """
     enabled: list[BaseCollector] = []
     selected = None
@@ -50,7 +55,8 @@ def get_enabled_collectors(
 
     for collector_cls in ALL_COLLECTORS:
         instance = collector_cls()
-        if not instance.is_enabled(config):
+        platform_config = config.get("collectors", {}).get(instance.platform)
+        if not isinstance(platform_config, dict) or not bool(platform_config.get("enabled", False)):
             continue
         if selected is not None and instance.platform not in selected:
             continue
