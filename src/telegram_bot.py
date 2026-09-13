@@ -478,6 +478,6 @@ class TelegramBot:
             f"Тендеров в базе: {db.count_tenders()}\n"
             f"Отправлено уведомлений всего: {db.count_notifications()}\n"
             f"AI: {self.settings.ai_model} ({self.settings.ai_provider})\n"
-            f"Telegram: {'настроен' if self.settings.telegram_bot_token else 'dry-run'}"
+            f"Telegram: {'настроен' if self.settings.telegram_bot_token and self.settings.telegram_chat_id else 'dry-run'}"
         )
         self._send(chat_id, text, self._keyboard())
