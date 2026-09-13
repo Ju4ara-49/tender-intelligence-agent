@@ -112,7 +112,13 @@ class TenderBoard:
             raise ValueError(f"Unknown status: {status!r}")
 
     @staticmethod
-    def _require_tender(conn, tender_id: int) -> None:
+    def _validate_tender_id(tender_id: int) -> None:
+        if not isinstance(tender_id, int) or isinstance(tender_id, bool) or tender_id <= 0:
+            raise ValueError(f"Invalid tender_id: {tender_id!r}")
+
+    @classmethod
+    def _require_tender(cls, conn, tender_id: int) -> None:
+        cls._validate_tender_id(tender_id)
         if conn.execute("SELECT 1 FROM tenders WHERE id = ?", (tender_id,)).fetchone() is None:
             raise ValueError(f"Tender not found: {tender_id}")
 
