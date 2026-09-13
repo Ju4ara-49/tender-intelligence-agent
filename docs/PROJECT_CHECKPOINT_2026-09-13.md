@@ -2,7 +2,9 @@
 
 ## Текущий HEAD
 
-`b4b851a387de3988086c6f2a944d782508943600`
+`58641e983ab0240169e8005e43a1712ab69c9d69`
+
+Контрольная точка зафиксирована после реализации Telegram CRUD UI для сохранённых профилей поиска (`Ключи`).
 
 Последние изменения этого цикла:
 
@@ -10,10 +12,12 @@
 2. `1f6db46` — harden CRM Telegram status transitions.
 3. `cf06c18` — tests for Russian CRM status aliases.
 4. `b4b851a` — deterministic CRM status keyboard order.
+5. `f884e52` — полноценный Telegram UI для CRUD профилей поиска: создание, просмотр, редактирование, включение/выключение, дублирование и удаление.
+6. `58641e9` — регрессионные тесты Telegram UI профилей и ограничений callback payload.
 
 ## Результат проверки кода
 
-GitHub Actions `Tender Intelligence Agent CI`, run #567, для `b4b851a` завершён успешно.
+GitHub Actions `Tender Intelligence Agent CI`, run #570, для `58641e9` завершён успешно.
 
 Успешно завершены все обязательные этапы:
 
@@ -26,11 +30,28 @@ GitHub Actions `Tender Intelligence Agent CI`, run #567, для `b4b851a` зав
 - analytics;
 - SQLite + Excel integration;
 - проверка Excel artifact;
+- загрузка test SQLite artifact;
 - финальный CI quality gate.
+
+Отдельно добавлены regression tests для Telegram `Ключи`: keyboard, CRUD callback routing и ограничение длины Telegram callback payload.
+
+## Telegram «Ключи»
+
+Полноценный CRUD UI теперь доступен в production-классе `FullCriteriaTelegramBot`:
+
+- `Ключи` открывает список профилей пользователя;
+- создание нового профиля копирует текущие критерии пользователя;
+- просмотр профиля показывает фактические настройки и статистику запусков;
+- редактирование поддерживает название, ключевые слова, исключения, площадки, регионы, цены, аванс, постоплату, обеспечение заявки/контракта, срок и AI-балл;
+- включение/выключение управляет тем, какие профили участвуют в `run_cycle_for_user`;
+- дублирование и удаление доступны из карточки профиля;
+- значения пользователя HTML-экранируются;
+- доступ к профилям всегда ограничен текущим `chat_id` через `SearchProfileStore`;
+- callback payloads проверяются regression-тестами.
 
 ## CRM
 
-CRM-доска теперь имеет полноценный Telegram adapter:
+CRM-доска имеет полноценный Telegram adapter:
 
 - кнопка `CRM тендера` в полном Telegram UI;
 - `/tender ID` и `/crm ID`;
@@ -57,7 +78,7 @@ CRM-доска теперь имеет полноценный Telegram adapter:
 
 `UniPro` отсутствует.
 
-Browser diagnostics run #314 завершён успешно. B2B-Center, Фабрикант (223/44) и Росатом дали положительное внешнее browser-доказательство. ЕИС, РТС-тендер и ТМК из GitHub-hosted runner получили `external_timeout`; это классифицировано как внешняя доступность окружения, не как Python/CI failure. `ci_failures` = 0.
+Browser diagnostics для текущего кода выполняется отдельным workflow run #315. Предыдущий run #314 дал положительное внешнее browser-доказательство для B2B-Center, Фабриканта (223/44) и Росатома; ЕИС, РТС-тендер и ТМК получили `external_timeout`, классифицированный как внешнее ограничение GitHub-hosted окружения, при `ci_failures = 0`.
 
 ## Алгоритм продолжения работы
 
@@ -69,4 +90,6 @@ Browser diagnostics run #314 завершён успешно. B2B-Center, Фаб
 
 `collectors → detail contract → filters/criteria → dedup/storage/notification delivery → AI → Telegram → CRM → Excel → scheduler → Windows/runtime → CI/Actions`.
 
-Не объявлять новый слой готовым при наличии реального внутреннего тестового падения. Внешние timeout/WAF/ограничения GitHub-hosted runner фиксировать отдельно и проверять альтернативным доступным способом, не маскируя их под успешный сбор данных.
+Правило остановки: **не останавливаться на формулировке «работа не завершена»**. Если прямой путь проверки заблокирован внешней системой, переходить к альтернативному воспроизводимому тесту, fixture/contract test, browser-проверке доступной части или другому способу доказательства. Реальный внутренний тестовый failure обязан быть устранён и перепроверен до следующего слоя.
+
+Внешние timeout/WAF/ограничения GitHub-hosted runner фиксировать отдельно и не маскировать их под успешный сбор данных.
