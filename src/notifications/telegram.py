@@ -27,10 +27,17 @@ class TelegramNotifier:
         "rosatom": "Росатом",
     }
 
-    def __init__(self, bot_token: str = "", chat_id: str = "", dry_run_when_no_token: bool = True) -> None:
+    def __init__(
+        self,
+        bot_token: str = "",
+        chat_id: str = "",
+        dry_run_when_no_token: bool = True,
+        enabled: bool = True,
+    ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.dry_run_when_no_token = dry_run_when_no_token
+        self.enabled = bool(enabled)
 
     @property
     def is_configured(self) -> bool:
@@ -48,6 +55,9 @@ class TelegramNotifier:
         global ``TELEGRAM_CHAT_ID``.  ``chat_id`` is therefore an explicit override
         used by the multi-user bot, while CLI/scheduled runs keep the legacy default.
         """
+        if not self.enabled:
+            logger.info("Telegram: уведомления отключены настройкой notifications.telegram.enabled=false")
+            return False
         message = self.format_message(tender, analysis)
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         if not self.bot_token or not target_chat_id:
@@ -61,6 +71,9 @@ class TelegramNotifier:
         return self._send(message, chat_id=target_chat_id)
 
     def send_text(self, text: str, chat_id: str | None = None) -> bool:
+        if not self.enabled:
+            logger.info("Telegram: уведомления отключены настройкой notifications.telegram.enabled=false")
+            return False
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         if not self.bot_token or not target_chat_id:
             logger.info("Telegram [DRY-RUN]: %s", text)
