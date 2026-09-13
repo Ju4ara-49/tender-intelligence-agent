@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from src.models.tender import Tender
+from src.models.tender import Tender, TenderAnalysis
+from src.notifications.telegram import TelegramNotifier
 from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 
@@ -83,3 +84,24 @@ def test_legacy_notifications_migrate_with_the_same_fingerprint_as_delivery_stat
     assert db.was_notified(tender.unique_key) is True
     assert state.was_notified(tender) is True
     assert db.count_notifications() == 1
+
+def test_disabled_telegram_notifier_does_not_attempt_delivery(monkeypatch):
+    import httpx
+
+    notifier = TelegramNotifier(bot_token="token", chat_id="chat", enabled=False)
+    called = {"post": False}
+
+    def fail_post(*args, **kwargs):
+        called["post"] = True
+        raise AssertionError("HTTP must not be called when Telegram is disabled")
+
+    monkeypatch.setattr(httpx, "Client", fail_post)
+    tender = Tender(
+        platform="test",
+        external_id="disabled-1",
+        title="Tender",
+        url="https://example.test/disabled-1",
+    )
+    analysis = TenderAnalysis(relevance_score=90, summary="ok", recommendation="participate")
+    assert notifier.send_tender_alert(tender, analysis) is False
+    assert called["post"] is False
