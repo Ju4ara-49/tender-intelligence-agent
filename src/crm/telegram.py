@@ -1,0 +1,151 @@
+"""Telegram-команды для CRM-доски тендеров.
+
+Модуль намеренно отделён от polling-кода: он получает объект бота и использует
+только его публичные для транспорта методы ``_send``/``_keyboard``. Это позволяет
+тестировать CRM-команды без сети Telegram.
+"""
+from __future__ import annotations
+
+import html
+import re
+from typing import Any
+
+from src.crm import ALL_STATUSES, TenderBoard
+
+_STATUS_NAMES = {
+    "new": "Новый",
+    "reviewing": "Проверить",
+    "participating": "Участвуем",
+    "docs_preparation": "Документы",
+    "submitted": "Подано",
+    "waiting_result": "Ожидание результата",
+    "won": "Победа",
+    "lost": "Проигрыш",
+    "skipped": "Пропускаем",
+}
+_STATUS_COMMANDS = {name: key for key, name in _STATUS_NAMES.items()}
+_ID_RE = re.compile(r"^[1-9]\d*$")
+
+
+def _board(bot: Any) -> TenderBoard:
+    board = getattr(bot, "crm_board", None)
+    if board is None:
+        board = TenderBoard(bot.orchestrator.db)
+        bot.crm_board = board
+    return board
+
+
+def _parse_id(value: str) -> int | None:
+    return int(value) if _ID_RE.fullmatch(value) else None
+
+
+def _status_keyboard(tender_id: int, current: str) -> dict:
+    rows = []
+    for status in ALL_STATUSES:
+        if status == current:
+            continue
+        rows.append([{"text": _STATUS_NAMES[status], "callback_data": f"crm:status:{tender_id}:{status}"}])
+    return {"inline_keyboard": rows}
+
+
+def _render_entry(bot: Any, tender_id: int) -> str:
+    entry = _board(bot).entry(tender_id)
+    return (
+        f"<b>CRM тендера #{entry.tender_id}</b>\n\n"
+        f"Статус: <b>{html.escape(_STATUS_NAMES.get(entry.status, entry.status))}</b>\n"
+        f"Ответственный: {html.escape(entry.assignee or 'не назначен')}\n"
+        f"Метки: {html.escape(', '.join(entry.labels) if entry.labels else 'нет')}\n"
+        f"Обновлено: {html.escape(entry.updated_at or 'ещё не изменялся')}"
+    )
+
+
+def handle_message(bot: Any, chat_id: str, text: str) -> bool:
+    """Обработать CRM-команду. Возвращает True, если команда распознана."""
+    parts = text.split(maxsplit=2)
+    command = parts[0].lower() if parts else ""
+
+    if command == "/status" and len(parts) == 1:
+        bot._cmd_status(chat_id)
+        return True
+
+    if command in {"/tender", "/crm"}:
+        if len(parts) != 2:
+            bot._send(chat_id, "Использование: <code>/tender ID</code>", bot._keyboard())
+            return True
+        tender_id = _parse_id(parts[1])
+        if tender_id is None:
+            bot._send(chat_id, "ID тендера должен быть положительным целым числом.", bot._keyboard())
+            return True
+        try:
+            board = _board(bot)
+            entry = board.entry(tender_id)
+            bot._send(chat_id, _render_entry(bot, tender_id), _status_keyboard(tender_id, entry.status))
+        except ValueError as exc:
+            bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
+        return True
+
+    if command in {"/crm_status", "/статус_тендера"}:
+        if len(parts) != 3:
+            bot._send(chat_id, "Использование: <code>/crm_status ID STATUS</code>\n\nСтатусы: " + ", ".join(ALL_STATUSES), bot._keyboard())
+            return True
+        tender_id = _parse_id(parts[1])
+        status = parts[2].strip().lower()
+        if tender_id is None or status not in ALL_STATUSES:
+            bot._send(chat_id, "Некорректный ID или статус.", bot._keyboard())
+            return True
+        try:
+            new_status = _board(bot).set_status(tender_id, status)
+            bot._send(chat_id, f"Статус тендера #{tender_id}: <b>{html.escape(_STATUS_NAMES[new_status])}</b>", bot._keyboard())
+        except (ValueError, TypeError) as exc:
+            bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
+        return True
+
+    if command in {"/assign", "/ответственный"}:
+        if len(parts) != 3:
+            bot._send(chat_id, "Использование: <code>/assign ID ФИО</code>", bot._keyboard())
+            return True
+        tender_id = _parse_id(parts[1])
+        if tender_id is None or not parts[2].strip():
+            bot._send(chat_id, "Некорректный ID или ответственный.", bot._keyboard())
+            return True
+        try:
+            _board(bot).assign(tender_id, parts[2].strip())
+            bot._send(chat_id, f"Ответственный для #{tender_id} назначен: <b>{html.escape(parts[2].strip())}</b>", bot._keyboard())
+        except (ValueError, TypeError) as exc:
+            bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
+        return True
+
+    if command in {"/label", "/метка"}:
+        if len(parts) != 3:
+            bot._send(chat_id, "Использование: <code>/label ID метка</code>", bot._keyboard())
+            return True
+        tender_id = _parse_id(parts[1])
+        label = parts[2].strip()
+        if tender_id is None or not label:
+            bot._send(chat_id, "Некорректный ID или метка.", bot._keyboard())
+            return True
+        try:
+            _board(bot).add_label(tender_id, label)
+            bot._send(chat_id, f"Метка добавлена к тендеру #{tender_id}: <b>{html.escape(label)}</b>", bot._keyboard())
+        except (ValueError, TypeError) as exc:
+            bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
+        return True
+
+    return False
+
+
+def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
+    """Обработать inline-кнопки CRM."""
+    parts = data.split(":")
+    if len(parts) != 4 or parts[0] != "crm" or parts[1] != "status":
+        return False
+    tender_id = _parse_id(parts[2])
+    status = parts[3]
+    if tender_id is None or status not in ALL_STATUSES:
+        return False
+    try:
+        new_status = _board(bot).set_status(tender_id, status)
+        bot._send(chat_id, f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.", bot._keyboard())
+    except (ValueError, TypeError) as exc:
+        bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
+    return True
