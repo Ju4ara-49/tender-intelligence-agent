@@ -37,6 +37,22 @@ SEARCH_SELECTORS = (
 )
 SEARCH_LABELS = ("Найти закупку", "Поиск закупок", "Поиск", "Искать", "Найти", "Применить")
 ACCESS_BLOCK_STATUSES = frozenset({401, 403, 429})
+EXTERNAL_NAVIGATION_MARKERS = (
+    "err_connection_reset", "err_connection_refused", "err_connection_closed",
+    "err_name_not_resolved", "err_internet_disconnected", "err_timed_out",
+    "err_address_unreachable", "net::err_", "connection reset", "connection refused",
+    "connection closed", "name or service not known", "temporary failure in name resolution",
+)
+
+def classify_navigation_exception(exc: Exception) -> str:
+    """Classify runner/network failures separately from probe/parser failures."""
+    message = repr(exc).lower()
+    if any(marker in message for marker in EXTERNAL_NAVIGATION_MARKERS):
+        return "external_access"
+    if isinstance(exc, PlaywrightTimeoutError):
+        return "external_access"
+    return "transport"
+
 
 
 def visible(locator) -> bool:
@@ -228,11 +244,18 @@ def probe_target(name: str, url: str) -> tuple[str, dict[str, object], list[str]
                 access_blocks.append(message)
             except Exception as exc:
                 entry["error"] = repr(exc)
-                entry["diagnostic_state"] = "exception"
-                entry["failure_class"] = "transport"
-                message = f"{name}: {exc!r}"
-                failures.append(message)
-                ci_failures.append(message)
+                failure_class = classify_navigation_exception(exc)
+                entry["failure_class"] = failure_class
+                if failure_class == "external_access":
+                    entry["diagnostic_state"] = "external_access"
+                    message = f"{name}: external navigation/network error: {exc!r}"
+                    failures.append(message)
+                    access_blocks.append(message)
+                else:
+                    entry["diagnostic_state"] = "exception"
+                    message = f"{name}: {exc!r}"
+                    failures.append(message)
+                    ci_failures.append(message)
             finally:
                 if page is not None:
                     try:
