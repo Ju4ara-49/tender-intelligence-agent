@@ -47,6 +47,7 @@ class Orchestrator:
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
             dry_run_when_no_token=settings.telegram_dry_run,
+            enabled=settings.telegram_enabled,
         )
         self.email_notifier = EmailNotifier(
             enabled=settings.email_enabled,
