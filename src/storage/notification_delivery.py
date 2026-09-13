@@ -64,7 +64,7 @@ class NotificationDeliveryState:
         return normalized if isinstance(normalized, dict) else {}
 
     @classmethod
-    def event_key(cls, tender: Tender) -> str:
+    def _fingerprint_tender(cls, tender: Tender) -> str:
         normalized = cls._normalized_fields(tender)
         state = {
             "title": tender.title,
@@ -88,6 +88,25 @@ class NotificationDeliveryState:
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def event_key(self, tender: Tender) -> str:
+        """Return the authoritative fingerprint for the persisted tender state."""
+        tender_id = self.db.get_tender_id(tender.unique_key)
+        if tender_id is not None:
+            with self.db._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT id, title, description, url, price, currency, start_date,
+                           end_date, deadline, published_at, region, customer,
+                           customer_inn, law_type, raw_data
+                    FROM tenders
+                    WHERE id = ?
+                    """,
+                    (tender_id,),
+                ).fetchone()
+            if row is not None:
+                return self.db._notification_event_key_from_row(row)
+        return self._fingerprint_tender(tender)
 
     @classmethod
     def _event_key_from_row(cls, row) -> str:
