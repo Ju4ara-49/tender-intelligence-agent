@@ -86,12 +86,14 @@ class AppSettings:
 
     @property
     def scheduler_interval_minutes(self) -> int:
-        return int(
-            self.config.get("scheduler", {}).get(
-                "interval_minutes",
-                60,
-            )
-        )
+        raw = self.config.get("scheduler", {}).get("interval_minutes", 60)
+        try:
+            interval = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("scheduler.interval_minutes must be a positive integer") from None
+        if isinstance(raw, bool) or interval <= 0:
+            raise ValueError("scheduler.interval_minutes must be a positive integer")
+        return interval
 
     @property
     def run_on_start(self) -> bool:
