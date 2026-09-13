@@ -381,6 +381,11 @@ class TenderDatabase:
         }
 
     def save_tender(self, tender: Tender) -> int:
+        # Callers may mutate normalized/commercial Tender fields directly
+        # between runs. Persist the canonical snapshot before calculating
+        # notification fingerprints or writing SQLite, otherwise a changed
+        # payment/security condition can be silently missed.
+        tender._persist_normalized_fields()
         now = datetime.now(timezone.utc).isoformat()
         snapshot = self._tender_snapshot(tender)
         tracked_fields = ("title", "url", "description", "price", "currency", "start_date", "end_date", "deadline", "published_at", "region", "customer", "customer_inn", "law_type", "detail_status", "detail_diagnostics", "raw_data")
