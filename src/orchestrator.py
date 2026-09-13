@@ -439,7 +439,14 @@ class Orchestrator:
         user_id = str(user_id).strip()
         profiles = self.profile_store.list(user_id, enabled_only=True)
         if not profiles:
-            profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
+            # Do not silently execute a disabled profile. A default profile is
+            # synthesized only for a brand-new user with no profiles at all.
+            existing_profiles = self.profile_store.list(user_id, enabled_only=False)
+            if not existing_profiles:
+                profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
+            else:
+                logger.info("Профили пользователя %s существуют, но все отключены; поиск не запускаем.", user_id)
+                return []
         results: list[dict[str, int]] = []
         for profile in profiles:
             if self.stop_requested:
