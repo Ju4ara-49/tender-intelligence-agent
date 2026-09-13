@@ -236,7 +236,9 @@ def probe_target(name: str, url: str) -> tuple[str, dict[str, object], list[str]
                 if page is not None:
                     try:
                         page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=10000)
+                        entry["screenshot_created"] = True
                     except Exception as exc:
+                        entry["screenshot_created"] = False
                         entry["screenshot_error"] = repr(exc)
                 if context is not None:
                     context.close()
@@ -265,9 +267,10 @@ def main() -> int:
     ci_failures: list[str] = []
     access_blocks: list[str] = []
 
-    # Use OS processes rather than threads: sync Playwright has its own event-loop
-    # machinery and a stuck public portal must be killable independently. Each target
-    # gets a hard wall-clock budget, so the seven-platform probe cannot deadlock CI.
+    # Start all probes together and enforce one global wall-clock budget. The
+    # previous sequential join could spend 150s per dead portal and make CI
+    # unnecessarily long. Results are collected by process identity rather than
+    # Queue.empty(), which is racy for multiprocessing queues.
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
     processes = {
@@ -277,26 +280,41 @@ def main() -> int:
     for process in processes.values():
         process.start()
 
-    for name, process in processes.items():
-        process.join(TARGET_TIMEOUT_SECONDS)
-        if process.is_alive():
-            process.terminate()
-            process.join(10)
-            report[name] = {
-                "url": TARGETS[name],
-                "query": QUERY,
-                "diagnostic_state": "external_timeout",
-                "failure_class": "external_access",
-                "error": f"target exceeded hard timeout of {TARGET_TIMEOUT_SECONDS}s",
-            }
-            message = f"{name}: external navigation timeout"
-            failures.append(message)
-            access_blocks.append(message)
+    deadline = time.monotonic() + TARGET_TIMEOUT_SECONDS
+    while processes and time.monotonic() < deadline:
+        finished = [name for name, process in processes.items() if not process.is_alive()]
+        for name in finished:
+            processes[name].join(timeout=1)
+            del processes[name]
+        if processes:
+            time.sleep(0.2)
 
-    while not queue.empty():
-        name, entry, target_failures, target_ci_failures, target_access_blocks = queue.get()
-        if name not in report:
-            report[name] = entry
+    for name, process in list(processes.items()):
+        process.terminate()
+        process.join(10)
+        report[name] = {
+            "url": TARGETS[name],
+            "query": QUERY,
+            "diagnostic_state": "external_timeout",
+            "failure_class": "external_access",
+            "error": f"target exceeded hard timeout of {TARGET_TIMEOUT_SECONDS}s",
+            "screenshot_created": False,
+        }
+        message = f"{name}: external navigation timeout"
+        failures.append(message)
+        access_blocks.append(message)
+
+    expected = set(TARGETS)
+    received: set[str] = set()
+    while received != expected:
+        try:
+            name, entry, target_failures, target_ci_failures, target_access_blocks = queue.get(timeout=1)
+        except Exception:
+            break
+        if name in received:
+            continue
+        received.add(name)
+        report[name] = entry
         failures.extend(target_failures)
         ci_failures.extend(target_ci_failures)
         access_blocks.extend(target_access_blocks)
@@ -307,6 +325,7 @@ def main() -> int:
             "query": QUERY,
             "diagnostic_state": "missing",
             "failure_class": "transport",
+            "screenshot_created": False,
         })
         if report[name].get("diagnostic_state") == "missing":
             message = f"{name}: probe produced no result"
