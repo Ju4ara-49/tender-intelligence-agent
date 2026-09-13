@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from src.crm import ALL_STATUSES, TenderBoard
+from src.storage import ALLOWED_TRANSITIONS
 
 _STATUS_NAMES = {
     "new": "Новый",
@@ -23,7 +24,7 @@ _STATUS_NAMES = {
     "lost": "Проигрыш",
     "skipped": "Пропускаем",
 }
-_STATUS_COMMANDS = {name: key for key, name in _STATUS_NAMES.items()}
+_STATUS_COMMANDS = {name.casefold(): key for key, name in _STATUS_NAMES.items()}
 _ID_RE = re.compile(r"^[1-9]\d*$")
 
 
@@ -39,11 +40,17 @@ def _parse_id(value: str) -> int | None:
     return int(value) if _ID_RE.fullmatch(value) else None
 
 
+def _parse_status(value: str) -> str | None:
+    normalized = value.strip().casefold()
+    if normalized in ALL_STATUSES:
+        return normalized
+    return _STATUS_COMMANDS.get(normalized)
+
+
 def _status_keyboard(tender_id: int, current: str) -> dict:
+    """Show only transitions that the CRM state machine actually permits."""
     rows = []
-    for status in ALL_STATUSES:
-        if status == current:
-            continue
+    for status in ALLOWED_TRANSITIONS.get(current, frozenset()):
         rows.append([{"text": _STATUS_NAMES[status], "callback_data": f"crm:status:{tender_id}:{status}"}])
     return {"inline_keyboard": rows}
 
@@ -86,11 +93,16 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
 
     if command in {"/crm_status", "/статус_тендера"}:
         if len(parts) != 3:
-            bot._send(chat_id, "Использование: <code>/crm_status ID STATUS</code>\n\nСтатусы: " + ", ".join(ALL_STATUSES), bot._keyboard())
+            bot._send(
+                chat_id,
+                "Использование: <code>/crm_status ID STATUS</code>\n\nСтатусы: "
+                + ", ".join(_STATUS_NAMES.values()),
+                bot._keyboard(),
+            )
             return True
         tender_id = _parse_id(parts[1])
-        status = parts[2].strip().lower()
-        if tender_id is None or status not in ALL_STATUSES:
+        status = _parse_status(parts[2])
+        if tender_id is None or status is None:
             bot._send(chat_id, "Некорректный ID или статус.", bot._keyboard())
             return True
         try:
@@ -105,12 +117,13 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
             bot._send(chat_id, "Использование: <code>/assign ID ФИО</code>", bot._keyboard())
             return True
         tender_id = _parse_id(parts[1])
-        if tender_id is None or not parts[2].strip():
+        assignee = parts[2].strip()
+        if tender_id is None or not assignee:
             bot._send(chat_id, "Некорректный ID или ответственный.", bot._keyboard())
             return True
         try:
-            _board(bot).assign(tender_id, parts[2].strip())
-            bot._send(chat_id, f"Ответственный для #{tender_id} назначен: <b>{html.escape(parts[2].strip())}</b>", bot._keyboard())
+            _board(bot).assign(tender_id, assignee)
+            bot._send(chat_id, f"Ответственный для #{tender_id} назначен: <b>{html.escape(assignee)}</b>", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
         return True
@@ -140,8 +153,8 @@ def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
     if len(parts) != 4 or parts[0] != "crm" or parts[1] != "status":
         return False
     tender_id = _parse_id(parts[2])
-    status = parts[3]
-    if tender_id is None or status not in ALL_STATUSES:
+    status = _parse_status(parts[3])
+    if tender_id is None or status is None:
         return False
     try:
         new_status = _board(bot).set_status(tender_id, status)
