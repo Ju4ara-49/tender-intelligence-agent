@@ -58,3 +58,36 @@ def test_profile_stats_are_derived_from_recorded_runs(tmp_path):
     assert stats["filtered"] == 6
     assert stats["new_count"] == 3
     assert stats["notified"] == 2
+
+
+
+def test_profile_search_uses_user_scoped_delivery_and_aggregates_results(monkeypatch, tmp_path):
+    db = TenderDatabase(tmp_path / "profiles.sqlite3")
+    store = SearchProfileStore(db)
+    first = store.create("user-a", name="Первый", keywords=["один"])
+    second = store.create("user-a", name="Второй", keywords=["два"])
+
+    from src.orchestrator import Orchestrator
+    from src.models.tender import Tender
+
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.profile_store = store
+    orchestrator.criteria_store = CriteriaStore(db)
+    orchestrator._stop_requested = False
+    tender_a = Tender(platform="eis", external_id="A", title="A", url="https://example.test/a")
+    tender_b = Tender(platform="eis", external_id="B", title="B", url="https://example.test/b")
+    calls = []
+
+    def fake_run_cycle(**kwargs):
+        calls.append(kwargs["notification_recipient_key"])
+        orchestrator.last_run_results = [tender_a] if len(calls) == 1 else [tender_a, tender_b]
+        return {"search_number": len(calls), "found": 2, "filtered": 2, "new": 2, "analyzed": 2, "notified": 1, "skipped_duplicate": 0, "excluded_by_criteria": 0}
+
+    monkeypatch.setattr(orchestrator, "run_cycle", fake_run_cycle)
+    results = orchestrator.run_cycle_for_user("user-a")
+
+    assert results and len(results) == 2
+    assert calls == ["user:user-a", "user:user-a"]
+    assert [t.unique_key for t in orchestrator.last_run_results] == ["eis:A", "eis:B"]
+    assert store.stats("user-a", first.id)["runs"] == 1
+    assert store.stats("user-a", second.id)["runs"] == 1
