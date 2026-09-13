@@ -420,6 +420,8 @@ class Orchestrator:
         if not profiles:
             profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
         results: list[dict[str, int]] = []
+        aggregated_results: list[Tender] = []
+        seen_keys: set[str] = set()
         for profile in profiles:
             if self.stop_requested:
                 break
@@ -431,9 +433,14 @@ class Orchestrator:
                 platforms=profile.platforms or None,
                 exclude_keywords=profile.exclusions,
                 regions=profile.regions,
-                notification_recipient_key=f"profile:{profile.id}",
+                notification_recipient_key=f"user:{user_id}",
                 notification_chat_id=user_id,
             )
-            self.profile_store.record_run(user_id, profile.id, stats, started_at=started_at)
+            self.profile_store.record_run(user_id, int(profile.id or 0), stats, started_at=started_at)
+            for tender in self.last_run_results:
+                if tender.unique_key not in seen_keys:
+                    seen_keys.add(tender.unique_key)
+                    aggregated_results.append(tender)
             results.append(stats)
+        self.last_run_results = aggregated_results
         return results
