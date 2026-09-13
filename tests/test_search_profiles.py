@@ -91,3 +91,23 @@ def test_profile_search_uses_user_scoped_delivery_and_aggregates_results(monkeyp
     assert [t.unique_key for t in orchestrator.last_run_results] == ["eis:A", "eis:B"]
     assert store.stats("user-a", first.id)["runs"] == 1
     assert store.stats("user-a", second.id)["runs"] == 1
+
+
+
+def test_profile_store_rejects_impossible_ranges(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles.db")
+    store = SearchProfileStore(db)
+    try:
+        store.create("u", name="bad", min_price=100, max_price=50)
+        assert False, "expected invalid price range to be rejected"
+    except ValueError as exc:
+        assert "min_price" in str(exc)
+
+    profile = store.create("u", name="good", min_price=100, max_price=200)
+    try:
+        store.update("u", profile.id, max_price=50)
+        assert False, "expected update to reject invalid range"
+    except ValueError as exc:
+        assert "min_price" in str(exc)
+
+    assert store.get("u", profile.id).max_price == 200
