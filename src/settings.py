@@ -106,6 +106,13 @@ class AppSettings:
         )
 
     @property
+    def telegram_enabled(self) -> bool:
+        return _as_bool(
+            self.config.get("notifications", {}).get("telegram", {}).get("enabled", True),
+            default=True,
+        )
+
+    @property
     def telegram_dry_run(self) -> bool:
         return _as_bool(
             self.config.get("notifications", {})
