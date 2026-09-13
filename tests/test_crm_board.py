@@ -71,6 +71,41 @@ def test_assignment_and_labels_are_idempotent():
     assert board.labels(1) == ["Участвуем"]
 
 
+def test_labels_are_case_insensitive_but_keep_first_display_spelling():
+    board = TenderBoard(_db_with_tender())
+    board.add_label(1, " Участвуем ")
+    board.add_label(1, "участвуем")
+    assert board.labels(1) == ["Участвуем"]
+    board.remove_label(1, " УЧАСТВУЕМ ")
+    assert board.labels(1) == []
+
+
+def test_crm_history_records_status_assignee_and_label_changes():
+    board = TenderBoard(_db_with_tender())
+    board.set_status(1, STATUS_REVIEWING)
+    board.assign(1, "Иван")
+    board.add_label(1, "Юристу")
+    board.remove_label(1, "юристу")
+    board.unassign(1)
+
+    events = board.history(1)
+    assert [event["event_type"] for event in events] == [
+        "status_changed",
+        "assignee_changed",
+        "label_added",
+        "label_removed",
+        "assignee_changed",
+    ]
+    assert events[0]["old_value"] == "new"
+    assert events[0]["new_value"] == "reviewing"
+    assert events[1]["old_value"] == ""
+    assert events[1]["new_value"] == "Иван"
+    assert events[2]["new_value"] == "Юристу"
+    assert events[3]["old_value"] == "Юристу"
+    assert events[4]["old_value"] == "Иван"
+    assert events[4]["new_value"] == ""
+
+
 def test_invalid_tender_is_rejected_before_writing():
     board = TenderBoard(_db_with_tender())
     with pytest.raises(ValueError, match="Tender not found"):
