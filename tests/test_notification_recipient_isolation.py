@@ -61,3 +61,26 @@ def test_telegram_notifier_uses_explicit_chat_override() -> None:
     calls.clear()
     assert notifier.send_tender_alert(tender, analysis) is True
     assert calls[0][1] == "global-chat"
+
+
+def test_recipient_event_is_not_migrated_back_to_default_after_database_reopen(tmp_path) -> None:
+    db_path = tmp_path / "recipient-migration.db"
+    db = TenderDatabase(db_path)
+    tender = Tender(
+        platform="test",
+        external_id="recipient-migration-1",
+        title="Tender",
+        url="https://example.test/recipient-migration-1",
+        price=100,
+        deadline=datetime(2030, 1, 1),
+    )
+    db.save_tender(tender)
+    state = NotificationDeliveryState(db)
+    state.mark_notified(tender, recipient_key="chat-a")
+
+    # Re-opening runs the schema/legacy migration. A modern recipient-aware
+    # event must not be copied into the legacy default recipient.
+    reopened = TenderDatabase(db_path)
+    reopened_state = NotificationDeliveryState(reopened)
+    assert reopened_state.was_notified(tender, recipient_key="chat-a") is True
+    assert reopened_state.was_notified(tender, recipient_key=NotificationDeliveryState.DEFAULT_RECIPIENT_KEY) is False
