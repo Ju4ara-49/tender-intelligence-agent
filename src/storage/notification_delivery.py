@@ -55,48 +55,22 @@ class NotificationDeliveryState:
 
     @classmethod
     def _event_key_from_row(cls, row) -> str:
-        raw = {}
-        try:
-            raw = json.loads(row["raw_data"] or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            raw = {}
-        normalized = raw.get("_normalized") if isinstance(raw, dict) else {}
-        normalized = normalized if isinstance(normalized, dict) else {}
-        state = {
-            "title": row["title"],
-            "description": row["description"],
-            "url": row["url"],
-            "price": row["price"],
-            "currency": row["currency"],
-            "start_date": row["start_date"],
-            "end_date": row["end_date"],
-            "deadline": row["deadline"],
-            "published_at": row["published_at"],
-            "region": row["region"],
-            "customer": row["customer"],
-            "customer_inn": row["customer_inn"] or normalized.get("customer_inn", ""),
-            "law_type": row["law_type"],
-            "advance_required": normalized.get("advance_required", False),
-            "advance_percent": normalized.get("advance_percent"),
-            "postpayment_days": normalized.get("postpayment_days"),
-            "application_security_percent": normalized.get("application_security_percent"),
-            "contract_security_percent": normalized.get("contract_security_percent"),
-        }
-        encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        """Return the persisted legacy fingerprint without recalculating it.
+
+        The tender row can already represent a newer state than the legacy event.
+        Recomputing the fingerprint from the current tender would collapse history
+        and make a previously delivered state look like the current state.
+        """
+        return str(row["event_key"])
 
     def _repair_legacy_default_events(self) -> None:
-        """Migrate only legacy-recipient events without deleting canonical history."""
+        """Migrate legacy-recipient events without deleting canonical history."""
         with self.db._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT n.id AS notification_id, n.tender_id, n.event_key,
-                       n.channel, n.sent_at, n.payload,
-                       t.title, t.description, t.url, t.price, t.currency,
-                       t.start_date, t.end_date, t.deadline, t.published_at,
-                       t.region, t.customer, t.customer_inn, t.law_type, t.raw_data
+                       n.channel, n.sent_at, n.payload
                 FROM notification_events n
-                JOIN tenders t ON t.id = n.tender_id
                 WHERE n.recipient_key = ?
                 ORDER BY n.id ASC
                 """,
