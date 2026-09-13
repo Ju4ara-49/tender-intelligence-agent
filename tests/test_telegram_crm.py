@@ -37,7 +37,15 @@ def _db_with_tender() -> TenderDatabase:
                 first_seen_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            ("eis", "T-1", "eis:T-1", "Тестовый тендер", "https://example.test/tender/1", "2026-09-13T00:00:00+00:00", "2026-09-13T00:00:00+00:00"),
+            (
+                "eis",
+                "T-1",
+                "eis:T-1",
+                "Тестовый тендер",
+                "https://example.test/tender/1",
+                "2026-09-13T00:00:00+00:00",
+                "2026-09-13T00:00:00+00:00",
+            ),
         )
     return db
 
@@ -49,11 +57,29 @@ def test_tender_card_command_and_status_button():
     assert handle_message(bot, "42", "/tender 1") is True
     assert "CRM тендера #1" in bot.sent[-1][1]
     keyboard = bot.sent[-1][2]
-    assert any(button["callback_data"] == "crm:status:1:reviewing" for row in keyboard["inline_keyboard"] for button in row)
+    assert any(
+        button["callback_data"] == "crm:status:1:reviewing"
+        for row in keyboard["inline_keyboard"]
+        for button in row
+    )
+    assert not any(
+        button["callback_data"] == "crm:status:1:won"
+        for row in keyboard["inline_keyboard"]
+        for button in row
+    )
 
     assert handle_callback(bot, "42", "crm:status:1:reviewing") is True
     assert "Проверить" in bot.sent[-1][1]
     assert bot.crm_board.get_status(1) == "reviewing"
+
+
+def test_crm_status_accepts_russian_label():
+    db = _db_with_tender()
+    bot = _Bot(db)
+
+    assert handle_message(bot, "42", "/crm_status 1 Проверить") is True
+    assert bot.crm_board.get_status(1) == "reviewing"
+    assert "Проверить" in bot.sent[-1][1]
 
 
 def test_crm_assignment_and_label_commands_are_persisted():
