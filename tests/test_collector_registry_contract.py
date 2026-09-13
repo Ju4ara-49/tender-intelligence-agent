@@ -22,3 +22,9 @@ def test_explicit_selection_cannot_bypass_disabled_platform():
     config = {"collectors": {"fabrikant": {"enabled": False}}}
     selected = get_enabled_collectors(config, enabled_platforms=["fabrikant"])
     assert selected == []
+
+
+def test_missing_platform_config_does_not_enable_collector():
+    config = {"collectors": {"fabrikant": {"enabled": True}}}
+    selected = get_enabled_collectors(config)
+    assert [collector.platform for collector in selected] == ["fabrikant"]
