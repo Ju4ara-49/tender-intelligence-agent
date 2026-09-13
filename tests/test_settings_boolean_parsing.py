@@ -35,3 +35,8 @@ def test_unknown_boolean_values_use_safe_defaults():
     assert settings.run_on_start is True
     assert settings.telegram_dry_run is True
     assert settings.ai_use_stub is False
+
+def test_telegram_enabled_flag_is_parsed_safely():
+    assert _settings(notifications={"telegram": {"enabled": "false"}}).telegram_enabled is False
+    assert _settings(notifications={"telegram": {"enabled": "yes"}}).telegram_enabled is True
+    assert _settings(notifications={"telegram": {"enabled": "maybe"}}).telegram_enabled is True
