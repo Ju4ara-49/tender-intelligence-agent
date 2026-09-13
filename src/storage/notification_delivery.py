@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -136,6 +137,18 @@ class NotificationDeliveryState:
             for row in rows:
                 key = str(row["event_key"])
                 tender_id = int(row["tender_id"])
+
+                # Old databases used two kinds of event keys:
+                # fingerprint hashes (which may represent a historical state)
+                # and opaque one-shot markers. Preserve real fingerprints so
+                # change history remains intact; convert an opaque legacy marker
+                # to the tender's current fingerprint so the already-delivered
+                # current state is not sent again after migration.
+                if not re.fullmatch(r"[0-9a-f]{64}", key, re.I):
+                    current = self.db._current_notification_event_key_by_id(tender_id)
+                    if current is not None:
+                        key = current
+
                 conn.execute(
                     """
                     INSERT INTO notification_events
