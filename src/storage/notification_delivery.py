@@ -242,7 +242,7 @@ class NotificationDeliveryState:
 
     def claim_delivery(self, tender: Tender, recipient_key: str = DEFAULT_RECIPIENT_KEY) -> bool:
         """Atomically reserve an unsent event for one recipient."""
-        event_key = self.event_key(tender)
+        event_key = self._persisted_event_key(tender)
         with self.db._connect() as conn:
             tender_id_row = conn.execute(
                 "SELECT id FROM tenders WHERE unique_key = ?",
@@ -281,7 +281,7 @@ class NotificationDeliveryState:
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             return
-        event_key = self.event_key(tender)
+        event_key = self._persisted_event_key(tender)
         claim_key = (tender_id, event_key, self.CHANNEL, recipient_key)
         self._owned_claims.discard(claim_key)
         with self.db._connect() as conn:
@@ -304,7 +304,7 @@ class NotificationDeliveryState:
         tender_id = self.db.get_tender_id(tender.unique_key)
         if tender_id is None:
             raise ValueError(f"Tender not found: {tender.unique_key}")
-        event_key = self.event_key(tender)
+        event_key = self._persisted_event_key(tender)
         claim_key = (tender_id, event_key, self.CHANNEL, recipient_key)
         self._owned_claims.discard(claim_key)
         self.db.mark_notified(
