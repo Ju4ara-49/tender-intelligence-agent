@@ -48,10 +48,13 @@ def _parse_status(value: str) -> str | None:
 
 
 def _status_keyboard(tender_id: int, current: str) -> dict:
-    """Show only transitions that the CRM state machine actually permits."""
-    rows = []
-    for status in ALLOWED_TRANSITIONS.get(current, frozenset()):
-        rows.append([{"text": _STATUS_NAMES[status], "callback_data": f"crm:status:{tender_id}:{status}"}])
+    """Show only valid transitions, in the stable CRM status order."""
+    allowed = ALLOWED_TRANSITIONS.get(current, frozenset())
+    rows = [
+        [{"text": _STATUS_NAMES[status], "callback_data": f"crm:status:{tender_id}:{status}"}]
+        for status in ALL_STATUSES
+        if status in allowed
+    ]
     return {"inline_keyboard": rows}
 
 
