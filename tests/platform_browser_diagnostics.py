@@ -20,9 +20,17 @@ TARGETS = {
 QUERY = "подшипники"
 OUT = Path("output/platform_browser_diagnostics")
 OUT.mkdir(parents=True, exist_ok=True)
-NAVIGATION_TIMEOUT_MS = 30000
-NAVIGATION_ATTEMPTS = 3
-RETRY_DELAYS_SECONDS = (2, 5)
+# Keep the whole seven-platform probe comfortably below the workflow timeout.
+# Public portals can be slow or unreachable from GitHub-hosted runners, so two
+# bounded navigation attempts are enough to distinguish transient transport
+# trouble from a consistently unavailable endpoint without burning the entire CI job.
+NAVIGATION_TIMEOUT_MS = 15000
+NAVIGATION_ATTEMPTS = 2
+RETRY_DELAYS_SECONDS = (2,)
+INITIAL_WAIT_MS = 2500
+NETWORK_IDLE_TIMEOUT_MS = 2500
+SEARCH_SETTLE_MS = 2500
+SCREENSHOT_TIMEOUT_MS = 5000
 
 SEARCH_SELECTORS = (
     "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
@@ -73,8 +81,8 @@ def perform_search(page, query: str) -> dict[str, object]:
             try:
                 button = frame.get_by_role("button", name=label, exact=False).first
                 if visible(button):
-                    button.click(timeout=2000)
-                    page.wait_for_timeout(700)
+                    button.click(timeout=1200)
+                    page.wait_for_timeout(250)
                     break
             except Exception:
                 continue
@@ -84,18 +92,18 @@ def perform_search(page, query: str) -> dict[str, object]:
                 locator = frame.locator(selector).first
                 if not visible(locator):
                     continue
-                locator.fill(query)
+                locator.fill(query, timeout=1200)
                 if locator.input_value() != query:
                     continue
                 try:
-                    locator.press("Enter")
+                    locator.press("Enter", timeout=1200)
                 except Exception:
                     pass
                 for label in SEARCH_LABELS:
                     try:
                         button = frame.get_by_role("button", name=label, exact=False).first
                         if visible(button):
-                            button.click(timeout=2000)
+                            button.click(timeout=1200)
                             break
                     except Exception:
                         continue
@@ -106,8 +114,8 @@ def perform_search(page, query: str) -> dict[str, object]:
         try:
             textbox = frame.get_by_role("textbox").first
             if visible(textbox):
-                textbox.fill(query)
-                textbox.press("Enter")
+                textbox.fill(query, timeout=1200)
+                textbox.press("Enter", timeout=1200)
                 evidence.update({"control_found": True, "selector": "role=textbox", "frame_url": frame.url})
                 return evidence
         except Exception:
@@ -117,11 +125,11 @@ def perform_search(page, query: str) -> dict[str, object]:
 
 def wait_for_initial_dom(page) -> None:
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        page.wait_for_load_state("domcontentloaded", timeout=5000)
     except Exception:
         pass
     try:
-        page.locator("body").wait_for(state="attached", timeout=5000)
+        page.locator("body").wait_for(state="attached", timeout=2500)
     except Exception:
         pass
 
@@ -145,6 +153,16 @@ def extract_result_evidence(text: str) -> dict[str, object]:
     return {"result_count": None, "result_count_evidence": None}
 
 
+def save_viewport_screenshot(page, name: str) -> None:
+    """Best-effort screenshot so every target has an inspectable CI artifact."""
+    try:
+        page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=SCREENSHOT_TIMEOUT_MS)
+    except Exception as exc:
+        # A placeholder is intentionally not synthesized: a missing screenshot is
+        # useful evidence that even the browser page could not be rendered.
+        print(f"{name}: screenshot unavailable: {exc!r}")
+
+
 def main() -> int:
     report: dict[str, object] = {}
     failures: list[str] = []
@@ -153,7 +171,7 @@ def main() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(locale="ru-RU")
-        context.set_default_timeout(5000)
+        context.set_default_timeout(3000)
         context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
         for name, url in TARGETS.items():
             page = context.new_page()
@@ -162,15 +180,15 @@ def main() -> int:
                 response, navigation_attempt = goto_with_retries(page, url)
                 entry["navigation_attempt"] = navigation_attempt
                 wait_for_initial_dom(page)
-                page.wait_for_timeout(5000)
+                page.wait_for_timeout(INITIAL_WAIT_MS)
                 try:
-                    page.wait_for_load_state("networkidle", timeout=5000)
+                    page.wait_for_load_state("networkidle", timeout=NETWORK_IDLE_TIMEOUT_MS)
                 except Exception:
                     pass
                 entry["status"] = response.status if response else None
                 entry["final_url"] = page.url
                 entry["title"] = page.title()
-                body_text = page.locator("body").inner_text(timeout=5000)
+                body_text = page.locator("body").inner_text(timeout=3000)
                 lower_body = body_text.lower()
                 entry["waf"] = "web application firewall" in lower_body or "временно заблокирован" in lower_body
                 entry["http_access_class"] = classify_http_access(response.status if response else None)
@@ -186,12 +204,12 @@ def main() -> int:
                     access_blocks.append(message)
                 else:
                     entry["search"] = perform_search(page, QUERY)
-                    page.wait_for_timeout(5000)
+                    page.wait_for_timeout(SEARCH_SETTLE_MS)
                     try:
-                        page.wait_for_load_state("networkidle", timeout=7000)
+                        page.wait_for_load_state("networkidle", timeout=NETWORK_IDLE_TIMEOUT_MS)
                     except Exception:
                         pass
-                    result_text = page.locator("body").inner_text(timeout=5000)
+                    result_text = page.locator("body").inner_text(timeout=3000)
                     entry.update(extract_result_evidence(result_text))
                     links = page.locator("a[href]").evaluate_all("els => els.map(e => ({text:(e.innerText||'').trim().slice(0,300),href:e.href})).filter(x => x.text || x.href).slice(0,200)")
                     entry["after_excerpt"] = result_text[:12000]
@@ -213,11 +231,6 @@ def main() -> int:
                         message = f"{name}: search returned no result evidence"
                         failures.append(message)
                         ci_failures.append(message)
-                # A full-page screenshot can become unbounded on infinite-scroll
-                # portals and was able to stall the entire 7-platform diagnostic.
-                # The report already contains text/DOM evidence, so a viewport
-                # screenshot is sufficient and has a deterministic size.
-                page.screenshot(path=str(OUT / f"{name}.png"), full_page=False, timeout=10000)
             except PlaywrightTimeoutError as exc:
                 # A CI runner can be unable to reach a public portal even when the
                 # production collector itself is healthy. A navigation timeout is
@@ -237,6 +250,7 @@ def main() -> int:
                 failures.append(message)
                 ci_failures.append(message)
             finally:
+                save_viewport_screenshot(page, name)
                 page.close()
             report[name] = entry
         context.close()
