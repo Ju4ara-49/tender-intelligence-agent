@@ -105,3 +105,26 @@ def test_disabled_telegram_notifier_does_not_attempt_delivery(monkeypatch):
     analysis = TenderAnalysis(relevance_score=90, summary="ok", recommendation="participate")
     assert notifier.send_tender_alert(tender, analysis) is False
     assert called["post"] is False
+
+def test_migrated_legacy_notification_allows_changed_tender(tmp_path):
+    db_path = tmp_path / "legacy_changed.db"
+    db = TenderDatabase(db_path)
+    tender = _tender()
+    tender_id = db.save_tender(tender)
+    event_key = NotificationDeliveryState.event_key(tender)
+
+    with db._connect() as conn:
+        conn.execute(
+            "INSERT INTO notifications (tender_id, channel, sent_at, payload) VALUES (?, 'telegram', ?, '{}')",
+            (tender_id, datetime.now(timezone.utc).isoformat()),
+        )
+
+    # Migration happens when the database is reopened.
+    db = TenderDatabase(db_path)
+    state = NotificationDeliveryState(db)
+    assert state.was_notified(tender) is True
+
+    tender.price = 1750.0
+    db.save_tender(tender)
+    assert NotificationDeliveryState.event_key(tender) != event_key
+    assert state.was_notified(tender) is False
