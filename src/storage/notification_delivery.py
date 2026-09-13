@@ -64,6 +64,11 @@ class NotificationDeliveryState:
         return normalized if isinstance(normalized, dict) else {}
 
     @classmethod
+    def event_key(cls, tender: Tender) -> str:
+        """Return the deterministic fingerprint for a Tender object."""
+        return cls._fingerprint_tender(tender)
+
+    @classmethod
     def _fingerprint_tender(cls, tender: Tender) -> str:
         normalized = cls._normalized_fields(tender)
         state = {
@@ -107,6 +112,13 @@ class NotificationDeliveryState:
             if row is not None:
                 return self.db._notification_event_key_from_row(row)
         return self._fingerprint_tender(tender)
+
+    def _persisted_event_key(self, tender: Tender) -> str:
+        """Use the database row as the source of truth for saved state."""
+        current = self.db._current_notification_event_key(tender.unique_key)
+        if current is not None:
+            return current[1]
+        return self.event_key(tender)
 
     @classmethod
     def _event_key_from_row(cls, row) -> str:
@@ -197,7 +209,7 @@ class NotificationDeliveryState:
         bound to a per-worker claim token so an expired claim cannot later be
         released by the old worker after a new worker has acquired the slot.
         """
-        event_key = self.event_key(tender)
+        event_key = self._persisted_event_key(tender)
         with self.db._connect() as conn:
             tender_row = conn.execute(
                 "SELECT id FROM tenders WHERE unique_key = ?",
