@@ -159,6 +159,7 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
     def _profile_edit_keyboard(profile_id: int) -> dict:
         fields = [
             ("name", "Название"), ("keywords", "Ключевые слова"), ("exclusions", "Исключения"),
+            ("advance_required", "Аванс обязателен"),
             ("platforms", "Площадки"), ("regions", "Регионы"), ("min_price", "Цена от"),
             ("max_price", "Цена до"), ("min_advance_percent", "Аванс от"),
             ("max_postpayment_days", "Постоплата до"), ("min_application_security_percent", "Заявка от"),
@@ -170,6 +171,7 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
         for i in range(0, len(fields), 2):
             rows.append([{"text": label, "callback_data": f"profiles:edit:{profile_id}:{field}"} for field, label in fields[i:i + 2]])
         rows += [
+            [{"text": "💰 Аванс обязателен: переключить", "callback_data": f"profiles:advance:{profile_id}"}],
             [{"text": "☑/☐ Включить/выключить", "callback_data": f"profiles:toggle:{profile_id}"}],
             [{"text": "📋 Дублировать", "callback_data": f"profiles:duplicate:{profile_id}"}],
             [{"text": "🗑 Удалить", "callback_data": f"profiles:delete:{profile_id}"}],
@@ -191,7 +193,7 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             f"Площадки: {html.escape(', '.join(self._platform_name(p) for p in profile.platforms) or 'все разрешённые')}",
             f"Регионы: {html.escape(', '.join(profile.regions) or 'все')}",
             f"Цена: {self._fmt(profile.min_price)} — {self._fmt(profile.max_price)}",
-            f"Аванс от: {self._fmt(profile.min_advance_percent)}%",
+            f"Аванс: {("обязателен" if profile.advance_required else "не обязателен")}; от {self._fmt(profile.min_advance_percent)}%",
             f"Постоплата до: {self._fmt(profile.max_postpayment_days)} дн.",
             f"Обеспечение заявки: {self._fmt(profile.min_application_security_percent)}–{self._fmt(profile.max_application_security_percent)}%",
             f"Обеспечение контракта: {self._fmt(profile.min_contract_security_percent)}–{self._fmt(profile.max_contract_security_percent)}%",
@@ -229,6 +231,9 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             return
         if action == "open":
             self._profile_detail(chat_id, profile_id)
+        elif action == "advance":
+            self.orchestrator.profile_store.update(chat_id, profile_id, advance_required=not profile.advance_required)
+            self._profile_detail(chat_id, profile_id)
         elif action == "toggle":
             self.orchestrator.profile_store.set_enabled(chat_id, profile_id, not profile.enabled)
             self._show_profiles(chat_id)
@@ -239,6 +244,10 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             self._ask_value(chat_id, f"profile_duplicate_name:{profile_id}", f"Введите название копии профиля <b>{html.escape(profile.name)}</b>.")
         elif action == "edit" and len(parts) == 4:
             field = parts[3]
+            if field == "advance_required":
+                self.orchestrator.profile_store.update(chat_id, profile_id, advance_required=not profile.advance_required)
+                self._profile_detail(chat_id, profile_id)
+                return
             if field not in _PROFILE_FIELD_LABELS:
                 self._send(chat_id, "Неизвестное поле профиля.", self._profile_edit_keyboard(profile_id))
                 return
@@ -315,6 +324,8 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
         if ":" in raw:
             raw = raw.split(":", 1)[1].strip()
         try:
+            if target == "advance_required":
+                raise ValueError("для этого поля используйте кнопку переключения")
             if target == "name":
                 value = raw
                 if not value:
