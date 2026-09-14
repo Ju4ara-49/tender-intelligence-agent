@@ -57,6 +57,24 @@ class ReliableBrowserSearchMixin:
 
                 search_control_found = self._perform_search(page, query)
                 if not search_control_found:
+                    # Some legacy public portals (currently Rosatom) expose a
+                    # real published-procurement registry but no usable search
+                    # widget. Do not turn that valid listing into a false
+                    # zero-result search: retain the rendered registry and let
+                    # the normal Tender/KeywordFilter pipeline apply the query.
+                    if getattr(self, "ALLOW_PUBLISHED_LISTING_FALLBACK", False):
+                        html = self._collect_rendered_html(page)
+                        logger.warning(
+                            "%s: SEARCH_ADAPTER_UNAVAILABLE — using published-listing fallback for %r",
+                            self.platform, query,
+                        )
+                        browser.close()
+                        results = self._parse_results(html)
+                        logger.info(
+                            "%s: published-listing fallback returned %d procedures",
+                            self.platform, len(results),
+                        )
+                        return results[: self.max_results]
                     logger.warning(
                         "%s: SEARCH_ADAPTER_UNAVAILABLE — поле/кнопка поиска не найдены для %r; не считаем это успешным нулевым поиском",
                         self.platform, query,
@@ -341,3 +359,5 @@ class ReliableTmkCollector(ReliableBrowserSearchMixin, TmkCollector):
 
 class ReliableRosatomCollector(ReliableBrowserSearchMixin, RosatomCollector):
     """Rosatom procurement portal with resilient search widget discovery."""
+
+    ALLOW_PUBLISHED_LISTING_FALLBACK = True
