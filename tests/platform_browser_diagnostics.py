@@ -21,13 +21,12 @@ TARGETS = {
 QUERY = "подшипники"
 OUT = Path("output/platform_browser_diagnostics")
 OUT.mkdir(parents=True, exist_ok=True)
-# Keep the whole seven-platform probe comfortably below the workflow timeout.
-# Public portals can be slow or unreachable from GitHub-hosted runners, so two
-# bounded navigation attempts are enough to distinguish transient transport
-# trouble from a consistently unavailable endpoint without burning the entire CI job.
-NAVIGATION_TIMEOUT_MS = 15000
-NAVIGATION_ATTEMPTS = 2
-RETRY_DELAYS_SECONDS = (2,)
+# Live diagnostics are a hard gate: an external timeout/access block means the
+# platform was not actually verified. Use bounded retries so a transient runner
+# network glitch is retried before the run is declared failed.
+NAVIGATION_TIMEOUT_MS = 20000
+NAVIGATION_ATTEMPTS = 3
+RETRY_DELAYS_SECONDS = (2, 4)
 INITIAL_WAIT_MS = 2500
 NETWORK_IDLE_TIMEOUT_MS = 2500
 SEARCH_SETTLE_MS = 2500
@@ -52,8 +51,6 @@ EXTERNAL_TIMEOUT_MARKERS = (
     "timeout",
     "timed out",
 )
-# A tiny valid 1x1 PNG used only when Chromium cannot render a page at all.
-# This keeps the CI artifact contract intact without fabricating page evidence.
 PLACEHOLDER_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
@@ -184,7 +181,6 @@ def has_published_listing_evidence(platform: str, links: list[dict[str, object]]
     return False
 
 
-
 def platform_url_is_rosatom_published(url: str) -> bool:
     lowered = str(url).lower()
     return "zakupki.rosatom.ru" in lowered and "link=published_procurements" in lowered
@@ -244,6 +240,7 @@ def main() -> int:
                     message = f"{name}: access block (HTTP {entry['status']})" if access_class else f"{name}: WAF or access block"
                     failures.append(message)
                     access_blocks.append(message)
+                    ci_failures.append(message)
                 else:
                     entry["search"] = perform_search(page, QUERY)
                     page.wait_for_timeout(SEARCH_SETTLE_MS)
@@ -286,17 +283,16 @@ def main() -> int:
                 message = f"{name}: external navigation timeout"
                 failures.append(message)
                 access_blocks.append(message)
+                ci_failures.append(message)
             except Exception as exc:
                 entry["error"] = repr(exc)
                 if is_external_timeout(exc):
-                    # Chromium can expose a transport timeout as Error rather than
-                    # Playwright's TimeoutError. Treat it exactly like a navigation
-                    # timeout: useful evidence, but not a parser/adapter failure.
                     entry["diagnostic_state"] = "external_timeout"
                     entry["failure_class"] = "external_access"
                     message = f"{name}: external navigation timeout"
                     failures.append(message)
                     access_blocks.append(message)
+                    ci_failures.append(message)
                 else:
                     entry["diagnostic_state"] = "exception"
                     entry["failure_class"] = "transport"
@@ -322,13 +318,11 @@ def main() -> int:
             continue
         summary_lines.append(f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` status={entry.get('status')} result_count={entry.get('result_count')} links={entry.get('result_link_count', 0)} navigation_attempt={entry.get('navigation_attempt', '-')}")
     if access_blocks:
-        summary_lines.extend(["", "### External access blocks / timeouts (inconclusive, not a Python failure)", *[f"- {item}" for item in access_blocks]])
+        summary_lines.extend(["", "### External access failures (hard gate)", *[f"- {item}" for item in access_blocks]])
     if ci_failures:
         summary_lines.extend(["", "### Diagnostic failures", *[f"- {item}" for item in ci_failures]])
-    elif not access_blocks:
-        summary_lines.extend(["", "All supported public platform endpoints passed the browser search probe."])
     else:
-        summary_lines.extend(["", "No internal diagnostic failure was detected; externally unreachable portals require a network-accessible recheck."])
+        summary_lines.extend(["", "All supported public platform endpoints passed the browser search probe."])
     (OUT / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
     print("\n".join(summary_lines))
     return 1 if ci_failures else 0
