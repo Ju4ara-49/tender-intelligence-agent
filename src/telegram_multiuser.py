@@ -236,7 +236,11 @@ class MultiUserTelegramBot(TelegramBot):
             # профилей сохранял настройки, но обычная кнопка «Поиск» их игнорировала.
             profile_stats = orchestrator.run_cycle_for_user(chat_id)
             stats = self._aggregate_profile_stats(profile_stats)
+            if not self._is_allowed(chat_id):
+                return
             self._send_search_results(chat_id, orchestrator)
+            if not self._is_allowed(chat_id):
+                return
             elapsed = int(time.monotonic() - started_at)
             elapsed_text = f"{elapsed // 60} мин. {elapsed % 60:02d} сек." if elapsed >= 60 else f"{elapsed} сек."
             state = "остановлен" if orchestrator.stop_requested else "завершён"
@@ -259,7 +263,8 @@ class MultiUserTelegramBot(TelegramBot):
             self._send(chat_id, text, self._keyboard())
         except Exception:
             logger.exception("Telegram-бот: ошибка выполнения поиска для chat_id=%s", chat_id)
-            self._send(chat_id, "❌ <b>Ошибка поиска.</b>\n\nПодробности находятся в logs/agent.log.", self._keyboard())
+            if self._is_allowed(chat_id):
+                self._send(chat_id, "❌ <b>Ошибка поиска.</b>\n\nПодробности находятся в logs/agent.log.", self._keyboard())
         finally:
             with self._search_lock:
                 self._search_threads.pop(chat_id, None)
