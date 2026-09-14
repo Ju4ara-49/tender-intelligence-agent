@@ -165,3 +165,18 @@ CI #597 — SUCCESS на commit b9e48c8d1afb51912159b68a98c979a2c56c4fc1.
 Browser diagnostics #343 — SUCCESS на том же commit; ci_failures=[]. Результаты конкретного прогона: Фабрикант 223/44 и Росатом — ok; ЕИС, РТС-Тендер, ТМК — external_timeout; B2B-Center в этом конкретном запуске также дал external_timeout. Это не считается Python failure и показывает сетевую нестабильность GitHub-hosted runner, а не дефект parser/adapter. Предыдущие и последующие browser runs подтверждают, что B2B-Center периодически даёт реальные 23k+ результаты.
 
 Следующая контрольная точка: b9e48c8d1afb51912159b68a98c979a2c56c4fc1.
+
+
+## Validation cycle 14.09.2026 — search concurrency contract
+
+Полный аудит orchestrator выявил несоответствие конфигурации: config.example.yaml документирует search.concurrency, а orchestrator учитывал только platform_workers. Исправлено: добавлен единый resolver _platform_worker_count() с приоритетом platform_workers, совместимым fallback на concurrency, ограничением 1..число включённых collectors и безопасным fallback при нечисловом значении.
+
+Добавлены regression tests на alias, приоритет, верхнюю/нижнюю границы и некорректное значение.
+
+CI #600 — SUCCESS на commit 279fe5ff183fba04a6f3012225345b7029f9d052; все шаги job test завершились success.
+
+Browser diagnostics #346 — SUCCESS на том же commit; ci_failures=[]. Фактический probe: B2B-Center HTTP 200, 23 459 результатов; Фабрикант 223 HTTP 200; Фабрикант 44 HTTP 200, 13 результатов; Росатом HTTP 200, 10 результатов; ЕИС/РТС-Тендер/ТМК — external_timeout. Эти три timeout остаются внешним ограничением GitHub-hosted runner и не маскируются под внутренний Python failure.
+
+Алгоритм продолжения не меняется: после каждого исправления обязательны regression tests, полный CI и browser/live diagnostics; любой внутренний failure исправляется до GREEN. Для внешней недоступности использовать сетевой доступный runner/прокси, а не подделывать успешную диагностику.
+
+Следующая контрольная точка: 279fe5ff183fba04a6f3012225345b7029f9d052.
