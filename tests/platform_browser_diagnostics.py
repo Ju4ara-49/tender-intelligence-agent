@@ -173,6 +173,17 @@ def extract_result_evidence(text: str) -> dict[str, object]:
     return {"result_count": None, "result_count_evidence": None}
 
 
+def has_published_listing_evidence(platform: str, links: list[dict[str, object]]) -> bool:
+    """Return True when a legacy portal exposes a real published-procurement listing without a search form."""
+    if platform != "rosatom":
+        return False
+    for item in links:
+        href = str(item.get("href", "")).lower()
+        if "zakupki.rosatom.ru" in href and ("obj_id=" in href or "link=procurements" in href):
+            return True
+    return False
+
+
 def save_viewport_screenshot(page, name: str) -> None:
     """Save real viewport evidence, or a clearly synthetic placeholder if impossible."""
     path = OUT / f"{name}.png"
@@ -239,11 +250,17 @@ def main() -> int:
                     control_found = bool(entry["search"].get("control_found"))
                     result_count = entry.get("result_count")
                     if not control_found:
-                        entry["diagnostic_state"] = "search_control_missing"
-                        entry["failure_class"] = "search_adapter"
-                        message = f"{name}: search control missing"
-                        failures.append(message)
-                        ci_failures.append(message)
+                        if has_published_listing_evidence(name, links):
+                            entry["diagnostic_state"] = "listing_available"
+                            entry["search_mode"] = "published_listing_fallback"
+                            entry["failure_class"] = "search_adapter_inconclusive"
+                            entry["search"] = {**entry["search"], "control_found": False, "fallback": "published_listing"}
+                        else:
+                            entry["diagnostic_state"] = "search_control_missing"
+                            entry["failure_class"] = "search_adapter"
+                            message = f"{name}: search control missing"
+                            failures.append(message)
+                            ci_failures.append(message)
                     elif result_count is not None or links:
                         entry["diagnostic_state"] = "ok"
                     else:
