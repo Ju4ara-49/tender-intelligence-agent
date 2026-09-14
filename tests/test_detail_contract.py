@@ -140,3 +140,21 @@ def test_eis_detail_region_extraction_falls_back_to_delivery_location():
     </body></html>"""
     value = EisZakupkiCollector._extract_region_from_soup(BeautifulSoup(html, "lxml"))
     assert value.startswith("Московская область")
+
+
+
+def test_eis_commercial_conditions_are_normalized_from_detail_text():
+    from src.collectors.eis_zakupki import EisZakupkiCollector
+
+    text = (
+        "Условия оплаты: аванс 30%. Отсрочка платежа 45 календарных дней. "
+        "Обеспечение заявки 1%. Обеспечение исполнения контракта 5%."
+    )
+    result = EisZakupkiCollector._extract_commercial_conditions(text)
+    assert result == {
+        "advance_required": True,
+        "advance_percent": 30.0,
+        "postpayment_days": 45,
+        "application_security_percent": 1.0,
+        "contract_security_percent": 5.0,
+    }
