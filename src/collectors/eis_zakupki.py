@@ -703,6 +703,7 @@ class EisZakupkiCollector(BaseCollector):
         description = self._extract_description(
             text
         )
+        commercial = self._extract_commercial_conditions(text)
 
         return Tender(
             platform=self.platform,
@@ -719,11 +720,17 @@ class EisZakupkiCollector(BaseCollector):
             region=region,
             customer=customer,
             law_type=law_type,
+            advance_required=bool(commercial["advance_required"]),
+            advance_percent=commercial["advance_percent"],
+            postpayment_days=commercial["postpayment_days"],
+            application_security_percent=commercial["application_security_percent"],
+            contract_security_percent=commercial["contract_security_percent"],
             raw_data={
                 "details_loaded": True,
                 "source_url": url,
                 "procurement_method": procurement_method,
                 "status": status,
+                "commercial_conditions": commercial,
             },
         )
 
