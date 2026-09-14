@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from src.models.tender import Tender
 from src.orchestrator import Orchestrator
@@ -103,10 +104,17 @@ def test_max_postpayment_and_security_accept_values_inside_limits() -> None:
     assert Orchestrator._passes_criteria(tender, criteria) == (True, "")
 
 
-
 def test_platform_worker_count_honors_concurrency_alias_and_bounds():
     assert Orchestrator._platform_worker_count({"concurrency": 2}, 6) == 2
     assert Orchestrator._platform_worker_count({"platform_workers": 4, "concurrency": 2}, 6) == 4
     assert Orchestrator._platform_worker_count({"concurrency": 99}, 6) == 6
     assert Orchestrator._platform_worker_count({"concurrency": 0}, 6) == 1
     assert Orchestrator._platform_worker_count({"concurrency": "bad"}, 6) == 6
+
+
+def test_excel_export_uses_post_filter_result_ids_not_diagnostic_persistence_ids():
+    source = Path(Orchestrator.__module__.replace(".", "/") + ".py").read_text(encoding="utf-8")
+    assert "export_tender_ids: list[int] = []" in source
+    assert "export_tender_ids.append(tender_id)" in source
+    assert "tender_ids=export_tender_ids" in source
+    assert "tender_ids=current_run_tender_ids" not in source
