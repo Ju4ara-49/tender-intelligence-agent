@@ -15,6 +15,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
+from src.collectors.base import CollectorUnavailableError
 from src.collectors.b2b_center_modern import ModernB2BCenterCollector
 from src.models.tender import Tender
 
@@ -66,6 +67,10 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
                 )
                 html = response.text or ""
                 if not html:
+                    if page_no == 0:
+                        raise CollectorUnavailableError(
+                            f"b2b_center: empty discovery response for {keyword!r}"
+                        )
                     logger.warning(
                         "B2B-Center: empty discovery response keyword=%r page=%d offset=%d",
                         keyword, page_no + 1, offset,
@@ -92,6 +97,10 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
                 )
 
                 if not links:
+                    if page_no == 0:
+                        raise CollectorUnavailableError(
+                            f"b2b_center: discovery returned no procedure links for {keyword!r}"
+                        )
                     break
                 if page_no > 0 and len(links) < page_size:
                     break
@@ -101,7 +110,13 @@ class ReliableB2BCenterCollector(ModernB2BCenterCollector):
                         offset,
                     )
                     break
-            except Exception:
+            except CollectorUnavailableError:
+                raise
+            except Exception as exc:
+                if page_no == 0:
+                    raise CollectorUnavailableError(
+                        f"b2b_center: discovery request failed for {keyword!r}: {type(exc).__name__}: {exc}"
+                    ) from exc
                 logger.exception(
                     "B2B-Center: reliable search page failed keyword=%r page=%d",
                     keyword, page_no + 1,
