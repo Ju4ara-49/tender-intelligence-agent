@@ -120,7 +120,7 @@ class TelegramNotifier:
 
         stub_note = "\n<i>(ИИ-заглушка — используется вместо локального Ollama)</i>" if analysis.is_stub else ""
         rec_map = {
-            "participate": "participate",
+            "participate": "Участвовать",
             "skip": "Пропустить",
             "review": "На проверку",
         }
