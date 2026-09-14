@@ -67,6 +67,12 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
         source = Path(diagnostics.__file__).read_text(encoding="utf-8")
         self.assertIn('sys.stdout.reconfigure(encoding="utf-8", errors="replace")', source)
 
+
+    def test_summary_loop_skips_failure_metadata(self) -> None:
+        source = Path(diagnostics.__file__).read_text(encoding="utf-8")
+        self.assertIn('"internal_failures", "access_blocks"', source)
+        self.assertIn('"hard_external_access"', source)
+
     def test_script_has_real_entrypoint_to_prevent_false_green(self) -> None:
         source = Path(diagnostics.__file__).read_text(encoding="utf-8")
         self.assertIn('if __name__ == "__main__":', source)
