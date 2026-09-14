@@ -178,6 +178,16 @@ class Orchestrator:
             return self._normalize_tender_datetimes(tender), False
 
     @staticmethod
+    def _platform_worker_count(search_config: dict, collector_count: int) -> int:
+        """Resolve concurrent platform workers with backward-compatible config keys."""
+        configured = search_config.get("platform_workers", search_config.get("concurrency", collector_count))
+        try:
+            requested = int(configured)
+        except (TypeError, ValueError):
+            requested = collector_count
+        return min(collector_count, max(1, requested))
+
+    @staticmethod
     def _search_platform(collector, keywords: list[str]) -> tuple[str, list[Tender]]:
         platform = getattr(collector, "platform", "unknown")
         try:
@@ -306,8 +316,7 @@ class Orchestrator:
 
         all_pairs: list[tuple[object, Tender]] = []
         search_config = self.settings.config.get("search", {})
-        configured_workers = search_config.get("platform_workers", search_config.get("concurrency", len(collectors)))
-        workers = min(len(collectors), max(1, int(configured_workers)))
+        workers = self._platform_worker_count(search_config, len(collectors))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="collector") as pool:
             futures = [pool.submit(self._search_platform, collector, search_keywords) for collector in collectors]
             for future in as_completed(futures):
