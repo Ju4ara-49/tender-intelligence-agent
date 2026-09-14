@@ -305,7 +305,9 @@ class Orchestrator:
             return stats
 
         all_pairs: list[tuple[object, Tender]] = []
-        workers = min(len(collectors), max(1, int(self.settings.config.get("search", {}).get("platform_workers", len(collectors)))))
+        search_config = self.settings.config.get("search", {})
+        configured_workers = search_config.get("platform_workers", search_config.get("concurrency", len(collectors)))
+        workers = min(len(collectors), max(1, int(configured_workers)))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="collector") as pool:
             futures = [pool.submit(self._search_platform, collector, search_keywords) for collector in collectors]
             for future in as_completed(futures):
