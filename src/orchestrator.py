@@ -343,12 +343,11 @@ class Orchestrator:
         stats["soft_filtered"] = len(soft_pairs)
 
         enriched_pairs: list[tuple[object, Tender]] = []
-        current_run_tender_ids: list[int] = []
         for collector, tender in soft_pairs:
             if self.stop_requested:
                 break
             enriched, detail_loaded = self._enrich_tender(collector, tender)
-            detail_status = str(getattr(enriched, "detail_status", "partial") or "partial")
+            detail_status = str(getattr(enriched, "detail_status", "partial") or "partial").lower()
             stats["details_loaded"] += int(detail_status == "success" and detail_loaded)
             stats["details_partial"] += int(detail_status == "partial")
             stats["details_failed"] += int(detail_status == "failed" or not detail_loaded and detail_status == "failed")
@@ -359,7 +358,6 @@ class Orchestrator:
             # silently from the run.
             existing = self.db.exists(enriched.unique_key)
             tender_id = self.db.save_tender(enriched)
-            current_run_tender_ids.append(tender_id)
             stats["saved"] += 1
             if not existing:
                 stats["new"] += 1
@@ -374,6 +372,11 @@ class Orchestrator:
                 stats["keyword_excluded"] += 1
         stats["filtered"] = len(strict_pairs)
 
+        # Excel represents the user-visible result set, not the diagnostic
+        # persistence set. Keep excluded discovery/detail rows in SQLite, but
+        # export only tenders that survive the actual keyword/region/criteria
+        # pipeline. This prevents rejected tenders from leaking into reports.
+        export_tender_ids: list[int] = []
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
@@ -390,6 +393,7 @@ class Orchestrator:
             if tender_id is None:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
                 continue
+            export_tender_ids.append(tender_id)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
@@ -416,42 +420,11 @@ class Orchestrator:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             excel_path = output_dir / f"search_{search_number:03d}_{timestamp}.xlsx"
             export_path = export_tenders_to_excel(
-                self.db, excel_path, tender_ids=current_run_tender_ids, search_number=search_number,
+                self.db, excel_path, tender_ids=export_tender_ids, search_number=search_number,
             )
             logger.info("Excel: создан новый файл текущего прогона: %s", export_path)
             self.email_notifier.send_excel(export_path, search_number)
         except Exception:
             logger.exception("Excel: ошибка экспорта результатов")
-        return stats
 
-    def run_cycle_for_user(self, user_id: str | int) -> list[dict[str, int]]:
-        """Запустить все включённые профили пользователя и записать фактическую статистику."""
-        user_id = str(user_id).strip()
-        profiles = self.profile_store.list(user_id, enabled_only=True)
-        if not profiles:
-            profiles = [self.profile_store.ensure_default_profile(user_id, self.criteria_store)]
-        results: list[dict[str, int]] = []
-        aggregated_results: list[Tender] = []
-        seen_keys: set[str] = set()
-        for profile in profiles:
-            if self.stop_requested:
-                break
-            started_at = datetime.now(timezone.utc).isoformat()
-            stats = self.run_cycle(
-                user_id=user_id,
-                criteria=profile.criteria(),
-                keywords=profile.keywords or None,
-                platforms=profile.platforms or None,
-                exclude_keywords=profile.exclusions,
-                regions=profile.regions,
-                notification_recipient_key=f"user:{user_id}",
-                notification_chat_id=user_id,
-            )
-            self.profile_store.record_run(user_id, int(profile.id or 0), stats, started_at=started_at)
-            for tender in self.last_run_results:
-                if tender.unique_key not in seen_keys:
-                    seen_keys.add(tender.unique_key)
-                    aggregated_results.append(tender)
-            results.append(stats)
-        self.last_run_results = aggregated_results
-        return results
+        return stats
