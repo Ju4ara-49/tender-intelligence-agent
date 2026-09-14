@@ -44,6 +44,7 @@ jobs:
           test -s output/platform_browser_diagnostics/rts_tender.png
           test -s output/platform_browser_diagnostics/tmk.png
           test -s output/platform_browser_diagnostics/rosatom.png
+          python tests/platform_browser_diagnostics_gate.py
 
       - name: Upload diagnostics
         if: always()
