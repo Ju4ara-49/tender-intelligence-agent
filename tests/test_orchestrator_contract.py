@@ -101,3 +101,12 @@ def test_max_postpayment_and_security_accept_values_inside_limits() -> None:
     tender = _tender(postpayment_days=30, application_security_percent=5, contract_security_percent=10)
     criteria = TenderCriteria(max_postpayment_days=30, max_application_security_percent=5, max_contract_security_percent=10)
     assert Orchestrator._passes_criteria(tender, criteria) == (True, "")
+
+
+
+def test_platform_worker_count_honors_concurrency_alias_and_bounds():
+    assert Orchestrator._platform_worker_count({"concurrency": 2}, 6) == 2
+    assert Orchestrator._platform_worker_count({"platform_workers": 4, "concurrency": 2}, 6) == 4
+    assert Orchestrator._platform_worker_count({"concurrency": 99}, 6) == 6
+    assert Orchestrator._platform_worker_count({"concurrency": 0}, 6) == 1
+    assert Orchestrator._platform_worker_count({"concurrency": "bad"}, 6) == 6
