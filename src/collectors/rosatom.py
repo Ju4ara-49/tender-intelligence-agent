@@ -123,15 +123,20 @@ class RosatomCollector(_BrowserTenderCollector):
                 raw_data={"source": "zakupki.rosatom.ru", "obj_id": obj_id},
             ))
 
-        header_row = None
-        for row in soup.find_all("tr"):
+        # Locate the semantic header anywhere in the document. In the live
+        # portal the data rows may be under <tbody>, so sibling traversal from
+        # a <thead> header is not reliable.
+        all_rows = soup.find_all("tr")
+        header_index = None
+        for index, row in enumerate(all_rows):
             cells = [self._clean_cell(cell.get_text(" ", strip=True)) for cell in row.find_all(["th", "td"])]
-            if cells and "номер закупки" in " | ".join(cells).lower() and "предмет договора" in " | ".join(cells).lower():
-                header_row = row
+            lowered = " | ".join(cells).lower()
+            if cells and "номер закупки" in lowered and "предмет договора" in lowered:
+                header_index = index
                 break
 
-        if header_row is not None:
-            for row in header_row.find_next_siblings("tr"):
+        if header_index is not None:
+            for row in all_rows[header_index + 1:]:
                 cells = [self._clean_cell(cell.get_text(" ", strip=True)) for cell in row.find_all("td")]
                 if len(cells) < 2:
                     continue
