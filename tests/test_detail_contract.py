@@ -113,3 +113,30 @@ def test_detail_contract_ignores_invalid_customer_inn_and_uses_text_fallback() -
     enforce_detail_contract(collector)
     result = collector.get_details("5")
     assert result.customer_inn == "7707654321"
+
+
+
+def test_eis_detail_region_extraction_handles_current_russian_labels():
+    from bs4 import BeautifulSoup
+    from src.collectors.eis_zakupki import EisZakupkiCollector
+
+    html = """<html><body>
+    <div>Регион: Санкт-Петербург</div>
+    <div>Место поставки: Санкт-Петербург, ул. Тестовая, д. 1</div>
+    <div>Начальная цена: 100 000,00 руб.</div>
+    <div>Заказчик: ООО Тест</div>
+    </body></html>"""
+    value = EisZakupkiCollector._extract_region_from_soup(BeautifulSoup(html, "lxml"))
+    assert value == "Санкт-Петербург"
+
+
+def test_eis_detail_region_extraction_falls_back_to_delivery_location():
+    from bs4 import BeautifulSoup
+    from src.collectors.eis_zakupki import EisZakupkiCollector
+
+    html = """<html><body>
+    <div>Место поставки: Московская область, г. Химки, ул. Ленина, д. 1</div>
+    <div>Окончание подачи заявок: 30.09.2026 12:00</div>
+    </body></html>"""
+    value = EisZakupkiCollector._extract_region_from_soup(BeautifulSoup(html, "lxml"))
+    assert value.startswith("Московская область")
