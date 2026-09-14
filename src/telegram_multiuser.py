@@ -10,11 +10,12 @@ import time
 from pathlib import Path
 
 from src.orchestrator import Orchestrator
+from src.settings import PROJECT_ROOT
 from src.telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
 OWNER_TELEGRAM_ID = "838120236"
-WHITELIST_FILE = Path("data/telegram_allowed_users.json")
+WHITELIST_FILE = PROJECT_ROOT / "data" / "telegram_allowed_users.json"
 BTN_ADMIN = "👑 Управление доступом"
 BTN_ADMIN_ADD = "➕ Добавить пользователя"
 BTN_ADMIN_REMOVE = "➖ Удалить пользователя"
@@ -89,11 +90,18 @@ class MultiUserTelegramBot(TelegramBot):
         if user_id == OWNER_TELEGRAM_ID:
             self._send(chat_id, "⛔ Владельца удалить нельзя.", self._admin_keyboard())
             return
+        with self._search_lock:
+            orchestrator = self._user_orchestrators.get(user_id)
+        if orchestrator is not None:
+            orchestrator.request_stop()
         with self._whitelist_lock:
             self._allowed_user_ids.discard(user_id)
             self._save_allowed_user_ids()
         self._admin_waiting.pop(chat_id, None)
-        self._send(chat_id, f"✅ Пользователь <code>{user_id}</code> удалён.", self._admin_keyboard())
+        message = f"✅ Пользователь <code>{user_id}</code> удалён."
+        if orchestrator is not None:
+            message += "\n⛔ Его текущий поиск также остановлен."
+        self._send(chat_id, message, self._admin_keyboard())
 
     def _admin_command(self, chat_id: str, text: str) -> bool:
         if not self._is_owner(chat_id):
