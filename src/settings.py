@@ -86,12 +86,15 @@ class AppSettings:
 
     @property
     def scheduler_interval_minutes(self) -> int:
-        return int(
+        interval = int(
             self.config.get("scheduler", {}).get(
                 "interval_minutes",
                 60,
             )
         )
+        if interval <= 0:
+            raise ValueError("scheduler.interval_minutes должен быть больше нуля")
+        return interval
 
     @property
     def run_on_start(self) -> bool:
@@ -210,13 +213,6 @@ def load_settings(env_file: Path | None = None) -> AppSettings:
             "EMAIL_SMTP_HOST",
             "smtp.mail.ru",
         ).strip(),
-
-        email_smtp_port=int(
-            os.getenv(
-                "EMAIL_SMTP_PORT",
-                "465",
-            ).strip()
-        ),
 
         email_from=os.getenv(
             "EMAIL_FROM",
