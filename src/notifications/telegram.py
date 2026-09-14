@@ -60,8 +60,16 @@ class TelegramNotifier:
     @staticmethod
     def _tender_keyboard(tender: Tender, tender_id: int | None) -> dict:
         rows: list[list[dict[str, str]]] = []
-        if tender_id is not None and int(tender_id) > 0:
-            callback_data = f"crm:status:{int(tender_id)}:participating"
+        resolved_tender_id = tender_id
+        if resolved_tender_id is None:
+            raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
+            raw_id = raw.get("db_id")
+            if isinstance(raw_id, int) and raw_id > 0:
+                resolved_tender_id = raw_id
+            elif isinstance(raw_id, str) and raw_id.isdigit() and int(raw_id) > 0:
+                resolved_tender_id = int(raw_id)
+        if resolved_tender_id is not None and int(resolved_tender_id) > 0:
+            callback_data = f"crm:status:{int(resolved_tender_id)}:participating"
         else:
             callback_data = f"crm:participate:{tender.platform}:{tender.external_id}"
         if len(callback_data.encode("utf-8")) <= 64:
