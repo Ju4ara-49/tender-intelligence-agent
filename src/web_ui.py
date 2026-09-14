@@ -96,17 +96,29 @@ def serve(settings, host="127.0.0.1", port=8080):
             self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
         def do_GET(self):
             path=urlparse(self.path)
-            user=_v(parse_qs(path.query),"user","web-local")
-            profiles=store.list(user); self.send_html(render_form(profiles[0] if profiles else None, path.path=="/saved"))
+            query=parse_qs(path.query)
+            user=_v(query,"user","web-local")
+            profile_id=_v(query,"id")
+            profile=store.get(user,int(profile_id)) if profile_id.isdigit() else None
+            profiles=store.list(user)
+            self.send_html(render_form(profile or (profiles[0] if profiles else None), path.path=="/saved"))
+
         def do_POST(self):
             if urlparse(self.path).path!="/profiles": self.send_html("Not found",404); return
             try:
                 length=int(self.headers.get("Content-Length","0"))
-                profile=profile_from_form(parse_qs(self.rfile.read(length).decode("utf-8")))
-                store.create("web-local",profile)
-            except (ValueError,TypeError) as exc:
+                form=parse_qs(self.rfile.read(length).decode("utf-8"))
+                profile=profile_from_form(form)
+                existing=next((x for x in store.list("web-local") if x.name == profile.name), None)
+                if existing:
+                    values={k:v for k,v in profile.__dict__.items() if k not in {"id","user_id","created_at","updated_at"}}
+                    store.update("web-local",existing.id,**values)
+                else:
+                    store.create("web-local",profile)
+            except (ValueError,TypeError,KeyError) as exc:
                 self.send_html(render_form(profile if "profile" in locals() else SearchProfile(),False).replace("</main>",'<div class="toast">Ошибка: '+html.escape(str(exc))+"</div></main>"),400); return
             self.send_response(303); self.send_header("Location","/saved"); self.end_headers()
+
         def log_message(self, fmt, *args): return
     server=ThreadingHTTPServer((host,port),Handler)
     print(f"Web UI: http://{host}:{port}/"); server.serve_forever()
