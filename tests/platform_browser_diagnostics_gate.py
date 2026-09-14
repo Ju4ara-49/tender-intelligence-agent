@@ -57,6 +57,7 @@ def main() -> int:
         print("Hard external/diagnostic failures remain:")
         for item in ci_failures:
             print(f"- {item}")
+            failures.append(f"report: {item}")
 
     if failures:
         print("Browser diagnostics artifact gate FAILED:")
