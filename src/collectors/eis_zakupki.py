@@ -1175,73 +1175,50 @@ class EisZakupkiCollector(BaseCollector):
     def _extract_region_from_soup(
         soup: BeautifulSoup,
     ) -> str:
-
+        """Extract delivery/region data from the rendered EIS detail page."""
         text = EisZakupkiCollector._clean_text(
-            soup.get_text(
-                " ",
-                strip=True,
-            )
+            soup.get_text(" ", strip=True)
         )
-
         if not text:
             return ""
 
-        # ? ?????????? ???????? ??? ???? ?????? ???????????:
-        #
-        # ?????? ????? ?? ???? ?????????? ? ????????? ???????
-        #
-        # ????? ???????? ?????? ????? ????? ????? ?????????.
+        # Prefer explicit delivery/region labels. The EIS markup changes
+        # frequently, so text-based extraction is deliberately selector-free.
+        patterns = [
+            r"(?:Регион|Регион поставки)\s*[:\-]?\s*(.{3,250})",
+            r"Место поставки\s*[:\-]?\s*(.{3,350})",
+            r"Место выполнения работ\s*[:\-]?\s*(.{3,350})",
+            r"Место оказания услуг\s*[:\-]?\s*(.{3,350})",
+        ]
+        stop_markers = (
+            "Начальная цена", "НМЦК", "Заказчик", "Место нахождения",
+            "Почтовый адрес", "Дата начала", "Дата окончания",
+            "Окончание подачи заявок", "Общая информация",
+            "Информация о процедуре закупки", "Личный кабинет",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            value = match.group(1)
+            for marker in stop_markers:
+                if marker in value:
+                    value = value.split(marker, 1)[0]
+            value = EisZakupkiCollector._clean_text(value).strip(" ;,-")
+            if value and len(value) <= 500:
+                return value
 
-        marker_start = "??????"
-        marker_end = "?????????? ? ????????? ???????"
-
-        search_position = 0
-
-        while True:
-            start_position = text.find(
-                marker_start,
-                search_position,
-            )
-
-            if start_position < 0:
-                break
-
-            value_start = (
-                start_position
-                + len(marker_start)
-            )
-
-            end_position = text.find(
-                marker_end,
-                value_start,
-            )
-
-            if end_position < 0:
-                break
-
-            value = text[
-                value_start:end_position
-            ]
-
-            value = EisZakupkiCollector._clean_text(
-                value
-            )
-
-            # ?????? ?????? ???? ???????? ?????????,
-            # ? ?? ??????? ??? ?????? ?????? ????????.
-            if value:
-                if len(value) <= 100:
-                    if "????? ????????" not in value:
-                        if "???????????" not in value:
-                            return value[:200]
-
-            search_position = (
-                start_position
-                + len(marker_start)
-            )
-
+        # Last fallback: extract the city from a location/address line.
+        for pattern in (
+            r"Место\s+нахождения\s*[:\-]?\s*[^,;]{0,120}?(?:г\.?\s*)?([А-ЯЁ][А-ЯЁа-яё\-]+)",
+            r"Почтовый\s+адрес\s*[:\-]?\s*[^,;]{0,120}?(?:г\.?\s*)?([А-ЯЁ][А-ЯЁа-яё\-]+)",
+        ):
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                value = EisZakupkiCollector._clean_text(match.group(1))
+                if value:
+                    return value[:200]
         return ""
-
 
     # ==================================================================
     # CUSTOMER
