@@ -30,6 +30,8 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Probe all supported public tender portals
+        env:
+          HARD_EXTERNAL_ACCESS: "0"
         run: python tests/platform_browser_diagnostics.py
 
       - name: Validate diagnostics artifacts
@@ -44,7 +46,7 @@ jobs:
           test -s output/platform_browser_diagnostics/rts_tender.png
           test -s output/platform_browser_diagnostics/tmk.png
           test -s output/platform_browser_diagnostics/rosatom.png
-          python tests/platform_browser_diagnostics_gate.py
+          HARD_EXTERNAL_ACCESS=0 python tests/platform_browser_diagnostics_gate.py
 
       - name: Upload diagnostics
         if: always()
