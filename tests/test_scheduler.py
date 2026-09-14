@@ -3,7 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 import src.scheduler as scheduler_module
+from src.settings import AppSettings
 
 
 class _FakeScheduler:
@@ -96,3 +99,14 @@ def test_scheduler_job_contains_monitoring_error_and_does_not_escape():
         job()
 
     assert fake.started is True
+
+
+def test_scheduler_interval_must_be_positive():
+    settings = AppSettings(config={"scheduler": {"interval_minutes": 0}}, keywords={})
+    with pytest.raises(ValueError, match="больше нуля"):
+        _ = settings.scheduler_interval_minutes
+
+
+def test_scheduler_interval_defaults_to_one_hour():
+    settings = AppSettings(config={}, keywords={})
+    assert settings.scheduler_interval_minutes == 60
