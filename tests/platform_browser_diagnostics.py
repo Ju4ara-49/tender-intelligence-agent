@@ -345,7 +345,7 @@ def main() -> int:
     print(json.dumps(report, ensure_ascii=False, indent=2))
     summary_lines = ["## Platform browser diagnostics", "", f"Query: `{QUERY}`", ""]
     for name, entry in report.items():
-        if name in {"failures", "ci_failures", "access_blocks", "access_block_count", "ci_failure_count"}:
+        if name in {"failures", "ci_failures", "internal_failures", "access_blocks", "hard_external_access", "access_block_count", "ci_failure_count"}:
             continue
         summary_lines.append(f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` status={entry.get('status')} result_count={entry.get('result_count')} links={entry.get('result_link_count', 0)} navigation_attempt={entry.get('navigation_attempt', '-')}")
     if access_blocks:
