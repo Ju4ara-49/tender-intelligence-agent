@@ -29,13 +29,83 @@ class RosatomCollector(_BrowserTenderCollector):
         "Поиск закупок",
     )
     LINK_HINTS = ("procurements", "obj_id", "published_procurements")
+    ALLOW_PUBLISHED_LISTING_FALLBACK = True
+
+    @staticmethod
+    def _clean_cell(value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n;")
+
+    @staticmethod
+    def _split_procurement_number(value: str) -> tuple[str, str]:
+        """Return Rosatom internal row id and the optional official number."""
+        text = RosatomCollector._clean_cell(value)
+        match = re.search(r"(\d+)\s*\(\s*(\d+)\s*\)", text)
+        if match:
+            return match.group(1), match.group(2)
+        match = re.search(r"\b(\d{4,})\b", text)
+        return (match.group(1), "") if match else ("", "")
+
+    def _row_to_tender(self, cells: list[str], href: str = "") -> Tender | None:
+        if not cells:
+            return None
+        number, official_number = self._split_procurement_number(cells[0])
+        if not number:
+            return None
+
+        title = self._clean_cell(cells[1]) if len(cells) > 1 else ""
+        if not title or title.lower() in {"предмет договора", "наименование закупки"}:
+            return None
+
+        price = self._extract_price("НМЦ, руб: " + (cells[2] if len(cells) > 2 else ""))
+        customer = self._clean_cell(cells[3]) if len(cells) > 3 else ""
+        published_at = self._extract_datetime(
+            self._clean_cell(cells[4]) if len(cells) > 4 else "",
+            ("",),
+        )
+        deadline_text = self._clean_cell(cells[5]) if len(cells) > 5 else ""
+        deadline = self._extract_date(deadline_text)
+        platform = self._clean_cell(cells[6]) if len(cells) > 6 else ""
+        region = self._clean_cell(cells[7]) if len(cells) > 7 else ""
+
+        if not published_at:
+            published_at = self._extract_datetime(
+                "Дата публикации " + (cells[4] if len(cells) > 4 else ""),
+                ("Дата публикации",),
+            )
+
+        url = href or self.BASE_URL
+        raw_data = {
+            "source": "zakupki.rosatom.ru",
+            "obj_id": number,
+            "official_number": official_number,
+            "discovery_only": not bool(href),
+            "published_at": published_at.isoformat() if published_at else None,
+            "end_date": deadline.isoformat() if deadline else None,
+            "procurement_platform": platform,
+        }
+        return Tender(
+            platform=self.platform,
+            external_id=number,
+            title=title[:1000],
+            url=url,
+            description=title,
+            price=price,
+            deadline=deadline,
+            published_at=published_at,
+            end_date=deadline,
+            customer=customer,
+            region=region,
+            raw_data=raw_data,
+        )
 
     def _parse_results(self, html: str) -> list[Tender]:
-        """Parse official Rosatom procedure links.
+        """Parse both direct procedure links and the current published table.
 
-        Rosatom procedure URLs normally carry an opaque obj_id rather than a
-        numeric tender ID. The obj_id is therefore used as the stable external
-        identifier and the complete official URL is retained for details.
+        The current portal renders the published registry as table rows whose
+        individual procedure navigation is client-side. There may be no
+        anchor with ``obj_id`` in the rendered HTML, so link-only parsing
+        silently returned zero results. We therefore parse the row contract
+        directly and retain the official/internal numbers needed for follow-up.
         """
         from bs4 import BeautifulSoup
         from urllib.parse import urljoin
@@ -52,23 +122,20 @@ class RosatomCollector(_BrowserTenderCollector):
             )
             return []
 
+        # Preferred path: direct procedure links, when the portal exposes them.
         for anchor in soup.find_all("a", href=True):
             raw_href = str(anchor.get("href", "")).strip()
             href = urljoin(self.BASE_URL, raw_href)
             parsed = urlparse(href)
             if parsed.netloc and parsed.netloc.lower() != base_host:
                 continue
-
             query = parse_qs(parsed.query)
             obj_id = (query.get("obj_id") or [""])[0].strip()
-            title = " ".join(anchor.stripped_strings)
+            title = self._clean_cell(" ".join(anchor.stripped_strings))
             if not obj_id or not title or len(title) < 5:
                 continue
-            if "procurements" not in href.lower():
+            if "procurements" not in href.lower() or obj_id in seen:
                 continue
-            if obj_id in seen:
-                continue
-
             seen.add(obj_id)
             self._urls[obj_id] = href
             results.append(
@@ -82,7 +149,73 @@ class RosatomCollector(_BrowserTenderCollector):
                 )
             )
 
+        # Current published-registry table fallback.
+        header_row = None
+        for row in soup.find_all("tr"):
+            cells = [self._clean_cell(cell.get_text(" ", strip=True)) for cell in row.find_all(["th", "td"])]
+            if not cells:
+                continue
+            lowered = " | ".join(cells).lower()
+            if "номер закупки" in lowered and "предмет договора" in lowered:
+                header_row = row
+                break
+
+        if header_row is not None:
+            for row in header_row.find_next_siblings("tr"):
+                cells = [self._clean_cell(cell.get_text(" ", strip=True)) for cell in row.find_all("td")]
+                if len(cells) < 2:
+                    continue
+                tender = self._row_to_tender(cells)
+                if tender is None or tender.external_id in seen:
+                    continue
+                seen.add(tender.external_id)
+                self._urls[tender.external_id] = self.BASE_URL
+                results.append(tender)
+
+        # Some SPA builds do not use <tr>/<td>; recover the same contract from
+        # elements carrying row-like data attributes without guessing URLs.
+        if not results:
+            for node in soup.find_all(attrs={"data-procurement-id": True}):
+                number = self._clean_cell(node.get("data-procurement-id"))
+                if not number or number in seen:
+                    continue
+                title = self._clean_cell(" ".join(node.stripped_strings))
+                if len(title) < 5:
+                    continue
+                tender = Tender(
+                    platform=self.platform,
+                    external_id=number,
+                    title=title[:1000],
+                    url=self.BASE_URL,
+                    description=title,
+                    raw_data={"source": "zakupki.rosatom.ru", "obj_id": number, "discovery_only": True},
+                )
+                seen.add(number)
+                self._urls[number] = self.BASE_URL
+                results.append(tender)
+
         return results
+
+    def get_details(self, external_id: str) -> Tender | None:
+        """Refresh one Rosatom row through the published registry.
+
+        Published rows do not always expose a stable detail href in the DOM.
+        Searching by the internal row number is therefore safer than opening
+        the whole registry as if it were a detail page.
+        """
+        target = str(external_id).strip()
+        if not target:
+            return None
+        try:
+            results = self._search_one(target)
+        except Exception as exc:
+            logger.warning("rosatom: detail lookup failed %s: %s", target, exc)
+            return None
+        for tender in results:
+            if tender.external_id == target:
+                tender.raw_data["discovery_only"] = False
+                return tender
+        return None
 
     def _parse_detail(self, html: str, external_id: str, url: str) -> Tender:
         from bs4 import BeautifulSoup
