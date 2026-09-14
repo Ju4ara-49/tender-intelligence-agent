@@ -96,12 +96,7 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
 
     if command in {"/crm_status", "/статус_тендера"}:
         if len(parts) != 3:
-            bot._send(
-                chat_id,
-                "Использование: <code>/crm_status ID STATUS</code>\n\nСтатусы: "
-                + ", ".join(_STATUS_NAMES.values()),
-                bot._keyboard(),
-            )
+            bot._send(chat_id, "Использование: <code>/crm_status ID STATUS</code>\n\nСтатусы: " + ", ".join(_STATUS_NAMES.values()), bot._keyboard())
             return True
         tender_id = _parse_id(parts[1])
         status = _parse_status(parts[2])
@@ -167,12 +162,10 @@ def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
             bot._send(chat_id, "Не удалось найти тендер в базе для изменения CRM-статуса.", bot._keyboard())
             return True
         try:
-            new_status = _board(bot).set_status(tender_id, "participating")
-            bot._send(
-                chat_id,
-                f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.",
-                bot._keyboard(),
-            )
+            # The button is an explicit user command to participate. It is
+            # intentionally allowed to jump from the initial "new" state.
+            new_status = _board(bot).set_status(tender_id, "participating", force=True)
+            bot._send(chat_id, f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
         return True
