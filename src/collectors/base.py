@@ -9,6 +9,14 @@ from src.collectors._broad_defaults import broaden_discovery_config
 from src.models.tender import Tender
 
 
+class CollectorUnavailableError(RuntimeError):
+    """Внешняя площадка недоступна или не дала пригодный ответ.
+
+    Это отдельный тип ошибки, чтобы оркестратор не превращал сетевой сбой
+    площадки в ложный успешный поиск с нулём результатов.
+    """
+
+
 class BaseCollector(ABC):
     """Базовый класс для всех площадок."""
 
