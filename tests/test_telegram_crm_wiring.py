@@ -103,6 +103,36 @@ class TelegramCrmWiringTests(unittest.TestCase):
             self.assertNotIn("42", bot._allowed_user_ids)
             self.assertEqual(__import__("json").loads(whitelist.read_text(encoding="utf-8")), [])
 
+    def test_revoked_user_receives_no_post_search_results(self) -> None:
+        bot = object.__new__(MultiUserTelegramBot)
+        bot._send_messages = []
+        bot._send = lambda chat_id, text, reply_markup=None: bot._send_messages.append(text)
+        bot._keyboard = lambda: {}
+        bot._search_lock = __import__("threading").Lock()
+        bot._search_threads = {}
+        bot._user_orchestrators = {}
+        allowed_checks = 0
+
+        def is_allowed(_chat_id):
+            nonlocal allowed_checks
+            allowed_checks += 1
+            return False
+
+        bot._is_allowed = is_allowed
+
+        class FakeOrchestrator:
+            stop_requested = False
+            last_run_results = [Tender(platform="eis", external_id="1", title="must not be sent", url="https://example.test/1")]
+
+            def run_cycle_for_user(self, chat_id):
+                return [{"search_number": 1, "found": 1, "filtered": 1, "new": 1}]
+
+        bot._run_search_for_user("42", FakeOrchestrator())
+        self.assertEqual(len(bot._send_messages), 1)
+        self.assertIn("Поиск выполняется", bot._send_messages[0])
+        self.assertGreaterEqual(allowed_checks, 1)
+        self.assertNotIn("must not be sent", "\n".join(bot._send_messages))
+
     def test_whitelist_file_is_resolved_from_project_root(self) -> None:
         source = __import__("pathlib").Path(__import__("src.telegram_multiuser", fromlist=["MultiUserTelegramBot"]).__file__).read_text(encoding="utf-8")
         self.assertIn("WHITELIST_FILE = PROJECT_ROOT / \"data\" / \"telegram_allowed_users.json\"", source)
