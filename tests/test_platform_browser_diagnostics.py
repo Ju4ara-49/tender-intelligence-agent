@@ -62,6 +62,7 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
         body = "Пожалуйста подождите. Для работы с сайтом необходимы включенные Javascript и Cookies."
         self.assertTrue(is_external_challenge(body))
         self.assertFalse(is_external_challenge("Параметры поиска Поиск закупок"))
+        self.assertTrue(is_external_challenge("Web Page Blocked! The URL you requested has been blocked. Attack ID: 20000051"))
 
     def test_windows_stdout_is_forced_to_utf8(self) -> None:
         source = Path(diagnostics.__file__).read_text(encoding="utf-8")
