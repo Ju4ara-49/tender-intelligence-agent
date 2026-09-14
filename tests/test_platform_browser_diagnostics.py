@@ -6,7 +6,7 @@ from pathlib import Path
 
 import tests.platform_browser_diagnostics as diagnostics
 
-from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence, has_published_listing_evidence
+from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence, has_published_listing_evidence, is_external_challenge
 
 
 class PlatformBrowserDiagnosticsTests(unittest.TestCase):
@@ -56,6 +56,16 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
         links = [{"text": "Закупка", "href": "https://zakupki.rosatom.ru/Web.aspx?link=procurements&obj_id=ABC123="}]
         self.assertTrue(has_published_listing_evidence("rosatom", links))
         self.assertFalse(has_published_listing_evidence("tmk", links))
+
+
+    def test_javascript_cookie_challenge_is_external_access(self) -> None:
+        body = "Пожалуйста подождите. Для работы с сайтом необходимы включенные Javascript и Cookies."
+        self.assertTrue(is_external_challenge(body))
+        self.assertFalse(is_external_challenge("Параметры поиска Поиск закупок"))
+
+    def test_windows_stdout_is_forced_to_utf8(self) -> None:
+        source = Path(diagnostics.__file__).read_text(encoding="utf-8")
+        self.assertIn('sys.stdout.reconfigure(encoding="utf-8", errors="replace")', source)
 
     def test_script_has_real_entrypoint_to_prevent_false_green(self) -> None:
         source = Path(diagnostics.__file__).read_text(encoding="utf-8")
