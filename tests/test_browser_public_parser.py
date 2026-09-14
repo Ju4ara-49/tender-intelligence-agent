@@ -88,6 +88,36 @@ class BrowserPublicParserTests(unittest.TestCase):
         self.assertIsNotNone(tender.deadline)
         self.assertTrue(tender.raw_data["discovery_only"])
 
+    def test_rosatom_parser_reads_tbody_rows_after_thead(self) -> None:
+        from src.collectors.rosatom import RosatomCollector
+
+        html = """
+        <table>
+          <thead><tr>
+            <th>Номер закупки</th><th>Предмет договора</th><th>НМЦ, руб</th>
+            <th>Организатор закупки</th><th>Дата публикации</th>
+            <th>Дата окончания подачи заявок/подведения итогов</th>
+            <th>Площадка размещения закупок</th><th>Регион поставки</th>
+          </tr></thead>
+          <tbody><tr>
+            <td>227168 (5090323)</td>
+            <td>Право заключения договора на подшипники специальные</td>
+            <td>6 946 112,70</td>
+            <td>АО "ПРОМИНН"</td>
+            <td>17.08.2026</td>
+            <td>Этап 1: 11.09.2026 10:00:00</td>
+            <td>РТС-Тендер</td>
+            <td>Томская область</td>
+          </tr></tbody>
+        </table>
+        """
+        results = RosatomCollector()._parse_results(html)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].external_id, "227168")
+        self.assertEqual(results[0].raw_data["official_number"], "5090323")
+        self.assertEqual(results[0].raw_data["procurement_platform"], "РТС-Тендер")
+        self.assertIsNotNone(results[0].deadline)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
