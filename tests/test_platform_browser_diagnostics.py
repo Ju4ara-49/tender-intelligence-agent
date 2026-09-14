@@ -6,7 +6,7 @@ from pathlib import Path
 
 import tests.platform_browser_diagnostics as diagnostics
 
-from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence
+from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence, has_published_listing_evidence
 
 
 class PlatformBrowserDiagnosticsTests(unittest.TestCase):
@@ -51,6 +51,11 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
                 "rosatom",
             },
         )
+
+    def test_rosatom_published_listing_is_valid_fallback_evidence(self) -> None:
+        links = [{"text": "Закупка", "href": "https://zakupki.rosatom.ru/Web.aspx?link=procurements&obj_id=ABC123="}]
+        self.assertTrue(has_published_listing_evidence("rosatom", links))
+        self.assertFalse(has_published_listing_evidence("tmk", links))
 
     def test_script_has_real_entrypoint_to_prevent_false_green(self) -> None:
         source = Path(diagnostics.__file__).read_text(encoding="utf-8")
