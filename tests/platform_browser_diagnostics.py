@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ INITIAL_WAIT_MS = 2500
 NETWORK_IDLE_TIMEOUT_MS = 2500
 SEARCH_SETTLE_MS = 2500
 SCREENSHOT_TIMEOUT_MS = 5000
+HARD_EXTERNAL_ACCESS = os.getenv("HARD_EXTERNAL_ACCESS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 SEARCH_SELECTORS = (
     "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
@@ -205,6 +207,7 @@ def main() -> int:
     report: dict[str, object] = {}
     failures: list[str] = []
     ci_failures: list[str] = []
+    internal_failures: list[str] = []
     access_blocks: list[str] = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -268,6 +271,7 @@ def main() -> int:
                             message = f"{name}: search control missing"
                             failures.append(message)
                             ci_failures.append(message)
+                            internal_failures.append(message)
                     elif result_count is not None or links:
                         entry["diagnostic_state"] = "ok"
                     else:
@@ -276,6 +280,7 @@ def main() -> int:
                         message = f"{name}: search returned no result evidence"
                         failures.append(message)
                         ci_failures.append(message)
+                        internal_failures.append(message)
             except PlaywrightTimeoutError as exc:
                 entry["error"] = repr(exc)
                 entry["diagnostic_state"] = "external_timeout"
@@ -299,6 +304,7 @@ def main() -> int:
                     message = f"{name}: {exc!r}"
                     failures.append(message)
                     ci_failures.append(message)
+                    internal_failures.append(message)
             finally:
                 save_viewport_screenshot(page, name)
                 page.close()
@@ -307,7 +313,9 @@ def main() -> int:
         browser.close()
     report["failures"] = failures
     report["ci_failures"] = ci_failures
+    report["internal_failures"] = internal_failures
     report["access_blocks"] = access_blocks
+    report["hard_external_access"] = HARD_EXTERNAL_ACCESS
     report["access_block_count"] = len(access_blocks)
     report["ci_failure_count"] = len(ci_failures)
     (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -318,14 +326,26 @@ def main() -> int:
             continue
         summary_lines.append(f"- **{name}**: `{entry.get('diagnostic_state', 'unknown')}` status={entry.get('status')} result_count={entry.get('result_count')} links={entry.get('result_link_count', 0)} navigation_attempt={entry.get('navigation_attempt', '-')}")
     if access_blocks:
-        summary_lines.extend(["", "### External access failures (hard gate)", *[f"- {item}" for item in access_blocks]])
+        access_heading = "### External access failures (hard gate)" if HARD_EXTERNAL_ACCESS else "### External access limitations (runner/network)"
+        summary_lines.extend(["", access_heading, *[f"- {item}" for item in access_blocks]])
     if ci_failures:
         summary_lines.extend(["", "### Diagnostic failures", *[f"- {item}" for item in ci_failures]])
     else:
         summary_lines.extend(["", "All supported public platform endpoints passed the browser search probe."])
     (OUT / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
     print("\n".join(summary_lines))
-    return 1 if ci_failures else 0
+    if internal_failures:
+        print("Internal browser diagnostic failures:")
+        for item in internal_failures:
+            print(f"- {item}")
+    if HARD_EXTERNAL_ACCESS and access_blocks:
+        print("External browser access failures are HARD-GATE failures on this runner:")
+        for item in access_blocks:
+            print(f"- {item}")
+    blocking_failures = list(internal_failures)
+    if HARD_EXTERNAL_ACCESS:
+        blocking_failures.extend(access_blocks)
+    return 1 if blocking_failures else 0
 
 
 if __name__ == "__main__":
