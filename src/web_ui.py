@@ -16,7 +16,11 @@ def _v(form, key, default=""):
     return (form.get(key, [default])[0] or default).strip()
 
 def _list(form, key):
-    return [x.strip() for x in _v(form, key).replace("\\n", ",").split(",") if x.strip()]
+    values = form.get(key, [])
+    result = []
+    for value in values:
+        result.extend(x.strip() for x in str(value).replace("\\n", ",").split(",") if x.strip())
+    return result
 
 def _float(form, key):
     raw = _v(form, key)
