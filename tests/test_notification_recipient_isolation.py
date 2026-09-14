@@ -33,10 +33,10 @@ def test_notification_delivery_is_isolated_by_recipient(tmp_path) -> None:
 
 def test_telegram_notifier_uses_explicit_chat_override() -> None:
     notifier = TelegramNotifier(bot_token="token", chat_id="global-chat")
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str | None, dict | None]] = []
 
-    def fake_send(text: str, chat_id: str | None = None) -> bool:
-        calls.append((text, chat_id))
+    def fake_send(text: str, chat_id: str | None = None, reply_markup: dict | None = None) -> bool:
+        calls.append((text, chat_id, reply_markup))
         return True
 
     notifier._send = fake_send  # type: ignore[method-assign]
@@ -57,6 +57,7 @@ def test_telegram_notifier_uses_explicit_chat_override() -> None:
     assert notifier.send_tender_alert(tender, analysis, chat_id="user-chat") is True
     assert len(calls) == 1
     assert calls[0][1] == "user-chat"
+    assert calls[0][2]["inline_keyboard"][0][0]["text"] == "УЧАСТВОВАТЬ"
 
     calls.clear()
     assert notifier.send_tender_alert(tender, analysis) is True
