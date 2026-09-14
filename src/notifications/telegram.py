@@ -41,15 +41,12 @@ class TelegramNotifier:
         tender: Tender,
         analysis: TenderAnalysis,
         chat_id: str | None = None,
+        tender_id: int | None = None,
     ) -> bool:
-        """Send an alert to an explicit chat or fall back to configured chat_id.
-
-        Per-user Telegram searches must not silently deliver to the administrator's
-        global ``TELEGRAM_CHAT_ID``.  ``chat_id`` is therefore an explicit override
-        used by the multi-user bot, while CLI/scheduled runs keep the legacy default.
-        """
+        """Send an alert with a direct CRM participation action when an ID is known."""
         message = self.format_message(tender, analysis)
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
+        reply_markup = self._tender_keyboard(tender, tender_id)
         if not self.bot_token or not target_chat_id:
             if self.dry_run_when_no_token:
                 logger.info(
@@ -58,7 +55,16 @@ class TelegramNotifier:
                 )
                 return False
             raise RuntimeError("TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы в .env")
-        return self._send(message, chat_id=target_chat_id)
+        return self._send(message, chat_id=target_chat_id, reply_markup=reply_markup)
+
+    @staticmethod
+    def _tender_keyboard(tender: Tender, tender_id: int | None) -> dict:
+        rows: list[list[dict[str, str]]] = []
+        if tender_id is not None and int(tender_id) > 0:
+            rows.append([{"text": "УЧАСТВОВАТЬ", "callback_data": f"crm:status:{int(tender_id)}:participating"}])
+        if tender.url:
+            rows.append([{"text": "Открыть тендер", "url": str(tender.url)}])
+        return {"inline_keyboard": rows}
 
     def send_text(self, text: str, chat_id: str | None = None) -> bool:
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
@@ -67,7 +73,7 @@ class TelegramNotifier:
             return False
         return self._send(text, chat_id=target_chat_id)
 
-    def _send(self, text: str, chat_id: str | None = None) -> bool:
+    def _send(self, text: str, chat_id: str | None = None, reply_markup: dict | None = None) -> bool:
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         url = TELEGRAM_API.format(token=self.bot_token)
         payload = {
@@ -76,6 +82,8 @@ class TelegramNotifier:
             "parse_mode": "HTML",
             "disable_web_page_preview": False,
         }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, json=payload)
@@ -112,9 +120,9 @@ class TelegramNotifier:
 
         stub_note = "\n<i>(ИИ-заглушка — используется вместо локального Ollama)</i>" if analysis.is_stub else ""
         rec_map = {
-            "participate": "✅ Участвовать",
-            "skip": "❌ Пропустить",
-            "review": "🔍 На проверку",
+            "participate": "participate",
+            "skip": "Пропустить",
+            "review": "На проверку",
         }
         rec = html.escape(str(rec_map.get(analysis.recommendation, analysis.recommendation or "")))
         platform = html.escape(cls.platform_name(tender.platform))
