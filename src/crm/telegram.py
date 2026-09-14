@@ -152,6 +152,31 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
 
 def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
     """Обработать inline-кнопки CRM."""
+    if data.startswith("crm:participate:"):
+        payload = data[len("crm:participate:"):]
+        if ":" not in payload:
+            return False
+        platform, external_id = payload.split(":", 1)
+        platform = platform.strip()
+        external_id = external_id.strip()
+        if not platform or not external_id:
+            return False
+        unique_key = f"{platform}:{external_id}"
+        tender_id = bot.orchestrator.db.get_tender_id(unique_key)
+        if tender_id is None:
+            bot._send(chat_id, "Не удалось найти тендер в базе для изменения CRM-статуса.", bot._keyboard())
+            return True
+        try:
+            new_status = _board(bot).set_status(tender_id, "participating")
+            bot._send(
+                chat_id,
+                f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.",
+                bot._keyboard(),
+            )
+        except (ValueError, TypeError) as exc:
+            bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
+        return True
+
     parts = data.split(":")
     if len(parts) != 4 or parts[0] != "crm" or parts[1] != "status":
         return False
