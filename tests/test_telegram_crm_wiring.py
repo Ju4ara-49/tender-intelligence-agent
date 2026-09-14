@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.crm.telegram import handle_callback
 from src.models.tender import Tender, TenderAnalysis
@@ -73,6 +76,36 @@ class TelegramCrmWiringTests(unittest.TestCase):
 
         source = __import__("pathlib").Path(__import__("src.telegram_multiuser", fromlist=["MultiUserTelegramBot"]).__file__).read_text(encoding="utf-8")
         self.assertIn("orchestrator.run_cycle_for_user(chat_id)", source)
+
+    def test_removing_user_stops_active_search_before_access_is_revoked(self) -> None:
+        bot = object.__new__(MultiUserTelegramBot)
+        bot._allowed_user_ids = {"838120236", "42"}
+        bot._whitelist_lock = __import__("threading").Lock()
+        bot._search_lock = __import__("threading").Lock()
+        bot._admin_waiting = {"838120236": "remove"}
+        bot._send = lambda *args, **kwargs: None
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self.stop_calls = 0
+
+            def request_stop(self):
+                self.stop_calls += 1
+
+        orchestrator = FakeOrchestrator()
+        bot._user_orchestrators = {"42": orchestrator}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            whitelist = Path(tmp) / "telegram_allowed_users.json"
+            with patch("src.telegram_multiuser.WHITELIST_FILE", whitelist):
+                bot._remove_user("838120236", "42")
+            self.assertEqual(orchestrator.stop_calls, 1)
+            self.assertNotIn("42", bot._allowed_user_ids)
+            self.assertEqual(__import__("json").loads(whitelist.read_text(encoding="utf-8")), [])
+
+    def test_whitelist_file_is_resolved_from_project_root(self) -> None:
+        source = __import__("pathlib").Path(__import__("src.telegram_multiuser", fromlist=["MultiUserTelegramBot"]).__file__).read_text(encoding="utf-8")
+        self.assertIn("WHITELIST_FILE = PROJECT_ROOT / \"data\" / \"telegram_allowed_users.json\"", source)
 
 
 if __name__ == "__main__":
