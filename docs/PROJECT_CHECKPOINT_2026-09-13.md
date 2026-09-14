@@ -135,3 +135,20 @@ Validation: commit 249be34e7e745f7c9c57985ae443c10be5a42901; CI #580 SUCCESS. Br
 Важно: browser diagnostics не объявляет внешние timeout успехом. Для 100% live-подтверждения этих трёх площадок требуется runner/network, из которого они реально доступны. Web-доступ отдельно подтвердил, что TMK отвечает JS/Cookie challenge, а ЕИС также не проходит внешний fetch; это подтверждает внешний характер ограничения, но не заменяет production browser probe.
 
 Следующая контрольная точка: 249be34e7e745f7c9c57985ae443c10be5a42901.
+
+
+## Validation cycle 14.09.2026 — CRM convergence + browser diagnostics hardening
+
+Контрольная точка обновлена после обнаружения реального CI-дефекта: в репозитории существовали две расходящиеся реализации TenderBoard — старая в src/storage и новая в src/crm/board. Тесты импортировали старую реализацию, из-за чего case-insensitive labels и unassign были фактически не доступны тестируемому API. Исправлено: каноническая реализация теперь находится в src/storage, src/crm/board является совместимым re-export, добавлены persistent history, нормализация/уникальность label_key и миграция старой схемы.
+
+Добавлены regression tests на идентичность обоих import paths и миграцию legacy label schema.
+
+CI #592 — SUCCESS на commit 94ef517442a92408c9827bd3fac3c4395118c831.
+
+Browser diagnostics #338 — SUCCESS на том же commit; ci_failures=[]. На реальном browser probe B2B-Center, Фабрикант 223/44 и Росатом дали HTTP 200 и реальные result/link evidence. ЕИС, RTS-Tender и TMK дали external_timeout; это классифицировано как external_access, не Python failure.
+
+Дополнительно устранён флап diagnostics Росатома: legacy published-procurement page иногда не содержит поискового control, но содержит реальные официальные procedure links. Такой ответ теперь классифицируется как listing_available/published_listing_fallback, а не ложный search_adapter CI failure. Это не маскирует WAF/HTTP blocks и не объявляет отсутствие поиска полноценным search success.
+
+Алгоритм на будущее закреплён: 1) фиксировать commit/checkpoint; 2) аудит collectors → detail contract/normalization → filters → dedup/storage/notification → AI/Ollama → Telegram/CRM → Excel → orchestrator/scheduler → CI → browser/live diagnostics; 3) каждый найденный внутренний дефект исправлять в коде; 4) добавлять regression test; 5) повторять полный CI; 6) разбирать фактический diagnostic artifact, а не только статус workflow; 7) внешние timeout/WAF не маскировать под success; 8) при флапах диагностики улучшать классификацию и повторять полный прогон до GREEN.
+
+Следующая контрольная точка: 94ef517442a92408c9827bd3fac3c4395118c831.
