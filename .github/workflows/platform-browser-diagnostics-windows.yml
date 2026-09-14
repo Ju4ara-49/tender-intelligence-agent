@@ -35,6 +35,8 @@ jobs:
 
       - name: Probe all supported public tender portals
         shell: pwsh
+        env:
+          HARD_EXTERNAL_ACCESS: "1"
         run: python tests/platform_browser_diagnostics.py
 
       - name: Validate diagnostics artifacts
@@ -42,6 +44,7 @@ jobs:
         shell: pwsh
         run: |
           python -c "from pathlib import Path; p=Path('output/platform_browser_diagnostics'); required=['report.json','summary.md','eis.png','b2b_center.png','fabrikant_223.png','fabrikant_44.png','rts_tender.png','tmk.png','rosatom.png']; missing=[x for x in required if not (p/x).is_file() or (p/x).stat().st_size == 0]; raise SystemExit('missing: '+', '.join(missing) if missing else 0)"
+          $env:HARD_EXTERNAL_ACCESS = "1"
           python tests/platform_browser_diagnostics_gate.py
 
       - name: Upload diagnostics
