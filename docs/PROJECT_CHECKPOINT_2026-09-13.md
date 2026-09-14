@@ -152,3 +152,16 @@ Browser diagnostics #338 — SUCCESS на том же commit; ci_failures=[]. Н
 Алгоритм на будущее закреплён: 1) фиксировать commit/checkpoint; 2) аудит collectors → detail contract/normalization → filters → dedup/storage/notification → AI/Ollama → Telegram/CRM → Excel → orchestrator/scheduler → CI → browser/live diagnostics; 3) каждый найденный внутренний дефект исправлять в коде; 4) добавлять regression test; 5) повторять полный CI; 6) разбирать фактический diagnostic artifact, а не только статус workflow; 7) внешние timeout/WAF не маскировать под success; 8) при флапах диагностики улучшать классификацию и повторять полный прогон до GREEN.
 
 Следующая контрольная точка: 94ef517442a92408c9827bd3fac3c4395118c831.
+
+
+## Validation cycle 14.09.2026 — EIS detail contract hardening
+
+В очередном полном аудите обнаружен реальный дефект ЕИС: финальная функция _extract_region_from_soup() содержала повреждённые маркеры/дублированный код, из-за чего детальная карточка могла терять регион. Функция заменена на устойчивое text-based извлечение по текущим русским labels с корректными stop markers и fallback по адресу. Добавлены regression tests для явного региона и места поставки.
+
+В том же слое обнаружен второй функциональный дефект: _extract_commercial_conditions() уже существовал, но результат не переносился в нормализованные поля Tender при разборе detail page. Теперь EIS detail сохраняет advance_required, advance_percent, postpayment_days, application_security_percent, contract_security_percent и raw_data.commercial_conditions. Добавлен regression test на аванс 30%, постоплату 45 дней, обеспечение заявки 1% и контракта 5%.
+
+CI #597 — SUCCESS на commit b9e48c8d1afb51912159b68a98c979a2c56c4fc1.
+
+Browser diagnostics #343 — SUCCESS на том же commit; ci_failures=[]. Результаты конкретного прогона: Фабрикант 223/44 и Росатом — ok; ЕИС, РТС-Тендер, ТМК — external_timeout; B2B-Center в этом конкретном запуске также дал external_timeout. Это не считается Python failure и показывает сетевую нестабильность GitHub-hosted runner, а не дефект parser/adapter. Предыдущие и последующие browser runs подтверждают, что B2B-Center периодически даёт реальные 23k+ результаты.
+
+Следующая контрольная точка: b9e48c8d1afb51912159b68a98c979a2c56c4fc1.
