@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -33,6 +34,13 @@ NETWORK_IDLE_TIMEOUT_MS = 2500
 SEARCH_SETTLE_MS = 2500
 SCREENSHOT_TIMEOUT_MS = 5000
 HARD_EXTERNAL_ACCESS = os.getenv("HARD_EXTERNAL_ACCESS", "").strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_CHALLENGE_MARKERS = (
+    "для работы с сайтом необходимы включенные javascript и cookies",
+    "для работы с сайтом необходимы включенные javascript",
+    "пожалуйста подождите",
+    "enable javascript and cookies",
+    "checking your browser",
+)
 
 SEARCH_SELECTORS = (
     "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
@@ -74,6 +82,11 @@ def classify_http_access(status: int | None) -> str | None:
 def is_external_timeout(exc: Exception) -> bool:
     message = str(exc).lower()
     return any(marker.lower() in message for marker in EXTERNAL_TIMEOUT_MARKERS)
+
+
+def is_external_challenge(text: str) -> bool:
+    normalized = " ".join(str(text).split()).lower()
+    return any(marker in normalized for marker in EXTERNAL_CHALLENGE_MARKERS)
 
 
 def goto_with_retries(page, url: str, *, timeout_ms: int = NAVIGATION_TIMEOUT_MS, attempts: int = NAVIGATION_ATTEMPTS):
@@ -204,6 +217,8 @@ def save_viewport_screenshot(page, name: str) -> None:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     report: dict[str, object] = {}
     failures: list[str] = []
     ci_failures: list[str] = []
@@ -259,7 +274,15 @@ def main() -> int:
                     entry["result_link_count"] = len(links)
                     control_found = bool(entry["search"].get("control_found"))
                     result_count = entry.get("result_count")
-                    if not control_found:
+                    if not control_found and is_external_challenge(result_text):
+                        entry["diagnostic_state"] = "external_challenge"
+                        entry["failure_class"] = "external_access"
+                        entry["external_challenge"] = True
+                        message = f"{name}: external JavaScript/cookie challenge"
+                        failures.append(message)
+                        access_blocks.append(message)
+                        ci_failures.append(message)
+                    elif not control_found:
                         if has_published_listing_evidence(name, links) or has_rosatom_published_page(page.url, response.status if response else None):
                             entry["diagnostic_state"] = "listing_available"
                             entry["search_mode"] = "published_listing_fallback"
