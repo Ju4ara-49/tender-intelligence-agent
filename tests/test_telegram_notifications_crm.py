@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.crm.telegram import handle_callback
 from src.models.tender import Tender, TenderAnalysis
@@ -31,6 +32,31 @@ class _FakeBot:
         self.sent.append((chat_id, text))
 
 
+class _FakeHttpResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self.payload
+
+
+class _FakeHttpClient:
+    def __init__(self, response: _FakeHttpResponse) -> None:
+        self.response = response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def post(self, *args, **kwargs):
+        return self.response
+
+
 class TelegramNotificationCrmTests(unittest.TestCase):
     def _tender(self) -> Tender:
         return Tender(
@@ -55,14 +81,22 @@ class TelegramNotificationCrmTests(unittest.TestCase):
         self.assertIn("Статус тендера #42 изменён", bot.sent[-1][1])
 
     def test_notification_keeps_russian_recommendation(self) -> None:
-        analysis = TenderAnalysis(
-            relevance_score=90,
-            summary="Подходит",
-            recommendation="participate",
-        )
+        analysis = TenderAnalysis(relevance_score=90, summary="Подходит", recommendation="participate")
         text = TelegramNotifier.format_message(self._tender(), analysis)
         self.assertIn("Рекомендация:", text)
         self.assertIn("Участвовать", text)
+
+    def test_telegram_api_ok_false_is_delivery_failure(self) -> None:
+        notifier = TelegramNotifier(bot_token="token", chat_id="42", dry_run_when_no_token=False)
+        response = _FakeHttpResponse({"ok": False, "error_code": 400, "description": "Bad Request: chat not found"})
+        with patch("src.notifications.telegram.httpx.Client", return_value=_FakeHttpClient(response)):
+            self.assertFalse(notifier.send_text("test"))
+
+    def test_telegram_api_ok_true_is_delivery_success(self) -> None:
+        notifier = TelegramNotifier(bot_token="token", chat_id="42", dry_run_when_no_token=False)
+        response = _FakeHttpResponse({"ok": True, "result": {"message_id": 1}})
+        with patch("src.notifications.telegram.httpx.Client", return_value=_FakeHttpClient(response)):
+            self.assertTrue(notifier.send_text("test"))
 
 
 if __name__ == "__main__":
