@@ -206,18 +206,48 @@ class MultiUserTelegramBot(TelegramBot):
                 text += f'\n🔗 <a href="{url}">Открыть тендер</a>'
             self._send(chat_id, text, self._keyboard())
 
+    @staticmethod
+    def _aggregate_profile_stats(profile_stats: list[dict[str, int]]) -> dict[str, int]:
+        if not profile_stats:
+            return {"search_number": 0}
+        keys = set().union(*(stats.keys() for stats in profile_stats))
+        aggregate: dict[str, int] = {}
+        for key in keys:
+            values = [int(stats.get(key, 0) or 0) for stats in profile_stats]
+            aggregate[key] = max(values) if key == "search_number" else sum(values)
+        aggregate["profile_count"] = len(profile_stats)
+        return aggregate
+
     def _run_search_for_user(self, chat_id: str, orchestrator: Orchestrator) -> None:
         started_at = time.monotonic()
-        self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров.", self._keyboard())
+        self._send(chat_id, "🔄 <b>Поиск выполняется...</b>\n\nИдёт сбор и анализ тендеров по всем включённым ключам.", self._keyboard())
         try:
-            # Критерии, keywords и площадки передаются в Orchestrator явно.
-            # Никакого общего user context для потока не используется.
-            stats = orchestrator.run_cycle(user_id=chat_id)
+            # Критерии, keywords, площадки и сохранённые профили пользователя
+            # теперь действительно передаются через профильный runtime. Ранее
+            # здесь ошибочно вызывался одиночный run_cycle(), из-за чего UI
+            # профилей сохранял настройки, но обычная кнопка «Поиск» их игнорировала.
+            profile_stats = orchestrator.run_cycle_for_user(chat_id)
+            stats = self._aggregate_profile_stats(profile_stats)
             self._send_search_results(chat_id, orchestrator)
             elapsed = int(time.monotonic() - started_at)
             elapsed_text = f"{elapsed // 60} мин. {elapsed % 60:02d} сек." if elapsed >= 60 else f"{elapsed} сек."
             state = "остановлен" if orchestrator.stop_requested else "завершён"
-            text = f"{'⛔' if orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\nВремя: {elapsed_text}\nНайдено: {stats['found']}\nПрошло фильтр: {stats['filtered']}\nНовых: {stats['new']}\nAI: {stats['analyzed']}\nИсключено: {stats['excluded_by_criteria']}\nУведомлений: {stats['notified']}\nДублей: {stats['skipped_duplicate']}\n\n📊 <b>Результат сохранён в Excel.</b>"
+            platform_errors = int(stats.get("platform_errors", 0) or 0)
+            platform_warning = f"\n⚠️ Недоступных площадок: {platform_errors}" if platform_errors else ""
+            text = (
+                f"{'⛔' if orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\n"
+                f"Профилей: {stats.get('profile_count', 0)}\n"
+                f"Время: {elapsed_text}\n"
+                f"Найдено: {stats.get('found', 0)}\n"
+                f"Прошло фильтр: {stats.get('filtered', 0)}\n"
+                f"Новых: {stats.get('new', 0)}\n"
+                f"AI: {stats.get('analyzed', 0)}\n"
+                f"Исключено: {stats.get('excluded_by_criteria', 0)}\n"
+                f"Уведомлений: {stats.get('notified', 0)}\n"
+                f"Дублей: {stats.get('skipped_duplicate', 0)}"
+                f"{platform_warning}\n\n"
+                "📊 <b>Результаты сохранены в Excel по каждому профилю.</b>"
+            )
             self._send(chat_id, text, self._keyboard())
         except Exception:
             logger.exception("Telegram-бот: ошибка выполнения поиска для chat_id=%s", chat_id)
