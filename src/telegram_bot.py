@@ -1,9 +1,4 @@
-"""Интерактивный Telegram-бот Tender Intelligence Agent.
-
-Доступ открыт для пользователей Telegram. Настройки и запущенные поиски
-изолированы по chat_id пользователя. TELEGRAM_CHAT_ID используется только
-для административного уведомления о запуске бота.
-"""
+"""Интерактивный Telegram-бот Tender Intelligence Agent."""
 from __future__ import annotations
 
 import logging
@@ -12,6 +7,8 @@ import time
 
 import httpx
 
+from src.crm.telegram import handle_callback as handle_crm_callback
+from src.crm.telegram import handle_message as handle_crm_message
 from src.orchestrator import Orchestrator
 from src.settings import AppSettings
 
@@ -41,6 +38,7 @@ HELP_TEXT = (
     "/settings — показать критерии\n"
     "/стоп — остановить свой поиск\n"
     "/help — эта справка\n\n"
+    "CRM: /tender ID, /crm_status ID STATUS, /assign ID ФИО, /label ID метка.\n\n"
     "У каждого пользователя свои ключевые слова, фильтры и площадки."
 )
 
@@ -144,6 +142,9 @@ class TelegramBot:
             self._answer_callback(callback_id)
             return
         try:
+            if data.startswith("crm:") and handle_crm_callback(self, chat_id, data):
+                self._answer_callback(callback_id)
+                return
             if data == "platform:close":
                 self._answer_callback(callback_id)
                 self._send(chat_id, "Настройки площадок закрыты.", self._keyboard())
@@ -208,6 +209,8 @@ class TelegramBot:
             return
         logger.info("Telegram-бот: получено сообщение chat_id=%s: %s", chat_id, text)
         try:
+            if handle_crm_message(self, chat_id, text):
+                return
             if chat_id in self._waiting_for:
                 menu_buttons = {BTN_PRICE_FROM, BTN_PRICE_TO, BTN_SCORE, BTN_DAYS, BTN_KEYWORDS, BTN_PLATFORMS, BTN_RESET, BTN_SEARCH, BTN_SETTINGS, BTN_STOP, BTN_HELP}
                 if text not in menu_buttons and self._handle_value_input(chat_id, text):
@@ -324,6 +327,8 @@ class TelegramBot:
             elapsed = int(time.monotonic() - started_at)
             elapsed_text = f"{elapsed // 60} мин. {elapsed % 60:02d} сек." if elapsed >= 60 else f"{elapsed} сек."
             state = "остановлен" if search_orchestrator.stop_requested else "завершён"
+            platform_errors = int(stats.get("platform_errors", 0))
+            platform_warning = f"⚠️ Недоступных площадок: {platform_errors}\n" if platform_errors else ""
             text = (
                 f"{'⛔' if search_orchestrator.stop_requested else '✅'} <b>Поиск №{stats['search_number']:03d} {state}.</b>\n\n"
                 f"Время работы: {elapsed_text}\n\n"
@@ -333,7 +338,8 @@ class TelegramBot:
                 f"Проанализировано AI: {stats['analyzed']}\n"
                 f"Исключено по критериям: {stats['excluded_by_criteria']}\n"
                 f"Отправлено уведомлений: {stats['notified']}\n"
-                f"Пропущено дублей: {stats['skipped_duplicate']}\n\n"
+                f"Пропущено дублей: {stats['skipped_duplicate']}\n"
+                f"{platform_warning}\n"
                 "📊 <b>Результат сохранён в Excel.</b>"
             )
             self._send(chat_id, text, self._keyboard())
