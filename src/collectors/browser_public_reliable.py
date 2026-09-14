@@ -6,6 +6,7 @@ import re
 
 from bs4 import BeautifulSoup
 
+from src.collectors.base import CollectorUnavailableError
 from src.collectors.browser_public import RtsTenderCollector, TmkCollector
 from src.collectors.rosatom import RosatomCollector
 
@@ -57,11 +58,6 @@ class ReliableBrowserSearchMixin:
 
                 search_control_found = self._perform_search(page, query)
                 if not search_control_found:
-                    # Some legacy public portals (currently Rosatom) expose a
-                    # real published-procurement registry but no usable search
-                    # widget. Do not turn that valid listing into a false
-                    # zero-result search: retain the rendered registry and let
-                    # the normal Tender/KeywordFilter pipeline apply the query.
                     if getattr(self, "ALLOW_PUBLISHED_LISTING_FALLBACK", False):
                         html = self._collect_rendered_html(page)
                         logger.warning(
@@ -72,17 +68,15 @@ class ReliableBrowserSearchMixin:
                         results = self._parse_results(html)
                         logger.info(
                             "%s: published-listing fallback returned %d procedures",
-                            self.platform, len(results),
+                            self.platform,
+                            len(results),
                         )
                         return results[: self.max_results]
-                    logger.warning(
-                        "%s: SEARCH_ADAPTER_UNAVAILABLE — поле/кнопка поиска не найдены для %r; не считаем это успешным нулевым поиском",
-                        self.platform, query,
-                    )
                     self._log_page_state(page)
-                    self._collect_rendered_html(page)
                     browser.close()
-                    return []
+                    raise CollectorUnavailableError(
+                        f"{self.platform}: search control unavailable for {query!r}"
+                    )
 
                 page.wait_for_timeout(4500)
                 try:
@@ -93,20 +87,28 @@ class ReliableBrowserSearchMixin:
                 self._expand_results(page)
                 html = self._collect_rendered_html(page)
                 browser.close()
+        except CollectorUnavailableError:
+            raise
         except Exception as exc:
             logger.warning("%s: browser search failed for %r: %s", self.platform, query, exc)
-            return []
+            raise CollectorUnavailableError(
+                f"{self.platform}: browser search failed for {query!r}: {type(exc).__name__}: {exc}"
+            ) from exc
 
         results = self._parse_results(html)
         if search_control_found and not results:
-            # Keep the rendered page for parser diagnostics and make the
-            # zero-result state explicit. A successful click with a skeleton
-            # response must never be treated as a valid empty search.
             logger.warning(
                 "%s: RESULT_PARSER_ZERO — submitted search produced no parsed procedures for %r",
-                self.platform, query,
+                self.platform,
+                query,
             )
-        logger.info("%s: keyword=%r: search_control=%s, принято %d результатов", self.platform, query, search_control_found, len(results))
+        logger.info(
+            "%s: keyword=%r: search_control=%s, принято %d результатов",
+            self.platform,
+            query,
+            search_control_found,
+            len(results),
+        )
         return results
 
     def _parse_detail(self, html: str, external_id: str, url: str):
