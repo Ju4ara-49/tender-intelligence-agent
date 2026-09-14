@@ -43,7 +43,7 @@ class TelegramNotifier:
         chat_id: str | None = None,
         tender_id: int | None = None,
     ) -> bool:
-        """Send an alert with a direct CRM participation action when an ID is known."""
+        """Send an alert with a direct CRM participation action."""
         message = self.format_message(tender, analysis)
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         reply_markup = self._tender_keyboard(tender, tender_id)
@@ -61,7 +61,11 @@ class TelegramNotifier:
     def _tender_keyboard(tender: Tender, tender_id: int | None) -> dict:
         rows: list[list[dict[str, str]]] = []
         if tender_id is not None and int(tender_id) > 0:
-            rows.append([{"text": "УЧАСТВОВАТЬ", "callback_data": f"crm:status:{int(tender_id)}:participating"}])
+            callback_data = f"crm:status:{int(tender_id)}:participating"
+        else:
+            callback_data = f"crm:participate:{tender.platform}:{tender.external_id}"
+        if len(callback_data.encode("utf-8")) <= 64:
+            rows.append([{"text": "УЧАСТВОВАТЬ", "callback_data": callback_data}])
         if tender.url:
             rows.append([{"text": "Открыть тендер", "url": str(tender.url)}])
         return {"inline_keyboard": rows}
@@ -119,11 +123,7 @@ class TelegramNotifier:
             risks = "\n⚠️ <b>Риски:</b> " + "; ".join(safe_risks)
 
         stub_note = "\n<i>(ИИ-заглушка — используется вместо локального Ollama)</i>" if analysis.is_stub else ""
-        rec_map = {
-            "participate": "Участвовать",
-            "skip": "Пропустить",
-            "review": "На проверку",
-        }
+        rec_map = {"participate": "Участвовать", "skip": "Пропустить", "review": "На проверку"}
         rec = html.escape(str(rec_map.get(analysis.recommendation, analysis.recommendation or "")))
         platform = html.escape(cls.platform_name(tender.platform))
 
