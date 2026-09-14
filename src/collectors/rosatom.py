@@ -59,19 +59,13 @@ class RosatomCollector(_BrowserTenderCollector):
         price = self._extract_price("НМЦ, руб: " + (cells[2] if len(cells) > 2 else ""))
         customer = self._clean_cell(cells[3]) if len(cells) > 3 else ""
         published_at = self._extract_datetime(
-            self._clean_cell(cells[4]) if len(cells) > 4 else "",
-            ("",),
+            "Дата публикации " + (cells[4] if len(cells) > 4 else ""),
+            ("Дата публикации",),
         )
         deadline_text = self._clean_cell(cells[5]) if len(cells) > 5 else ""
-        deadline = self._extract_date(deadline_text)
+        deadline = self._extract_datetime("Дата окончания " + deadline_text, ("Дата окончания",))
         platform = self._clean_cell(cells[6]) if len(cells) > 6 else ""
         region = self._clean_cell(cells[7]) if len(cells) > 7 else ""
-
-        if not published_at:
-            published_at = self._extract_datetime(
-                "Дата публикации " + (cells[4] if len(cells) > 4 else ""),
-                ("Дата публикации",),
-            )
 
         url = href or self.BASE_URL
         raw_data = {
@@ -99,14 +93,7 @@ class RosatomCollector(_BrowserTenderCollector):
         )
 
     def _parse_results(self, html: str) -> list[Tender]:
-        """Parse both direct procedure links and the current published table.
-
-        The current portal renders the published registry as table rows whose
-        individual procedure navigation is client-side. There may be no
-        anchor with ``obj_id`` in the rendered HTML, so link-only parsing
-        silently returned zero results. We therefore parse the row contract
-        directly and retain the official/internal numbers needed for follow-up.
-        """
+        """Parse direct procedure links and the current published table."""
         from bs4 import BeautifulSoup
         from urllib.parse import urljoin
 
@@ -117,9 +104,7 @@ class RosatomCollector(_BrowserTenderCollector):
 
         body_text = " ".join(soup.stripped_strings).lower()
         if "web application firewall" in body_text or "временно заблокирован" in body_text:
-            logger.warning(
-                "rosatom: официальный портал вернул страницу WAF; поиск невозможен без обхода защиты"
-            )
+            logger.warning("rosatom: официальный портал вернул страницу WAF; поиск невозможен без обхода защиты")
             return []
 
         # Preferred path: direct procedure links, when the portal exposes them.
@@ -138,16 +123,14 @@ class RosatomCollector(_BrowserTenderCollector):
                 continue
             seen.add(obj_id)
             self._urls[obj_id] = href
-            results.append(
-                Tender(
-                    platform=self.platform,
-                    external_id=obj_id,
-                    title=title[:1000],
-                    url=href,
-                    description=title,
-                    raw_data={"source": "zakupki.rosatom.ru", "obj_id": obj_id},
-                )
-            )
+            results.append(Tender(
+                platform=self.platform,
+                external_id=obj_id,
+                title=title[:1000],
+                url=href,
+                description=title,
+                raw_data={"source": "zakupki.rosatom.ru", "obj_id": obj_id},
+            ))
 
         # Current published-registry table fallback.
         header_row = None
@@ -172,8 +155,8 @@ class RosatomCollector(_BrowserTenderCollector):
                 self._urls[tender.external_id] = self.BASE_URL
                 results.append(tender)
 
-        # Some SPA builds do not use <tr>/<td>; recover the same contract from
-        # elements carrying row-like data attributes without guessing URLs.
+        # Some SPA builds do not use <tr>/<td>; recover rows carrying a stable
+        # data id without inventing a detail URL.
         if not results:
             for node in soup.find_all(attrs={"data-procurement-id": True}):
                 number = self._clean_cell(node.get("data-procurement-id"))
@@ -197,12 +180,7 @@ class RosatomCollector(_BrowserTenderCollector):
         return results
 
     def get_details(self, external_id: str) -> Tender | None:
-        """Refresh one Rosatom row through the published registry.
-
-        Published rows do not always expose a stable detail href in the DOM.
-        Searching by the internal row number is therefore safer than opening
-        the whole registry as if it were a detail page.
-        """
+        """Refresh one Rosatom row through the published registry."""
         target = str(external_id).strip()
         if not target:
             return None
