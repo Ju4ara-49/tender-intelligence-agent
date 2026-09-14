@@ -136,3 +136,24 @@ def test_negative_deadline_window_is_rejected():
     board = TenderBoard(_db_with_tender())
     with pytest.raises(ValueError, match="within_days"):
         board.upcoming_deadlines(-1)
+
+
+
+def test_storage_and_crm_imports_share_one_canonical_board():
+    from src.crm.board import TenderBoard as CrmTenderBoard
+    from src.storage import TenderBoard as StorageTenderBoard
+    assert CrmTenderBoard is StorageTenderBoard
+
+
+def test_legacy_label_schema_is_migrated_without_case_duplicates(tmp_path):
+    db = TenderDatabase(tmp_path / "legacy_crm.db")
+    with db._connect() as conn:
+        conn.execute("INSERT INTO tenders (platform, external_id, unique_key, title, url, first_seen_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ("eis", "LEGACY-1", "eis:LEGACY-1", "Legacy CRM", "https://example.test/legacy", "2026-09-14T00:00:00+00:00", "2026-09-14T00:00:00+00:00"))
+        conn.execute("CREATE TABLE tender_board (tender_id INTEGER PRIMARY KEY, status TEXT NOT NULL DEFAULT 'new', assignee TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)")
+        conn.execute("CREATE TABLE tender_labels (id INTEGER PRIMARY KEY AUTOINCREMENT, tender_id INTEGER NOT NULL, label TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(tender_id, label))")
+        conn.execute("INSERT INTO tender_labels (tender_id, label, created_at) VALUES (1, ' Участвуем ', '2026-09-14T00:00:00+00:00')")
+        conn.execute("INSERT INTO tender_labels (tender_id, label, created_at) VALUES (1, 'участвуем', '2026-09-14T00:00:01+00:00')")
+    board = TenderBoard(db)
+    assert board.labels(1) == ["Участвуем"]
+    board.add_label(1, "УЧАСТВУЕМ")
+    assert board.labels(1) == ["Участвуем"]
