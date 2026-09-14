@@ -69,7 +69,9 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
         self.assertIn('"external_access"', source)
         self.assertIn("access_blocks.append(message)", source)
         self.assertIn("ci_failures.append(message)", source)
-        self.assertIn("return 1 if ci_failures else 0", source)
+        self.assertIn("HARD_EXTERNAL_ACCESS", source)
+        self.assertIn("blocking_failures = list(internal_failures)", source)
+        self.assertIn("if HARD_EXTERNAL_ACCESS:", source)
 
     def test_report_contract_keeps_external_failures_in_ci_gate(self) -> None:
         report = {
@@ -78,12 +80,16 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
             "access_blocks": ["rts_tender: external navigation timeout"],
             "access_block_count": 1,
             "ci_failure_count": 1,
+            "internal_failures": [],
+            "hard_external_access": False,
         }
         serialized = json.dumps(report, ensure_ascii=False)
         loaded = json.loads(serialized)
         self.assertEqual(loaded["access_block_count"], 1)
         self.assertEqual(loaded["ci_failure_count"], 1)
         self.assertEqual(loaded["ci_failures"], loaded["access_blocks"])
+        self.assertEqual(loaded["internal_failures"], [])
+        self.assertFalse(loaded["hard_external_access"])
 
 
 if __name__ == "__main__":
