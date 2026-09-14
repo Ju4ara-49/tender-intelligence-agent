@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 
@@ -29,6 +30,7 @@ def main() -> int:
         raise AssertionError("browser diagnostics report.json is missing")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     failures: list[str] = []
+    hard_external_access = os.getenv("HARD_EXTERNAL_ACCESS", "").strip().lower() in {"1", "true", "yes", "on"}
 
     for target in TARGETS:
         entry = report.get(target)
@@ -50,15 +52,29 @@ def main() -> int:
             if width <= 1 or height <= 1:
                 failures.append(f"{target}: successful diagnostic has synthetic/1x1 screenshot")
 
+    internal_failures = report.get("internal_failures")
+    if not isinstance(internal_failures, list):
+        failures.append("report: internal_failures is missing or not a list")
+    elif internal_failures:
+        for item in internal_failures:
+            failures.append(f"report: internal failure: {item}")
+
     ci_failures = report.get("ci_failures")
     if not isinstance(ci_failures, list):
         failures.append("report: ci_failures is missing or not a list")
-    elif ci_failures:
-        print("Hard external/diagnostic failures remain:")
+    elif ci_failures and hard_external_access:
+        print("Hard external/diagnostic failures remain on this runner:")
         for item in ci_failures:
             print(f"- {item}")
-            failures.append(f"report: {item}")
+        for item in ci_failures:
+            if item not in failures:
+                failures.append(f"report: {item}")
+    elif ci_failures:
+        print("External/diagnostic limitations are recorded but are non-blocking on this runner:")
+        for item in ci_failures:
+            print(f"- {item}")
 
+    print(f"Browser diagnostics artifact gate policy: hard_external_access={hard_external_access}")
     if failures:
         print("Browser diagnostics artifact gate FAILED:")
         for item in failures:
