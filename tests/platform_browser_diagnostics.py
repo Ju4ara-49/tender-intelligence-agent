@@ -40,6 +40,9 @@ EXTERNAL_CHALLENGE_MARKERS = (
     "пожалуйста подождите",
     "enable javascript and cookies",
     "checking your browser",
+    "web page blocked!",
+    "the url you requested has been blocked",
+    "attack id:",
 )
 
 SEARCH_SELECTORS = (
