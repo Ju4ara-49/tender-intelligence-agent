@@ -35,10 +35,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Tender Intelligence Agent — мониторинг тендеров")
     parser.add_argument(
         "command",
-        choices=["run", "once", "status", "bot"],
+        choices=["run", "once", "status", "bot", "web"],
         help=(
             "run — непрерывный режим; once — одна проверка; "
-            "status — статистика БД; bot — интерактивный Telegram-бот (/settings, /search)"
+            "status — статистика БД; bot — интерактивный Telegram-бот; "
+            "web — локальная web-форма профилей поиска"
         ),
     )
     args = parser.parse_args()
@@ -71,6 +72,11 @@ def main() -> int:
 
     if args.command == "run":
         run_scheduled(settings)
+        return 0
+
+    if args.command == "web":
+        from src.web_ui import serve
+        serve(settings)
         return 0
 
     if args.command == "bot":
