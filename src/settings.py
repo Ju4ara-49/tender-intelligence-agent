@@ -214,6 +214,13 @@ def load_settings(env_file: Path | None = None) -> AppSettings:
             "smtp.mail.ru",
         ).strip(),
 
+        email_smtp_port=int(
+            os.getenv(
+                "EMAIL_SMTP_PORT",
+                "465",
+            ).strip()
+        ),
+
         email_from=os.getenv(
             "EMAIL_FROM",
             "specmash_prom@mail.ru",
