@@ -21,13 +21,7 @@ class RosatomCollector(_BrowserTenderCollector):
 
     platform = "rosatom"
     BASE_URL = "https://zakupki.rosatom.ru/?link=published_procurements"
-    SEARCH_HINTS = (
-        "Поиск",
-        "Найти",
-        "Искать",
-        "Найти закупку",
-        "Поиск закупок",
-    )
+    SEARCH_HINTS = ("Поиск", "Найти", "Искать", "Найти закупку", "Поиск закупок")
     LINK_HINTS = ("procurements", "obj_id", "published_procurements")
     ALLOW_PUBLISHED_LISTING_FALLBACK = True
 
@@ -37,7 +31,6 @@ class RosatomCollector(_BrowserTenderCollector):
 
     @staticmethod
     def _split_procurement_number(value: str) -> tuple[str, str]:
-        """Return Rosatom internal row id and the optional official number."""
         text = RosatomCollector._clean_cell(value)
         match = re.search(r"(\d+)\s*\(\s*(\d+)\s*\)", text)
         if match:
@@ -51,7 +44,6 @@ class RosatomCollector(_BrowserTenderCollector):
         number, official_number = self._split_procurement_number(cells[0])
         if not number:
             return None
-
         title = self._clean_cell(cells[1]) if len(cells) > 1 else ""
         if not title or title.lower() in {"предмет договора", "наименование закупки"}:
             return None
@@ -63,6 +55,7 @@ class RosatomCollector(_BrowserTenderCollector):
             ("Дата публикации",),
         )
         deadline_text = self._clean_cell(cells[5]) if len(cells) > 5 else ""
+        deadline_text = re.sub(r"\bЭтап\s*\d+\s*:\s*", "", deadline_text, flags=re.I)
         deadline = self._extract_datetime("Дата окончания " + deadline_text, ("Дата окончания",))
         platform = self._clean_cell(cells[6]) if len(cells) > 6 else ""
         region = self._clean_cell(cells[7]) if len(cells) > 7 else ""
@@ -101,13 +94,11 @@ class RosatomCollector(_BrowserTenderCollector):
         results: list[Tender] = []
         seen: set[str] = set()
         base_host = urlparse(self.BASE_URL).netloc.lower()
-
         body_text = " ".join(soup.stripped_strings).lower()
         if "web application firewall" in body_text or "временно заблокирован" in body_text:
             logger.warning("rosatom: официальный портал вернул страницу WAF; поиск невозможен без обхода защиты")
             return []
 
-        # Preferred path: direct procedure links, when the portal exposes them.
         for anchor in soup.find_all("a", href=True):
             raw_href = str(anchor.get("href", "")).strip()
             href = urljoin(self.BASE_URL, raw_href)
@@ -132,14 +123,10 @@ class RosatomCollector(_BrowserTenderCollector):
                 raw_data={"source": "zakupki.rosatom.ru", "obj_id": obj_id},
             ))
 
-        # Current published-registry table fallback.
         header_row = None
         for row in soup.find_all("tr"):
             cells = [self._clean_cell(cell.get_text(" ", strip=True)) for cell in row.find_all(["th", "td"])]
-            if not cells:
-                continue
-            lowered = " | ".join(cells).lower()
-            if "номер закупки" in lowered and "предмет договора" in lowered:
+            if cells and "номер закупки" in " | ".join(cells).lower() and "предмет договора" in " | ".join(cells).lower():
                 header_row = row
                 break
 
@@ -155,8 +142,6 @@ class RosatomCollector(_BrowserTenderCollector):
                 self._urls[tender.external_id] = self.BASE_URL
                 results.append(tender)
 
-        # Some SPA builds do not use <tr>/<td>; recover rows carrying a stable
-        # data id without inventing a detail URL.
         if not results:
             for node in soup.find_all(attrs={"data-procurement-id": True}):
                 number = self._clean_cell(node.get("data-procurement-id"))
@@ -202,7 +187,6 @@ class RosatomCollector(_BrowserTenderCollector):
         text = " ".join(soup.stripped_strings)
         title_node = soup.find("h1") or soup.find("title")
         title = " ".join(title_node.stripped_strings) if title_node else f"Закупка Росатома {external_id}"
-
         if "временно заблокирован" in text.lower() or "web application firewall" in text.lower():
             logger.warning("rosatom: WAF при загрузке деталей %s", external_id)
             return Tender(
@@ -224,7 +208,6 @@ class RosatomCollector(_BrowserTenderCollector):
             match = re.search(r"Организатор\s*[:\-]\s*(.+?)(?:\s+Контактное лицо|\s+Дата|$)", text, re.I)
             if match:
                 customer = match.group(1).strip()[:1000]
-
         region = self._extract_labeled_value(text, ("Регион поставки", "Место поставки", "Место выполнения", "Регион"))
         law_type = self._extract_labeled_value(text, ("Закон", "Вид закона", "Федеральный закон", "Тип закупки"))
         advance_percent = self._extract_percent(text, ("Аванс", "Предоплата", "Размер аванса"))
