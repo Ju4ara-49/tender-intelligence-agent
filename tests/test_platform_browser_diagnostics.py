@@ -62,28 +62,28 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
         self.assertIn('if __name__ == "__main__":', source)
         self.assertIn("raise SystemExit(main())", source)
 
-    def test_navigation_timeout_is_documented_as_external_access(self) -> None:
+    def test_navigation_timeout_is_a_hard_external_failure(self) -> None:
         source = Path(diagnostics.__file__).read_text(encoding="utf-8")
         self.assertIn("PlaywrightTimeoutError", source)
         self.assertIn('"external_timeout"', source)
         self.assertIn('"external_access"', source)
         self.assertIn("access_blocks.append(message)", source)
+        self.assertIn("ci_failures.append(message)", source)
         self.assertIn("return 1 if ci_failures else 0", source)
 
-    def test_report_contract_separates_access_blocks_from_ci_failures(self) -> None:
+    def test_report_contract_keeps_external_failures_in_ci_gate(self) -> None:
         report = {
-            "failures": ["eis: WAF or access block", "rts_tender: external navigation timeout"],
-            "ci_failures": [],
-            "access_blocks": ["eis: WAF or access block", "rts_tender: external navigation timeout"],
-            "access_block_count": 2,
-            "ci_failure_count": 0,
+            "failures": ["rts_tender: external navigation timeout"],
+            "ci_failures": ["rts_tender: external navigation timeout"],
+            "access_blocks": ["rts_tender: external navigation timeout"],
+            "access_block_count": 1,
+            "ci_failure_count": 1,
         }
         serialized = json.dumps(report, ensure_ascii=False)
         loaded = json.loads(serialized)
-        self.assertEqual(loaded["access_block_count"], 2)
-        self.assertEqual(loaded["ci_failure_count"], 0)
-        self.assertEqual(loaded["ci_failures"], [])
-        self.assertEqual(len(loaded["access_blocks"]), 2)
+        self.assertEqual(loaded["access_block_count"], 1)
+        self.assertEqual(loaded["ci_failure_count"], 1)
+        self.assertEqual(loaded["ci_failures"], loaded["access_blocks"])
 
 
 if __name__ == "__main__":
