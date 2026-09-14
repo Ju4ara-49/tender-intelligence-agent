@@ -1,0 +1,54 @@
+name: Platform Browser Diagnostics (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/collectors/**"
+      - "tests/platform_browser_diagnostics.py"
+      - "tests/platform_browser_diagnostics_gate.py"
+      - ".github/workflows/platform-browser-diagnostics-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  browser-diagnostics-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install chromium
+
+      - name: Probe all supported public tender portals
+        shell: pwsh
+        run: python tests/platform_browser_diagnostics.py
+
+      - name: Validate diagnostics artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          python -c "from pathlib import Path; p=Path('output/platform_browser_diagnostics'); required=['report.json','summary.md','eis.png','b2b_center.png','fabrikant_223.png','fabrikant_44.png','rts_tender.png','tmk.png','rosatom.png']; missing=[x for x in required if not (p/x).is_file() or (p/x).stat().st_size == 0]; raise SystemExit('missing: '+', '.join(missing) if missing else 0)"
+          python tests/platform_browser_diagnostics_gate.py
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-browser-diagnostics-windows
+          path: output/platform_browser_diagnostics/
+          if-no-files-found: error
+          retention-days: 7
