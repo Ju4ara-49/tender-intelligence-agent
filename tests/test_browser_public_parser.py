@@ -32,7 +32,6 @@ class BrowserPublicParserTests(unittest.TestCase):
             {"1234567", "7654321", "9876543", "11223344"},
         )
 
-
     def test_rosatom_reliable_collector_enables_published_listing_fallback(self) -> None:
         collector = ReliableRosatomCollector()
         self.assertTrue(collector.ALLOW_PUBLISHED_LISTING_FALLBACK)
@@ -51,6 +50,44 @@ class BrowserPublicParserTests(unittest.TestCase):
             {item.external_id for item in results},
             {"ABC123=", "DEF456="},
         )
+
+    def test_rosatom_parser_reads_current_published_table_rows(self) -> None:
+        from src.collectors.rosatom import RosatomCollector
+
+        html = """
+        <html><body>
+          <table>
+            <tr>
+              <th>Номер закупки</th><th>Предмет договора</th><th>НМЦ, руб</th>
+              <th>Организатор закупки</th><th>Дата публикации</th>
+              <th>Дата окончания подачи заявок/подведения итогов</th>
+              <th>Площадка размещения закупок</th><th>Регион поставки</th>
+            </tr>
+            <tr>
+              <td>233152 (5101874)</td>
+              <td>Право заключения договора на поставка подшипников</td>
+              <td>9 377 116,42</td>
+              <td>ООО "АРМЗ Сервис"</td>
+              <td>27.08.2026</td>
+              <td>Этап 1: 11.09.2026 10:00:00</td>
+              <td></td>
+              <td>Томская область</td>
+            </tr>
+          </table>
+        </body></html>
+        """
+        results = RosatomCollector()._parse_results(html)
+        self.assertEqual(len(results), 1)
+        tender = results[0]
+        self.assertEqual(tender.external_id, "233152")
+        self.assertEqual(tender.raw_data["official_number"], "5101874")
+        self.assertEqual(tender.customer, 'ООО "АРМЗ Сервис"')
+        self.assertEqual(tender.region, "Томская область")
+        self.assertAlmostEqual(tender.price or 0, 9377116.42)
+        self.assertIsNotNone(tender.published_at)
+        self.assertIsNotNone(tender.deadline)
+        self.assertTrue(tender.raw_data["discovery_only"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
