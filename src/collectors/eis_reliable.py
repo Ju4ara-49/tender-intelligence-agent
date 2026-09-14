@@ -1,12 +1,44 @@
 """EIS collector adapter that guarantees unified commercial-condition fields."""
 from __future__ import annotations
 
-from src.collectors.eis_zakupki import EisZakupkiCollector
+from datetime import datetime
+
+from src.collectors.base import CollectorUnavailableError
+from src.collectors.eis_zakupki import EisZakupkiCollector, SEARCH_URL
 from src.models.tender import Tender
 
 
 class ReliableEisZakupkiCollector(EisZakupkiCollector):
     """EIS collector with a final commercial-terms enrichment pass."""
+
+    def search(
+        self,
+        keywords: list[str],
+        since: datetime | None = None,
+    ) -> list[Tender]:
+        """Fail closed when EIS is unreachable instead of returning false zero results."""
+        clean_keywords = [str(value).strip() for value in keywords if str(value).strip()]
+        if not clean_keywords:
+            return []
+        try:
+            probe = self._get(
+                SEARCH_URL,
+                params={
+                    "searchString": clean_keywords[0],
+                    "morphology": "on",
+                    "pageNumber": 1,
+                    "recordsPerPage": f"_{min(self.records_per_page, 10)}",
+                    "fz44": "on",
+                    "fz223": "on",
+                },
+            )
+        except Exception as exc:
+            raise CollectorUnavailableError(
+                f"eis: search endpoint unavailable: {type(exc).__name__}: {exc}"
+            ) from exc
+        if self._has_captcha(probe.text):
+            raise CollectorUnavailableError("eis: search endpoint returned CAPTCHA/bot protection")
+        return super().search(clean_keywords, since=since)
 
     def get_details(self, external_id: str) -> Tender | None:
         tender = super().get_details(external_id)
