@@ -184,6 +184,16 @@ def has_published_listing_evidence(platform: str, links: list[dict[str, object]]
     return False
 
 
+
+def platform_url_is_rosatom_published(url: str) -> bool:
+    lowered = str(url).lower()
+    return "zakupki.rosatom.ru" in lowered and "link=published_procurements" in lowered
+
+
+def has_rosatom_published_page(url: str, status: int | None) -> bool:
+    return status == 200 and platform_url_is_rosatom_published(url)
+
+
 def save_viewport_screenshot(page, name: str) -> None:
     """Save real viewport evidence, or a clearly synthetic placeholder if impossible."""
     path = OUT / f"{name}.png"
@@ -250,7 +260,7 @@ def main() -> int:
                     control_found = bool(entry["search"].get("control_found"))
                     result_count = entry.get("result_count")
                     if not control_found:
-                        if has_published_listing_evidence(name, links):
+                        if has_published_listing_evidence(name, links) or has_rosatom_published_page(page.url, response.status if response else None):
                             entry["diagnostic_state"] = "listing_available"
                             entry["search_mode"] = "published_listing_fallback"
                             entry["failure_class"] = "search_adapter_inconclusive"
