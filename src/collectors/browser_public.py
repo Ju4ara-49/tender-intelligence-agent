@@ -17,6 +17,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_pla
 
 from src.collectors.base import BaseCollector, CollectorUnavailableError
 from src.models.tender import Tender
+from src.collectors.tenderguru_fallback import search as tenderguru_search
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +97,35 @@ class _BrowserTenderCollector(BaseCollector):
                 browser.close()
         except PlaywrightTimeoutError as exc:
             logger.warning("%s: timeout for %r: %s", self.platform, query, exc)
+            if self.platform == "rts_tender":
+                return self._tenderguru_fallback(query, exc)
             return []
         except Exception as exc:
             logger.warning("%s: browser search failed for %r: %s", self.platform, query, exc)
+            if self.platform == "rts_tender":
+                return self._tenderguru_fallback(query, exc)
             return []
+
+    def _tenderguru_fallback(self, query: str, reason: Exception) -> list[Tender]:
+        try:
+            results = tenderguru_search(
+                platform=self.platform,
+                keyword=query,
+                timeout=min(max(self.timeout_ms // 1000, 10), 20),
+                max_results=self.max_results,
+            )
+        except Exception as fallback_exc:
+            logger.warning(
+                "%s: public fallback failed for %r after %s: %s",
+                self.platform, query, type(reason).__name__, fallback_exc,
+            )
+            return []
+        if results:
+            logger.warning(
+                "%s: using public indexed fallback for %r: %d results",
+                self.platform, query, len(results),
+            )
+        return results
 
         soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
         if "web application firewall" in soup_text or "временно заблокирован" in soup_text:
