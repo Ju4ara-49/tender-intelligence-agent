@@ -131,9 +131,11 @@ class _BrowserTenderCollector(BaseCollector):
             return True
         variants = {
             "станок": ("станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"),
+            "подшипник": ("подшипник", "подшипника", "подшипники", "подшипников", "подшипнику", "подшипникам", "подшипником", "подшипниками", "подшипнике", "подшипниках"),
+            "лебедка": ("лебедка", "лебедки", "лебедку", "лебедкой", "лебедкою", "лебедок", "лебедкам", "лебедками", "лебёдка", "лебёдки", "лебёдку", "лебёдкой", "лебёдок"),
             "редуктор": ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
         }
-        return any(item in haystack for item in variants.get(normalized_query, ()))
+        return any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(item)}(?![а-яёa-z0-9])", haystack) for item in variants.get(normalized_query, ()))
 
     @staticmethod
     def _normalize_search_text(value: str) -> str:
@@ -236,7 +238,7 @@ class _BrowserTenderCollector(BaseCollector):
                     locator.fill(query)
                     locator.press("Enter")
                     logger.info("%s: SEARCH_SUBMITTED selector=%s", self.platform, selector)
-                    return
+                    return True
             except Exception:
                 continue
         logger.warning("%s: поле поиска не найдено для запроса %r", self.platform, query)
