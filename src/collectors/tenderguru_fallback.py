@@ -78,16 +78,15 @@ def search(
                 if parent is None:
                     break
                 text = " ".join(parent.stripped_strings)
-                if len(text) >= 120:
+                if len(text) >= 40:
                     block = parent
                     break
                 block = parent
             text = " ".join(block.stripped_strings)
             if not matches_keyword(text, keyword):
                 continue
-            if platform == "rts_tender" and "рts-тендер" not in _norm(text).replace("рts", "рts"):
-                if "рts" not in text.lower() and "рts-тендер" not in text.lower():
-                    continue
+            if platform == "rts_tender" and not re.search(r"рts[-\\s]?тендер", _norm(text), re.I):
+                continue
             if platform == "eis" and not re.search(r"44\s*-?\s*фз|223\s*-?\s*фз", text, re.I):
                 continue
             title = " ".join(link.stripped_strings).strip() or text[:1000]
