@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -296,7 +297,7 @@ class Orchestrator:
             return True
         tender_regions = {
             cls._normalize_region(part)
-            for part in __import__("re").split(r"[,;|/]+", tender_region)
+            for part in re.split(r"[,;|/]+", tender_region)
             if cls._normalize_region(part)
         }
         return bool(tender_regions & requested)
