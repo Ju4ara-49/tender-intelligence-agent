@@ -176,6 +176,7 @@ def extract_result_evidence(text: str) -> dict[str, object]:
         r"\bВсего\s*:\s*([0-9][0-9\s]*)\b",
         r"\bАктуальных\s+лотов\s*:\s*([0-9][0-9\s]*)\b",
         r"\bПоказаны\s+первые\s+([0-9][0-9\s]*)\s+запис(?:и|ей)\b",
+        r"\bАукционы\s*:\s*\d+\s*-\s*\d+\s+из\s+([0-9][0-9\s]*)\b",
     )
     for pattern in patterns:
         match = re.search(pattern, normalized, re.I)
