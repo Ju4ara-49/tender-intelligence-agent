@@ -235,7 +235,7 @@ def main() -> int:
         context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
         for name, url in TARGETS.items():
             page = context.new_page()
-            entry: dict[str, object] = {"url": url, "query": QUERIES}
+            entry: dict[str, object] = {"url": url, "queries": list(QUERIES)}
             try:
                 response, navigation_attempt = goto_with_retries(page, url)
                 entry["navigation_attempt"] = navigation_attempt
