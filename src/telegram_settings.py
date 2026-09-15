@@ -93,6 +93,7 @@ class CriteriaStore:
 
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
+        self._current_user_id = self.DEFAULT_USER_ID
         self._ensure_schema()
 
     @classmethod
@@ -101,7 +102,13 @@ class CriteriaStore:
         return value or cls.DEFAULT_USER_ID
 
     def set_user_id(self, user_id: str | int | None) -> None:
-        return None
+        """Set the explicit compatibility context used when user_id is omitted.
+
+        Multi-user callers should continue passing user_id explicitly. This
+        method exists for legacy single-user integrations and must never use
+        stack inspection or hidden caller inference.
+        """
+        self._current_user_id = self.normalize_user_id(user_id)
 
     def _ensure_schema(self) -> None:
         with self.db._connect() as conn:
@@ -191,7 +198,7 @@ class CriteriaStore:
                 )
 
     def _user_id_and_ensure(self, user_id: str | int | None) -> str:
-        normalized = self.normalize_user_id(user_id)
+        normalized = self._current_user_id if user_id is None else self.normalize_user_id(user_id)
         self._ensure_user(normalized)
         return normalized
 
