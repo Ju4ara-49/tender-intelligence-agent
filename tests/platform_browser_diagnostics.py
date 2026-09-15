@@ -290,6 +290,15 @@ def main() -> int:
                     entry["search_results"] = query_results
                     entry["search"] = query_results[0]["search"] if query_results else {"control_found": False}
                     entry.update(extract_result_evidence(result_text))
+                    # Preserve positive result evidence from any query. A
+                    # multi-keyword probe may have one matching query and one
+                    # zero-result query; the latter must not erase the former.
+                    if entry.get("result_count") is None:
+                        for query_evidence in query_results:
+                            if query_evidence.get("result_count") is not None:
+                                entry["result_count"] = query_evidence["result_count"]
+                                entry["result_count_evidence"] = query_evidence.get("result_count_evidence")
+                                break
                     entry["after_excerpt"] = result_text[:12000]
                     entry["result_links"] = all_links[-200:]
                     entry["result_link_count"] = len(entry["result_links"])
