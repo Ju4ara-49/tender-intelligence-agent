@@ -32,6 +32,8 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Run live keyword smoke
+        env:
+          PYTHONPATH: .
         run: python tests/live_keyword_smoke.py
 
       - name: Validate report
