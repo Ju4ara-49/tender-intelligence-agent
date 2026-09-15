@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from src.collectors.base import CollectorUnavailableError
 from src.collectors.eis_zakupki import EisZakupkiCollector, SEARCH_URL
 from src.models.tender import Tender
+from src.collectors.tenderguru_fallback import search as tenderguru_search
 
 
 class ReliableEisZakupkiCollector(EisZakupkiCollector):
@@ -36,6 +37,28 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
         if rss_results:
             unique: dict[str, Tender] = {item.unique_key: item for item in rss_results}
             return list(unique.values())
+
+        # GitHub-hosted runners can be unable to route to zakupki.gov.ru.
+        # Use a public indexed fallback instead of reporting a false zero-result
+        # search. The fallback is explicitly marked in raw_data and never
+        # bypasses EIS authentication or WAF controls.
+        fallback: list[Tender] = []
+        for keyword in clean_keywords:
+            try:
+                fallback.extend(
+                    tenderguru_search(
+                        platform=self.platform,
+                        keyword=keyword,
+                        timeout=min(max(self.timeout, 5), 20),
+                        max_results=self.records_per_page * self.max_pages,
+                    )
+                )
+            except Exception:
+                continue
+        if fallback:
+            unique = {item.unique_key: item for item in fallback}
+            return list(unique.values())
+
         try:
             probe = self._get(
                 SEARCH_URL,
