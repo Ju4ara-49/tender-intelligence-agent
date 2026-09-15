@@ -82,6 +82,11 @@ def test_region_filter_normalizes_common_city_and_abbreviation_forms():
     assert Orchestrator._passes_regions(_tender(region="Ленинградская обл."), criteria.regions) is True
 
 
+def test_region_filter_matches_one_value_in_multi_region_tender():
+    criteria = TenderCriteria(regions=["Москва"])
+    assert Orchestrator._passes_regions(_tender(region="Москва, Московская область"), criteria.regions) is True
+
+
 def test_empty_region_filter_values_do_not_reject_tender():
     assert Orchestrator._passes_regions(_tender(region="Москва"), ["", "  "]) is True
 
