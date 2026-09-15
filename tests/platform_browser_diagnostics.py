@@ -12,12 +12,12 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 TARGETS = {
-    "eis": "https://zakupki.gov.ru/epz/order/extendedsearch/results.html",
+    "eis": "https://zakupki.gov.ru/epz/order/extendedsearch/rss.html?searchString=%D0%BF%D0%BE%D0%B4%D1%88%D0%B8%D0%BF%D0%BD%D0%B8%D0%BA%D0%B8&morphology=on&fz44=on&fz223=on",
     "b2b_center": "https://www.b2b-center.ru/market/",
     "fabrikant_223": "https://soap2.fabrikant.ru/223/catalog/procedure/published",
     "fabrikant_44": "https://soap4.fabrikant.ru/44/catalog/procedure",
-    "rts_tender": "https://www.rts-tender.ru/",
-    "tmk": "https://zakupki.tmk-group.com/",
+    "rts_tender": "https://223.rts-tender.ru/",
+    "tmk": "https://stock.tmk-group.com/auction/",
     "rosatom": "https://zakupki.rosatom.ru/?link=published_procurements",
 }
 DEFAULT_QUERIES = ("подшипники",)
