@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -93,7 +94,9 @@ class CriteriaStore:
 
     def __init__(self, db: TenderDatabase) -> None:
         self.db = db
-        self._current_user_id = self.DEFAULT_USER_ID
+        self._current_user_id: ContextVar[str] = ContextVar(
+            f"criteria_store_user_{id(self)}", default=self.DEFAULT_USER_ID
+        )
         self._ensure_schema()
 
     @classmethod
@@ -108,7 +111,7 @@ class CriteriaStore:
         method exists for legacy single-user integrations and must never use
         stack inspection or hidden caller inference.
         """
-        self._current_user_id = self.normalize_user_id(user_id)
+        self._current_user_id.set(self.normalize_user_id(user_id))
 
     def _ensure_schema(self) -> None:
         with self.db._connect() as conn:
@@ -198,7 +201,7 @@ class CriteriaStore:
                 )
 
     def _user_id_and_ensure(self, user_id: str | int | None) -> str:
-        normalized = self._current_user_id if user_id is None else self.normalize_user_id(user_id)
+        normalized = self._current_user_id.get() if user_id is None else self.normalize_user_id(user_id)
         self._ensure_user(normalized)
         return normalized
 
