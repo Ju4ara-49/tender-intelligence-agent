@@ -114,3 +114,21 @@ def test_criteria_normalizes_ai_score_and_lists():
     assert criteria.min_ai_score == 100
     assert criteria.exclude_keywords == ["test"]
     assert criteria.regions == ["Москва"]
+
+
+def test_criteria_rejects_non_finite_numeric_values():
+    with pytest.raises(ValueError, match="конечным числом"):
+        TenderCriteria(min_price=float("nan"))
+    with pytest.raises(ValueError, match="конечным числом"):
+        TenderCriteria(max_price=float("inf"))
+
+
+def test_criteria_store_update_rejects_contradictory_persisted_range(tmp_path):
+    db = TenderDatabase(tmp_path / "criteria.db")
+    store = CriteriaStore(db)
+    store.update("u1", min_price=100, max_price=200)
+    with pytest.raises(ValueError, match="min_price"):
+        store.update("u1", min_price=300)
+    current = store.get("u1")
+    assert current.min_price == 100
+    assert current.max_price == 200
