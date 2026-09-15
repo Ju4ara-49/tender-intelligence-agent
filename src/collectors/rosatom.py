@@ -190,7 +190,14 @@ class RosatomCollector(_BrowserTenderCollector):
                 locator = page.locator(selector).first
                 if locator.count() and locator.is_visible():
                     locator.fill(query, timeout=1500)
-                    locator.press("Enter", timeout=1500)
+                    try:
+                        button = page.get_by_role("button", name="Поиск", exact=True).first
+                        if button.count() and button.is_visible():
+                            button.click(timeout=1500)
+                        else:
+                            locator.press("Enter", timeout=1500)
+                    except Exception:
+                        locator.press("Enter", timeout=1500)
                     logger.info("rosatom: SEARCH_SUBMITTED selector=%s query=%s", selector, query)
                     return
             except Exception:
@@ -202,7 +209,14 @@ class RosatomCollector(_BrowserTenderCollector):
             locator = page.get_by_role("textbox").first
             if locator.count() and locator.is_visible():
                 locator.fill(query, timeout=1500)
-                locator.press("Enter", timeout=1500)
+                try:
+                    button = page.get_by_role("button", name="Поиск", exact=True).first
+                    if button.count() and button.is_visible():
+                        button.click(timeout=1500)
+                    else:
+                        locator.press("Enter", timeout=1500)
+                except Exception:
+                    locator.press("Enter", timeout=1500)
                 logger.info("rosatom: SEARCH_SUBMITTED selector=role=textbox query=%s", query)
                 return
         except Exception:
