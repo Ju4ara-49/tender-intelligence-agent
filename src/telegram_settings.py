@@ -40,6 +40,41 @@ class TenderCriteria:
     exclude_keywords: list[str] = field(default_factory=list)
     regions: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        """Reject contradictory numeric ranges before they reach the search pipeline."""
+        if self.min_price is not None and self.max_price is not None and self.min_price > self.max_price:
+            raise ValueError("min_price не может быть больше max_price")
+        if self.min_advance_percent < 0:
+            raise ValueError("min_advance_percent не может быть отрицательным")
+        if self.max_postpayment_days is not None and self.max_postpayment_days < 0:
+            raise ValueError("max_postpayment_days не может быть отрицательным")
+        if self.min_submission_days < 0:
+            raise ValueError("min_submission_days не может быть отрицательным")
+        if self.min_application_security_percent < 0:
+            raise ValueError("min_application_security_percent не может быть отрицательным")
+        if self.max_application_security_percent is not None and self.max_application_security_percent < 0:
+            raise ValueError("max_application_security_percent не может быть отрицательным")
+        if (
+            self.max_application_security_percent is not None
+            and self.min_application_security_percent > self.max_application_security_percent
+        ):
+            raise ValueError("min_application_security_percent не может быть больше max_application_security_percent")
+        if self.min_contract_security_percent < 0:
+            raise ValueError("min_contract_security_percent не может быть отрицательным")
+        if (
+            self.max_contract_security_percent is not None
+            and self.max_contract_security_percent < 0
+        ):
+            raise ValueError("max_contract_security_percent не может быть отрицательным")
+        if (
+            self.max_contract_security_percent is not None
+            and self.min_contract_security_percent > self.max_contract_security_percent
+        ):
+            raise ValueError("min_contract_security_percent не может быть больше max_contract_security_percent")
+        self.min_ai_score = max(0, min(100, int(self.min_ai_score)))
+        self.exclude_keywords = _clean_list(self.exclude_keywords)
+        self.regions = _clean_list(self.regions)
+
 
 class CriteriaStore:
     """Хранение критериев Telegram отдельно для каждого пользователя."""
