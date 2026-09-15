@@ -11,6 +11,8 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
+from src.collectors.tenderguru_fallback import search as tenderguru_search
+
 TARGETS = {
     "eis": "https://zakupki.gov.ru/epz/order/extendedsearch/rss.html?searchString=%D0%BF%D0%BE%D0%B4%D1%88%D0%B8%D0%BF%D0%BD%D0%B8%D0%BA%D0%B8&morphology=on&fz44=on&fz223=on",
     "b2b_center": "https://www.b2b-center.ru/market/",
@@ -335,22 +337,77 @@ def main() -> int:
                         internal_failures.append(message)
             except PlaywrightTimeoutError as exc:
                 entry["error"] = repr(exc)
-                entry["diagnostic_state"] = "external_timeout"
-                entry["failure_class"] = "external_access"
-                message = f"{name}: external navigation timeout"
-                failures.append(message)
-                access_blocks.append(message)
-                ci_failures.append(message)
-            except Exception as exc:
-                entry["error"] = repr(exc)
-                if is_external_timeout(exc):
+                if name in {"eis", "rts_tender"}:
+                    fallback_counts = []
+                    for query in QUERIES:
+                        try:
+                            fallback_counts.append(
+                                len(
+                                    tenderguru_search(
+                                        platform=name,
+                                        keyword=query,
+                                        timeout=15,
+                                        max_pages=3,
+                                        max_results=100,
+                                    )
+                                )
+                            )
+                        except Exception:
+                            fallback_counts.append(0)
+                    if any(fallback_counts):
+                        entry["diagnostic_state"] = "public_fallback_ok"
+                        entry["failure_class"] = "external_access_fallback"
+                        entry["search_mode"] = "tenderguru_public_fallback"
+                        entry["fallback_counts"] = fallback_counts
+                        entry["result_count"] = max(fallback_counts)
+                    else:
+                        entry["diagnostic_state"] = "external_timeout"
+                        entry["failure_class"] = "external_access"
+                        message = f"{name}: external navigation timeout"
+                        failures.append(message)
+                        access_blocks.append(message)
+                        ci_failures.append(message)
+                else:
                     entry["diagnostic_state"] = "external_timeout"
                     entry["failure_class"] = "external_access"
                     message = f"{name}: external navigation timeout"
                     failures.append(message)
                     access_blocks.append(message)
                     ci_failures.append(message)
-                else:
+            except Exception as exc:
+                entry["error"] = repr(exc)
+                if is_external_timeout(exc):
+                    if name in {"eis", "rts_tender"}:
+                        fallback_counts = []
+                        for query in QUERIES:
+                            try:
+                                fallback_counts.append(
+                                    len(
+                                        tenderguru_search(
+                                            platform=name,
+                                            keyword=query,
+                                            timeout=15,
+                                            max_pages=3,
+                                            max_results=100,
+                                        )
+                                    )
+                                )
+                            except Exception:
+                                fallback_counts.append(0)
+                        if any(fallback_counts):
+                            entry["diagnostic_state"] = "public_fallback_ok"
+                            entry["failure_class"] = "external_access_fallback"
+                            entry["search_mode"] = "tenderguru_public_fallback"
+                            entry["fallback_counts"] = fallback_counts
+                            entry["result_count"] = max(fallback_counts)
+                        else:
+                            entry["diagnostic_state"] = "external_timeout"
+                            entry["failure_class"] = "external_access"
+                            message = f"{name}: external navigation timeout"
+                            failures.append(message)
+                            access_blocks.append(message)
+                            ci_failures.append(message)
+                    else:
                     entry["diagnostic_state"] = "exception"
                     entry["failure_class"] = "transport"
                     message = f"{name}: {exc!r}"
