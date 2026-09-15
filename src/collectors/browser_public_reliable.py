@@ -398,7 +398,7 @@ class ReliableTmkCollector(ReliableBrowserSearchMixin, TmkCollector):
 class ReliableRosatomCollector(ReliableBrowserSearchMixin, RosatomCollector):
     """Rosatom procurement portal with resilient search widget discovery."""
 
-    ALLOW_PUBLISHED_LISTING_FALLBACK = True
+    ALLOW_PUBLISHED_LISTING_FALLBACK = False
 
     def _perform_search(self, page, query: str) -> bool:
         # Rosatom has a dedicated filter panel; the generic SPA search mixin can
