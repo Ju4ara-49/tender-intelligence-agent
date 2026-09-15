@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -42,6 +43,14 @@ class TenderCriteria:
 
     def __post_init__(self) -> None:
         """Reject contradictory numeric ranges before they reach the search pipeline."""
+        for field_name in (
+            "min_price", "max_price", "min_advance_percent",
+            "min_application_security_percent", "max_application_security_percent",
+            "min_contract_security_percent", "max_contract_security_percent",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not math.isfinite(float(value)):
+                raise ValueError(f"{field_name} должен быть конечным числом")
         if self.min_price is not None and self.max_price is not None and self.min_price > self.max_price:
             raise ValueError("min_price не может быть больше max_price")
         if self.min_advance_percent < 0:
@@ -217,6 +226,24 @@ class CriteriaStore:
         if not values:
             return
         user_id = self._user_id_and_ensure(user_id)
+        current = self.get(user_id)
+        candidate = {
+            "min_price": current.min_price,
+            "max_price": current.max_price,
+            "advance_required": current.advance_required,
+            "min_advance_percent": current.min_advance_percent,
+            "max_postpayment_days": current.max_postpayment_days,
+            "min_submission_days": current.min_submission_days,
+            "min_application_security_percent": current.min_application_security_percent,
+            "max_application_security_percent": current.max_application_security_percent,
+            "min_contract_security_percent": current.min_contract_security_percent,
+            "max_contract_security_percent": current.max_contract_security_percent,
+            "min_ai_score": current.min_ai_score,
+            "exclude_keywords": current.exclude_keywords,
+            "regions": current.regions,
+        }
+        candidate.update(values)
+        TenderCriteria(**candidate)
         values["updated_at"] = datetime.now(timezone.utc).isoformat()
         fields = ", ".join(f"{key} = ?" for key in values)
         with self.db._connect() as conn:
