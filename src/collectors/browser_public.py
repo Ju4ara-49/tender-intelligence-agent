@@ -139,7 +139,7 @@ class _BrowserTenderCollector(BaseCollector):
 
     @staticmethod
     def _normalize_search_text(value: str) -> str:
-        return re.sub(r"[^0-9a-zа-яё]+", " ", str(value or "").casefold()).strip()
+        return re.sub(r"[^0-9a-zа-я]+", " ", str(value or "").casefold().replace("ё", "е")).strip()
 
     def get_details(self, external_id: str) -> Tender | None:
         url = self._urls.get(str(external_id))
