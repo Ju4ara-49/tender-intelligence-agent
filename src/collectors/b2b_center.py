@@ -1348,7 +1348,7 @@ class B2BCenterCollector(BaseCollector):
 
     @staticmethod
     def _keyword_matches_tender(tender: Tender, keyword: str) -> bool:
-        query = re.sub(r"\\s+", " ", str(keyword or "").casefold()).strip()
+        query = re.sub(r"\s+", " ", str(keyword or "").casefold()).strip()
         if not query:
             return False
         text = re.sub(
