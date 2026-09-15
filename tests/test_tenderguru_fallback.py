@@ -18,10 +18,8 @@ class TenderGuruFallbackTests(unittest.TestCase):
         get.return_value = Mock(
             raise_for_status=lambda: None,
             text="""
-              <a href="/tender/123">Поставка станка</a>
-              <div>Поставка станка Номер тендера: 123 Электронная площадка: РТС-тендер</div>
-              <a href="/tender/124">Поставка станка</a>
-              <div>Поставка станка Номер тендера: 124 Электронная площадка: B2B-Center</div>
+              <div>Поставка станка Номер тендера: 123 Электронная площадка: РТС-тендер <a href="/tender/123">Поставка станка</a></div>
+              <div>Поставка станка Номер тендера: 124 Электронная площадка: B2B-Center <a href="/tender/124">Поставка станка</a></div>
             """,
         )
         result = search(platform="rts_tender", keyword="станок", max_pages=1)
@@ -33,12 +31,9 @@ class TenderGuruFallbackTests(unittest.TestCase):
         get.return_value = Mock(
             raise_for_status=lambda: None,
             text="""
-              <a href="/tender/201">Станок для школы</a>
-              <div>Станок для школы Госзакупка по 44-ФЗ</div>
-              <a href="/tender/202">Станок для завода</a>
-              <div>Станок для завода По 223-ФЗ закону</div>
-              <a href="/tender/203">Станок коммерческий</a>
-              <div>Станок коммерческий Электронная площадка: B2B-Center</div>
+              <div>Станок для школы Госзакупка по 44-ФЗ <a href="/tender/201">Станок для школы</a></div>
+              <div>Станок для завода По 223-ФЗ закону <a href="/tender/202">Станок для завода</a></div>
+              <div>Станок коммерческий Электронная площадка: B2B-Center <a href="/tender/203">Станок коммерческий</a></div>
             """,
         )
         result = search(platform="eis", keyword="станок", max_pages=1)
