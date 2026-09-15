@@ -20,7 +20,8 @@ TARGETS = {
     "tmk": "https://zakupki.tmk-group.com/",
     "rosatom": "https://zakupki.rosatom.ru/?link=published_procurements",
 }
-QUERY = "подшипники"
+DEFAULT_QUERIES = ("подшипники",)
+QUERIES = tuple(q.strip() for q in os.getenv("PLATFORM_DIAGNOSTIC_QUERIES", "").split(",") if q.strip()) or DEFAULT_QUERIES
 OUT = Path("output/platform_browser_diagnostics")
 OUT.mkdir(parents=True, exist_ok=True)
 # Live diagnostics are a hard gate: an external timeout/access block means the
@@ -263,19 +264,34 @@ def main() -> int:
                     access_blocks.append(message)
                     ci_failures.append(message)
                 else:
-                    entry["search"] = perform_search(page, QUERY)
-                    page.wait_for_timeout(SEARCH_SETTLE_MS)
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=NETWORK_IDLE_TIMEOUT_MS)
-                    except Exception:
-                        pass
-                    result_text = page.locator("body").inner_text(timeout=3000)
+                    query_results = []
+                    control_found = False
+                    all_links = []
+                    result_text = ""
+                    for query in QUERIES:
+                        search_evidence = perform_search(page, query)
+                        control_found = control_found or bool(search_evidence.get("control_found"))
+                        page.wait_for_timeout(SEARCH_SETTLE_MS)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=NETWORK_IDLE_TIMEOUT_MS)
+                        except Exception:
+                            pass
+                        result_text = page.locator("body").inner_text(timeout=3000)
+                        evidence = extract_result_evidence(result_text)
+                        links = page.locator("a[href]").evaluate_all("els => els.map(e => ({text:(e.innerText||'').trim().slice(0,300),href:e.href})).filter(x => x.text || x.href).slice(0,200)")
+                        all_links.extend(links)
+                        query_results.append({
+                            "query": query,
+                            "search": search_evidence,
+                            **evidence,
+                            "result_link_count": len(links),
+                        })
+                    entry["search_results"] = query_results
+                    entry["search"] = query_results[0]["search"] if query_results else {"control_found": False}
                     entry.update(extract_result_evidence(result_text))
-                    links = page.locator("a[href]").evaluate_all("els => els.map(e => ({text:(e.innerText||'').trim().slice(0,300),href:e.href})).filter(x => x.text || x.href).slice(0,200)")
                     entry["after_excerpt"] = result_text[:12000]
-                    entry["result_links"] = links
-                    entry["result_link_count"] = len(links)
-                    control_found = bool(entry["search"].get("control_found"))
+                    entry["result_links"] = all_links[-200:]
+                    entry["result_link_count"] = len(entry["result_links"])
                     result_count = entry.get("result_count")
                     if not control_found and is_external_challenge(result_text):
                         entry["diagnostic_state"] = "external_challenge"
@@ -346,7 +362,7 @@ def main() -> int:
     report["ci_failure_count"] = len(ci_failures)
     (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    summary_lines = ["## Platform browser diagnostics", "", f"Query: `{QUERY}`", ""]
+    summary_lines = ["## Platform browser diagnostics", "", "Queries: `" + ", ".join(QUERIES) + "`", ""]
     for name, entry in report.items():
         if name in {"failures", "ci_failures", "internal_failures", "access_blocks", "hard_external_access", "access_block_count", "ci_failure_count"}:
             continue
