@@ -15,11 +15,16 @@ logger = logging.getLogger(__name__)
 
 def _enabled_profile_users(orchestrator: Orchestrator) -> list[str]:
     """Return distinct users having at least one enabled saved search profile."""
-    with orchestrator.db._connect() as conn:
-        rows = conn.execute(
+    db = getattr(orchestrator, "db", None)
+    connect = getattr(db, "_connect", None)
+    if not callable(connect):
+        return []
+    with connect() as conn:
+        result = conn.execute(
             "SELECT DISTINCT user_id FROM search_profiles "
             "WHERE enabled = 1 AND TRIM(user_id) <> '' ORDER BY user_id"
-        ).fetchall()
+        )
+        rows = result.fetchall() if hasattr(result, "fetchall") else result
     return [str(row["user_id"]).strip() for row in rows if str(row["user_id"]).strip()]
 
 
