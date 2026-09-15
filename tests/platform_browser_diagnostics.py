@@ -408,7 +408,7 @@ def main() -> int:
                             access_blocks.append(message)
                             ci_failures.append(message)
                     else:
-                    entry["diagnostic_state"] = "exception"
+                        entry["diagnostic_state"] = "exception"
                     entry["failure_class"] = "transport"
                     message = f"{name}: {exc!r}"
                     failures.append(message)
