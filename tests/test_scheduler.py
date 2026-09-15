@@ -101,6 +101,77 @@ def test_scheduler_job_contains_monitoring_error_and_does_not_escape():
     assert fake.started is True
 
 
+def test_scheduler_uses_enabled_profiles_per_user():
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query):
+            assert "search_profiles" in query
+            return [
+                {"user_id": "42"},
+                {"user_id": "42"},
+                {"user_id": " 77 "},
+            ]
+
+    class FakeOrchestrator:
+        calls = []
+        stop_requested = False
+
+        def __init__(self, settings):
+            self.settings = settings
+            self.db = SimpleNamespace(_connect=lambda: FakeConnection())
+
+        def run_cycle_for_user(self, user_id):
+            type(self).calls.append(user_id)
+            return [{"search_number": 1}]
+
+        def run_cycle(self):
+            raise AssertionError("legacy global cycle must not run when profiles exist")
+
+    _FakeScheduler.instances.clear()
+    with patch.object(scheduler_module, "BlockingScheduler", _FakeScheduler), patch.object(
+        scheduler_module, "Orchestrator", FakeOrchestrator
+    ):
+        scheduler_module.run_scheduled(_settings(run_on_start=True))
+
+    assert FakeOrchestrator.calls == ["42", "77"]
+
+
+def test_scheduler_falls_back_to_legacy_cycle_without_profiles():
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query):
+            return []
+
+    class FakeOrchestrator:
+        calls = 0
+
+        def __init__(self, settings):
+            self.settings = settings
+            self.db = SimpleNamespace(_connect=lambda: FakeConnection())
+            self.stop_requested = False
+
+        def run_cycle(self):
+            type(self).calls += 1
+
+    _FakeScheduler.instances.clear()
+    with patch.object(scheduler_module, "BlockingScheduler", _FakeScheduler), patch.object(
+        scheduler_module, "Orchestrator", FakeOrchestrator
+    ):
+        scheduler_module.run_scheduled(_settings(run_on_start=True))
+
+    assert FakeOrchestrator.calls == 1
+
+
 def test_scheduler_interval_must_be_positive():
     settings = AppSettings(config={"scheduler": {"interval_minutes": 0}}, keywords={})
     with pytest.raises(ValueError, match="больше нуля"):
