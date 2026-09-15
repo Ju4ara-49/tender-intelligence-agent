@@ -14,18 +14,25 @@ logger = logging.getLogger(__name__)
 
 
 def _enabled_profile_users(orchestrator: Orchestrator) -> list[str]:
-    """Return distinct users having at least one enabled saved search profile."""
+    """Return normalized, distinct users having enabled saved search profiles."""
     db = getattr(orchestrator, "db", None)
     connect = getattr(db, "_connect", None)
     if not callable(connect):
         return []
     with connect() as conn:
         result = conn.execute(
-            "SELECT DISTINCT user_id FROM search_profiles "
+            "SELECT user_id FROM search_profiles "
             "WHERE enabled = 1 AND TRIM(user_id) <> '' ORDER BY user_id"
         )
         rows = result.fetchall() if hasattr(result, "fetchall") else result
-    return [str(row["user_id"]).strip() for row in rows if str(row["user_id"]).strip()]
+    users: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        user_id = str(row["user_id"]).strip()
+        if user_id and user_id not in seen:
+            seen.add(user_id)
+            users.append(user_id)
+    return users
 
 
 def run_scheduled(settings: AppSettings) -> None:
