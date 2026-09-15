@@ -6,6 +6,7 @@ on:
     paths:
       - "src/**"
       - "tests/live_keyword_smoke.py"
+      - "tests/test_browser_public_parser.py"
       - ".github/workflows/live-keyword-smoke.yml"
   workflow_dispatch:
 
