@@ -69,3 +69,19 @@ def test_deadline_must_leave_full_minimum_days():
     )
     assert not ok
     assert reason == "min_submission_days"
+
+def test_region_filter_does_not_confuse_moscow_with_moscow_oblast():
+    criteria = TenderCriteria(regions=["Москва"])
+    assert Orchestrator._passes_regions(_tender(region="Москва"), criteria.regions) is True
+    assert Orchestrator._passes_regions(_tender(region="Московская область"), criteria.regions) is False
+
+
+def test_region_filter_normalizes_common_city_and_abbreviation_forms():
+    criteria = TenderCriteria(regions=["Санкт-Петербург", "Ленинградская область"])
+    assert Orchestrator._passes_regions(_tender(region="г. Санкт-Петербург"), criteria.regions) is True
+    assert Orchestrator._passes_regions(_tender(region="Ленинградская обл."), criteria.regions) is True
+
+
+def test_empty_region_filter_values_do_not_reject_tender():
+    assert Orchestrator._passes_regions(_tender(region="Москва"), ["", "  "]) is True
+
