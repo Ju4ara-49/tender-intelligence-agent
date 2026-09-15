@@ -368,5 +368,4 @@ class ReliableRosatomCollector(ReliableBrowserSearchMixin, RosatomCollector):
         # Rosatom has a dedicated filter panel; the generic SPA search mixin can
         # mistake unrelated textboxes for the procurement filter. Use the
         # platform-specific implementation and return its successful submission.
-        RosatomCollector._perform_search(self, page, query)
-        return True
+        return bool(RosatomCollector._perform_search(self, page, query))
