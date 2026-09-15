@@ -38,7 +38,7 @@ def run_one(collector, keyword: str) -> dict:
         return {
             "platform": collector.platform,
             "keyword": keyword,
-            "status": "exception",
+            "status": "external_unavailable" if type(exc).__name__ == "CollectorUnavailableError" else "exception",
             "count": 0,
             "elapsed_seconds": round(time.monotonic() - started, 2),
             "error": f"{type(exc).__name__}: {exc}",
@@ -80,8 +80,12 @@ def main() -> int:
         )
         for sample in item["samples"][:3]:
             print(f'  {sample["external_id"]}: {sample["title"][:180]}')
-    if missing:
-        print("MISSING COLLECTORS:", ", ".join(missing))
+    failures = [item for item in results if item["status"] == "exception"]
+    if missing or failures:
+        if missing:
+            print("MISSING COLLECTORS:", ", ".join(missing))
+        if failures:
+            print("UNEXPECTED COLLECTOR ERRORS:", json.dumps(failures, ensure_ascii=False))
         return 1
     return 0
 
