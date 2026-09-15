@@ -85,7 +85,7 @@ def search(
             text = " ".join(block.stripped_strings)
             if not matches_keyword(text, keyword):
                 continue
-            if platform == "rts_tender" and not re.search(r"ртс[-\\s]?тендер", _norm(text), re.I):
+            if platform == "rts_tender" and not re.search(r"ртс[-\s]?тендер", _norm(text), re.I):
                 continue
             if platform == "eis" and not re.search(r"44\s*-?\s*фз|223\s*-?\s*фз", text, re.I):
                 continue
