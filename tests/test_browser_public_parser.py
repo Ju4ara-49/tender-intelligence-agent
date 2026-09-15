@@ -131,5 +131,21 @@ class BrowserPublicParserTests(unittest.TestCase):
         tender = Tender(platform="fabrikant", external_id="2", title="Поставка станка токарно-винторезного", url="/2", description="")
         self.assertTrue(ReliableBrowserSearchMixin._tender_matches_query(tender, "станок"))
 
+
+    def test_reliable_browser_accepts_all_live_keywords_and_inflections(self) -> None:
+        from src.collectors.browser_public_reliable import ReliableBrowserSearchMixin
+        from src.models.tender import Tender
+        cases = (
+            ("подшипник", "Подшипники роликовые сферические"),
+            ("лебедка", "Лебёдки электрические канатные"),
+            ("станок", "Станки токарные"),
+        )
+        for query, title in cases:
+            tender = Tender(platform="fabrikant", external_id=query, title=title, url="/x", description="")
+            self.assertTrue(
+                ReliableBrowserSearchMixin._tender_matches_query(tender, query),
+                (query, title),
+            )
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
