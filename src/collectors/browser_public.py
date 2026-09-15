@@ -102,9 +102,38 @@ class _BrowserTenderCollector(BaseCollector):
             logger.warning("%s: портал вернул страницу WAF; поиск невозможен без обхода защиты", self.platform)
             return []
 
-        results = self._parse_results(html)
-        logger.info("%s: keyword=%r: принято %d результатов", self.platform, query, len(results))
+        parsed_results = self._parse_results(html)
+        results = [tender for tender in parsed_results if self._tender_matches_query(tender, query)]
+        if parsed_results and not results:
+            logger.warning(
+                "%s: RESULT_QUERY_MISMATCH — parser returned %d procedures but none contain query %r; rejecting unverified results",
+                self.platform, len(parsed_results), query,
+            )
+        logger.info(
+            "%s: keyword=%r: parsed=%d, matched=%d",
+            self.platform, query, len(parsed_results), len(results),
+        )
         return results
+
+    @classmethod
+    def _tender_matches_query(cls, tender: Tender, query: str) -> bool:
+        normalized_query = cls._normalize_search_text(query)
+        if not normalized_query:
+            return False
+        haystack = cls._normalize_search_text(
+            " ".join((tender.title or "", tender.description or "", str((tender.raw_data or {}).get("subject") or "")))
+        )
+        if normalized_query in haystack:
+            return True
+        variants = {
+            "станок": ("станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"),
+            "редуктор": ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
+        }
+        return any(item in haystack for item in variants.get(normalized_query, ()))
+
+    @staticmethod
+    def _normalize_search_text(value: str) -> str:
+        return re.sub(r"[^0-9a-zа-яё]+", " ", str(value or "").casefold()).strip()
 
     def get_details(self, external_id: str) -> Tender | None:
         url = self._urls.get(str(external_id))
