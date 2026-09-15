@@ -151,3 +151,25 @@ def test_criteria_store_set_user_id_normalizes_blank_to_default(tmp_path):
     store.set_user_id("  ")
     store.update(min_price=456)
     assert store.get("default").min_price == 456
+
+
+def test_criteria_store_context_isolated_by_async_context(tmp_path):
+    import asyncio
+    import contextvars
+
+    db = TenderDatabase(tmp_path / "criteria-contextvars.db")
+    store = CriteriaStore(db)
+    store.update("user-a", min_price=100)
+    store.update("user-b", min_price=200)
+
+    async def read_current(user_id):
+        store.set_user_id(user_id)
+        await asyncio.sleep(0)
+        return store.get().min_price
+
+    async def scenario():
+        first = asyncio.create_task(read_current("user-a"))
+        second = asyncio.create_task(read_current("user-b"))
+        return await asyncio.gather(first, second)
+
+    assert asyncio.run(scenario()) == [100, 200]
