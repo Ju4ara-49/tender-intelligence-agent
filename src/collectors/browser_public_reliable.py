@@ -95,21 +95,57 @@ class ReliableBrowserSearchMixin:
                 f"{self.platform}: browser search failed for {query!r}: {type(exc).__name__}: {exc}"
             ) from exc
 
-        results = self._parse_results(html)
-        if search_control_found and not results:
+        parsed_results = self._parse_results(html)
+        results = [tender for tender in parsed_results if self._tender_matches_query(tender, query)]
+        if search_control_found and not parsed_results:
             logger.warning(
                 "%s: RESULT_PARSER_ZERO — submitted search produced no parsed procedures for %r",
                 self.platform,
                 query,
             )
+        if parsed_results and not results:
+            logger.error(
+                "%s: RESULT_QUERY_MISMATCH — parser returned %d procedures but none contain query %r; rejecting unverified results",
+                self.platform,
+                len(parsed_results),
+                query,
+            )
         logger.info(
-            "%s: keyword=%r: search_control=%s, принято %d результатов",
+            "%s: keyword=%r: search_control=%s, parsed=%d, matched=%d",
             self.platform,
             query,
             search_control_found,
+            len(parsed_results),
             len(results),
         )
         return results
+
+    @classmethod
+    def _tender_matches_query(cls, tender: Tender, query: str) -> bool:
+        """Reject false positives when a portal returns an unfiltered/global listing."""
+        normalized_query = cls._normalize_search_text(query)
+        if not normalized_query:
+            return False
+        haystack = cls._normalize_search_text(
+            " ".join(
+                (
+                    tender.title or "",
+                    tender.description or "",
+                    str((tender.raw_data or {}).get("subject") or ""),
+                )
+            )
+        )
+        if normalized_query in haystack:
+            return True
+        variants = {
+            "станок": ("станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"),
+            "редуктор": ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
+        }
+        return any(variant in haystack for variant in variants.get(normalized_query, ()))
+
+    @staticmethod
+    def _normalize_search_text(value: str) -> str:
+        return re.sub(r"[^0-9a-zа-яё]+", " ", str(value or "").casefold()).strip()
 
     def _parse_detail(self, html: str, external_id: str, url: str):
         """Run the platform parser, then recover common labels missed by HTML layout."""
