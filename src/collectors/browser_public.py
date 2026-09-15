@@ -15,7 +15,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 
-from src.collectors.base import BaseCollector
+from src.collectors.base import BaseCollector, CollectorUnavailableError
 from src.models.tender import Tender
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,11 @@ class _BrowserTenderCollector(BaseCollector):
                 page = browser.new_page(locale="ru-RU")
                 self._goto(page, self.BASE_URL)
                 page.wait_for_timeout(1800)
-                self._perform_search(page, query)
+                if not self._perform_search(page, query):
+                    browser.close()
+                    raise CollectorUnavailableError(
+                        f"{self.platform}: search control unavailable for {query!r}"
+                    )
                 page.wait_for_timeout(3000)
                 try:
                     page.wait_for_load_state("networkidle", timeout=7000)
@@ -198,7 +202,7 @@ class _BrowserTenderCollector(BaseCollector):
             except Exception:
                 continue
 
-    def _perform_search(self, page, query: str) -> None:
+    def _perform_search(self, page, query: str) -> bool:
         selectors = [
             "input[type='search']", "input[name*='search' i]", "input[name*='query' i]",
             "input[placeholder*='поиск' i]", "input[placeholder*='закуп' i]",
@@ -213,7 +217,7 @@ class _BrowserTenderCollector(BaseCollector):
                     locator.fill(query)
                     locator.press("Enter")
                     logger.info("%s: SEARCH_SUBMITTED selector=%s", self.platform, selector)
-                    return
+                    return True
             except Exception:
                 continue
         for text in self.SEARCH_HINTS:
@@ -236,6 +240,7 @@ class _BrowserTenderCollector(BaseCollector):
             except Exception:
                 continue
         logger.warning("%s: поле поиска не найдено для запроса %r", self.platform, query)
+        return False
 
     def _parse_results(self, html: str) -> list[Tender]:
         soup = BeautifulSoup(html, "html.parser")
