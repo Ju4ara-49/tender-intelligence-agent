@@ -82,7 +82,8 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
         items = soup.find_all("item")
         results: list[Tender] = []
         for item in items:
-            title = self._clean_text(item.findtext("title") if hasattr(item, "findtext") else "")
+            title_node = item.find("title")
+            title = self._clean_text(title_node.get_text(" ", strip=True) if title_node else "")
             link_node = item.find("link")
             link = self._clean_text(link_node.get_text(" ", strip=True) if link_node else "")
             guid_node = item.find("guid")
