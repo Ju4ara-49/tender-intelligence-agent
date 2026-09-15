@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 import requests
 from bs4 import BeautifulSoup
 
-from src.collectors.base import BaseCollector
+from src.collectors.base import BaseCollector, CollectorUnavailableError
 from src.models.tender import Tender
 
 
@@ -127,11 +127,21 @@ class B2BCenterCollector(BaseCollector):
                             ] = tender.title
                         results[tender.unique_key] = tender
 
+            except requests.RequestException as exc:
+                logger.warning(
+                    "B2B-Center: внешняя ошибка поиска по %s: %s",
+                    keyword,
+                    exc,
+                )
+                raise CollectorUnavailableError(
+                    f"B2B-Center: внешний запрос недоступен для {keyword!r}: {type(exc).__name__}: {exc}"
+                ) from exc
             except Exception:
                 logger.exception(
-                    "B2B-Center: ошибка поиска по ключевому слову %s",
+                    "B2B-Center: внутренняя ошибка поиска по ключевому слову %s",
                     keyword,
                 )
+                raise
 
             if self.request_delay_seconds > 0:
                 time.sleep(self.request_delay_seconds)
@@ -676,6 +686,14 @@ class B2BCenterCollector(BaseCollector):
             )
 
             if tender is None:
+                continue
+
+            if not self._keyword_matches_tender(tender, keyword):
+                logger.debug(
+                    "B2B-Center: отклонён результат без совпадения ключевого слова %r: %s",
+                    keyword,
+                    tender.title,
+                )
                 continue
 
             if (
@@ -1310,15 +1328,41 @@ class B2BCenterCollector(BaseCollector):
         params: dict | None = None,
     ) -> requests.Response:
 
-        response = self.session.get(
-            url,
-            params=params,
-            timeout=self.timeout,
+        last_error: requests.RequestException | None = None
+        for attempt in range(1, 4):
+            try:
+                response = self.session.get(
+                    url,
+                    params=params,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                return response
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt == 3:
+                    raise
+                time.sleep(min(2 * attempt, 4))
+        assert last_error is not None
+        raise last_error
+
+    @staticmethod
+    def _keyword_matches_tender(tender: Tender, keyword: str) -> bool:
+        query = re.sub(r"\\s+", " ", str(keyword or "").casefold()).strip()
+        if not query:
+            return False
+        text = re.sub(
+            r"[^0-9a-zа-яё]+",
+            " ",
+            f"{tender.title or ''} {tender.description or ''}".casefold(),
         )
-
-        response.raise_for_status()
-
-        return response
+        if query in text:
+            return True
+        variants = {
+            "станок": ("станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"),
+            "редуктор": ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
+        }
+        return any(item in text for item in variants.get(query, ()))
 
     @staticmethod
     def _normalize_datetime(
