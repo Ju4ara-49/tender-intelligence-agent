@@ -9,7 +9,7 @@ from pathlib import Path
 from src.collectors.registry import get_enabled_collectors
 from src.settings import load_settings
 
-KEYWORDS = ("станок", "редуктор")
+KEYWORDS = ("станок", "подшипник", "лебедка")
 PLATFORMS = ("eis", "b2b_center", "fabrikant", "rts_tender", "tmk", "rosatom")
 OUT = Path("output/live_keyword_smoke")
 OUT.mkdir(parents=True, exist_ok=True)
