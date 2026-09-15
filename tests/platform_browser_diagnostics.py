@@ -20,7 +20,7 @@ TARGETS = {
     "tmk": "https://stock.tmk-group.com/auction/",
     "rosatom": "https://zakupki.rosatom.ru/?link=published_procurements",
 }
-DEFAULT_QUERIES = ("подшипники",)
+DEFAULT_QUERIES = ("станок", "подшипник", "лебедка")
 QUERIES = tuple(q.strip() for q in os.getenv("PLATFORM_DIAGNOSTIC_QUERIES", "").split(",") if q.strip()) or DEFAULT_QUERIES
 OUT = Path("output/platform_browser_diagnostics")
 OUT.mkdir(parents=True, exist_ok=True)
