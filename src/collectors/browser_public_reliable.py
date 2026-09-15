@@ -139,13 +139,15 @@ class ReliableBrowserSearchMixin:
             return True
         variants = {
             "станок": ("станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"),
+            "подшипник": ("подшипник", "подшипника", "подшипники", "подшипников", "подшипнику", "подшипникам", "подшипником", "подшипниками", "подшипнике", "подшипниках"),
+            "лебедка": ("лебедка", "лебедки", "лебедку", "лебедкой", "лебедкою", "лебедок", "лебедкам", "лебедками"),
             "редуктор": ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
         }
-        return any(variant in haystack for variant in variants.get(normalized_query, ()))
+        return any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(variant)}(?![а-яёa-z0-9])", haystack) for variant in variants.get(normalized_query, ()))
 
     @staticmethod
     def _normalize_search_text(value: str) -> str:
-        return re.sub(r"[^0-9a-zа-яё]+", " ", str(value or "").casefold()).strip()
+        return re.sub(r"[^0-9a-zа-я]+", " ", str(value or "").casefold().replace("ё", "е")).strip()
 
     def _parse_detail(self, html: str, external_id: str, url: str):
         """Run the platform parser, then recover common labels missed by HTML layout."""
