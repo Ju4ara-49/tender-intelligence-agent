@@ -121,3 +121,51 @@ class BrowserPublicParserTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+    def test_rosatom_search_opens_procurement_filter_panel_before_fallback(self) -> None:
+        from src.collectors.rosatom import RosatomCollector
+
+        class FakeLocator:
+            def __init__(self, visible=True):
+                self._visible = visible
+                self.filled = None
+                self.clicked = False
+
+            def count(self):
+                return 1
+
+            def is_visible(self):
+                return self._visible
+
+            def click(self, **kwargs):
+                self.clicked = True
+
+            def fill(self, value, **kwargs):
+                self.filled = value
+
+            def press(self, value, **kwargs):
+                assert value == "Enter"
+
+        class FakePage:
+            def __init__(self):
+                self.panel = FakeLocator()
+                self.textbox = FakeLocator()
+
+            def get_by_role(self, role, name=None, exact=None):
+                if name == "Параметры поиска":
+                    return self.panel
+                if role == "textbox":
+                    return self.textbox
+                return FakeLocator(False)
+
+            def locator(self, selector):
+                return FakeLocator(False)
+
+            def wait_for_timeout(self, value):
+                pass
+
+        page = FakePage()
+        RosatomCollector()._perform_search(page, "редуктор")
+        assert page.panel.clicked is True
+        assert page.textbox.filled == "редуктор"
