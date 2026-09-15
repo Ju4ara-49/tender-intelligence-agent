@@ -33,6 +33,8 @@ jobs:
         env:
           HARD_EXTERNAL_ACCESS: "0"
           PLATFORM_DIAGNOSTIC_QUERIES: "станок,редуктор"
+        env:
+          PYTHONPATH: .
         run: python tests/platform_browser_diagnostics.py
 
       - name: Validate diagnostics artifacts
