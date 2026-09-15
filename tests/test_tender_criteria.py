@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 from src.models.tender import Tender
 from src.orchestrator import Orchestrator
-from src.telegram_settings import TenderCriteria
+from src.telegram_settings import CriteriaStore, TenderCriteria
+from src.storage.database import TenderDatabase
 
 
 def _tender(**kwargs) -> Tender:
