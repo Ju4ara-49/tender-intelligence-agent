@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/collectors/**"
+      - "src/**"
       - "tests/platform_browser_diagnostics.py"
       - "tests/platform_browser_diagnostics_gate.py"
       - ".github/workflows/platform-browser-diagnostics-windows.yml"
