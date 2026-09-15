@@ -169,6 +169,47 @@ class RosatomCollector(_BrowserTenderCollector):
 
         return results
 
+    def _perform_search(self, page, query: str) -> None:
+        """Use Rosatom's published-procurement filter panel instead of a generic textbox."""
+        try:
+            panel = page.get_by_role("button", name="Параметры поиска", exact=True).first
+            if panel.count() and panel.is_visible():
+                panel.click(timeout=1500)
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        candidates = (
+            "input[name*='предмет' i]",
+            "input[placeholder*='предмет' i]",
+            "input[name*='search' i]",
+            "input[type='search']",
+        )
+        for selector in candidates:
+            try:
+                locator = page.locator(selector).first
+                if locator.count() and locator.is_visible():
+                    locator.fill(query, timeout=1500)
+                    locator.press("Enter", timeout=1500)
+                    logger.info("rosatom: SEARCH_SUBMITTED selector=%s query=%s", selector, query)
+                    return
+            except Exception:
+                continue
+
+        # Fallback: use the first visible text box only after the filter panel
+        # has been opened; this avoids mistaking unrelated page controls for search.
+        try:
+            locator = page.get_by_role("textbox").first
+            if locator.count() and locator.is_visible():
+                locator.fill(query, timeout=1500)
+                locator.press("Enter", timeout=1500)
+                logger.info("rosatom: SEARCH_SUBMITTED selector=role=textbox query=%s", query)
+                return
+        except Exception:
+            pass
+
+        logger.warning("rosatom: search field not found for query %r", query)
+
     def get_details(self, external_id: str) -> Tender | None:
         """Refresh one Rosatom row through the published registry."""
         target = str(external_id).strip()
