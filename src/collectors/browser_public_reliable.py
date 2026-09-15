@@ -363,3 +363,10 @@ class ReliableRosatomCollector(ReliableBrowserSearchMixin, RosatomCollector):
     """Rosatom procurement portal with resilient search widget discovery."""
 
     ALLOW_PUBLISHED_LISTING_FALLBACK = True
+
+    def _perform_search(self, page, query: str) -> bool:
+        # Rosatom has a dedicated filter panel; the generic SPA search mixin can
+        # mistake unrelated textboxes for the procurement filter. Use the
+        # platform-specific implementation and return its successful submission.
+        RosatomCollector._perform_search(self, page, query)
+        return True
