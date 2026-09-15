@@ -1,3 +1,5 @@
+import pytest
+
 from datetime import datetime, timedelta, timezone
 
 from src.models.tender import Tender
