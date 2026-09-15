@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from email.utils import parsedate_to_datetime
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup
 
 from src.collectors.base import CollectorUnavailableError
 from src.collectors.eis_zakupki import EisZakupkiCollector, SEARCH_URL
@@ -20,6 +25,17 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
         clean_keywords = [str(value).strip() for value in keywords if str(value).strip()]
         if not clean_keywords:
             return []
+        rss_results: list[Tender] = []
+        rss_errors: list[Exception] = []
+        for keyword in clean_keywords:
+            try:
+                rss_results.extend(self._search_rss(keyword, since))
+            except Exception as exc:
+                rss_errors.append(exc)
+                continue
+        if rss_results:
+            unique: dict[str, Tender] = {item.unique_key: item for item in rss_results}
+            return list(unique.values())
         try:
             probe = self._get(
                 SEARCH_URL,
@@ -33,12 +49,78 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
                 },
             )
         except Exception as exc:
+            detail = rss_errors[-1] if rss_errors else exc
             raise CollectorUnavailableError(
-                f"eis: search endpoint unavailable: {type(exc).__name__}: {exc}"
-            ) from exc
+                f"eis: search endpoint unavailable: {type(detail).__name__}: {detail}"
+            ) from detail
         if self._has_captcha(probe.text):
             raise CollectorUnavailableError("eis: search endpoint returned CAPTCHA/bot protection")
         return super().search(clean_keywords, since=since)
+
+    def _search_rss(self, keyword: str, since: datetime | None) -> list[Tender]:
+        """Use EIS's lightweight public RSS search instead of the heavy HTML registry.
+        The RSS endpoint is a first-class public search surface and is much less
+        sensitive to the 2026 registry SPA/HTML changes.
+        """
+        url = SEARCH_URL.replace("/results.html", "/rss.html")
+        response = self._get(
+            url,
+            params={
+                "searchString": keyword,
+                "morphology": "on",
+                "pageNumber": 1,
+                "recordsPerPage": f"_{max(50, self.records_per_page * self.max_pages)}",
+                "fz44": "on",
+                "fz223": "on",
+                "sortDirection": "false",
+                "sortBy": "UPDATE_DATE",
+            },
+        )
+        if self._has_captcha(response.text):
+            raise CollectorUnavailableError("eis: RSS endpoint returned CAPTCHA/bot protection")
+        soup = BeautifulSoup(response.text, "xml")
+        items = soup.find_all("item")
+        results: list[Tender] = []
+        for item in items:
+            title = self._clean_text(item.findtext("title") if hasattr(item, "findtext") else "")
+            link_node = item.find("link")
+            link = self._clean_text(link_node.get_text(" ", strip=True) if link_node else "")
+            guid_node = item.find("guid")
+            guid = self._clean_text(guid_node.get_text(" ", strip=True) if guid_node else "")
+            description_node = item.find("description")
+            description = self._clean_text(
+                BeautifulSoup(
+                    description_node.get_text(" ", strip=True) if description_node else "",
+                    "html.parser",
+                ).get_text(" ", strip=True)
+            )
+            external_id = self._extract_reg_number(link, f"{title} {guid} {description}")
+            if not external_id or not title:
+                continue
+            published = None
+            date_node = item.find("pubDate")
+            if date_node:
+                try:
+                    published = parsedate_to_datetime(date_node.get_text(" ", strip=True))
+                except (TypeError, ValueError, OverflowError):
+                    published = None
+            if since is not None and published is not None:
+                if published.tzinfo is None:
+                    published = published.replace(tzinfo=since.tzinfo)
+                if published < since:
+                    continue
+            results.append(
+                Tender(
+                    platform=self.platform,
+                    external_id=external_id,
+                    title=title[:1000],
+                    url=urljoin(BASE_URL, link),
+                    description=description[:10000] or title[:10000],
+                    published_at=published,
+                    raw_data={"keyword": keyword, "source": "eis_rss", "guid": guid},
+                )
+            )
+        return results
 
     def get_details(self, external_id: str) -> Tender | None:
         tender = super().get_details(external_id)
