@@ -169,3 +169,49 @@ if __name__ == "__main__":
         RosatomCollector()._perform_search(page, "редуктор")
         assert page.panel.clicked is True
         assert page.textbox.filled == "редуктор"
+
+
+    def test_reliable_rosatom_uses_platform_specific_search_adapter(self) -> None:
+        from src.collectors.browser_public_reliable import ReliableRosatomCollector
+
+        class FakeLocator:
+            def __init__(self, visible=True):
+                self._visible = visible
+                self.filled = None
+
+            def count(self):
+                return 1
+
+            def is_visible(self):
+                return self._visible
+
+            def click(self, **kwargs):
+                pass
+
+            def fill(self, value, **kwargs):
+                self.filled = value
+
+            def press(self, value, **kwargs):
+                assert value == "Enter"
+
+        class FakePage:
+            def __init__(self):
+                self.panel = FakeLocator()
+                self.textbox = FakeLocator()
+
+            def get_by_role(self, role, name=None, exact=None):
+                if name == "Параметры поиска":
+                    return self.panel
+                if role == "textbox":
+                    return self.textbox
+                return FakeLocator(False)
+
+            def locator(self, selector):
+                return FakeLocator(False)
+
+            def wait_for_timeout(self, value):
+                pass
+
+        page = FakePage()
+        assert ReliableRosatomCollector()._perform_search(page, "станок") is True
+        assert page.textbox.filled == "станок"
