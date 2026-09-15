@@ -267,13 +267,34 @@ class Orchestrator:
         return True, ""
 
     @staticmethod
-    def _passes_regions(tender: Tender, regions: list[str] | None) -> bool:
+    def _normalize_region(value: str) -> str:
+        """Normalize common Russian administrative prefixes without substring matching."""
+        import re
+
+        text = str(value or "").strip().casefold().replace("ё", "е")
+        if not text:
+            return ""
+        text = re.sub(r"[«»]", "", text)
+        text = re.sub(r"\b(г\.?|город)\s+", "", text)
+        text = re.sub(r"\bобл\.\s*", "область ", text)
+        text = re.sub(r"\bресп\.\s*", "республика ", text)
+        text = re.sub(r"\s*[–—-]\s*", " ", text)
+        text = re.sub(r"\s*,\s*", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip(" .,:;")
+
+    @classmethod
+    def _passes_regions(cls, tender: Tender, regions: list[str] | None) -> bool:
         if not regions:
             return True
-        tender_region = (tender.region or "").strip().casefold()
+        tender_region = cls._normalize_region(tender.region)
         if not tender_region:
             return False
-        return any(region.strip().casefold() in tender_region for region in regions if region.strip())
+        requested = {cls._normalize_region(region) for region in regions if str(region).strip()}
+        requested.discard("")
+        if not requested:
+            return True
+        return tender_region in requested
 
     def run_cycle(
         self,
