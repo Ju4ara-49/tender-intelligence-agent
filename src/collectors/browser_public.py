@@ -430,13 +430,18 @@ class _BrowserTenderCollector(BaseCollector):
 
 class RtsTenderCollector(_BrowserTenderCollector):
     platform = "rts_tender"
-    BASE_URL = "https://www.rts-tender.ru/"
+    # Stable public 223-FZ section; the root landing page is frequently
+    # redirected through the login shell or times out for headless clients.
+    BASE_URL = "https://223.rts-tender.ru/"
     SEARCH_HINTS = ("Поиск", "Поиск закупок", "Закупки")
     LINK_HINTS = ("/poisk/", "/procedure", "/tender", "zakup")
 
 
 class TmkCollector(_BrowserTenderCollector):
     platform = "tmk"
-    BASE_URL = "https://zakupki.tmk-group.com/#tmk/front/index"
-    SEARCH_HINTS = ("Поиск", "Закупки", "Найти")
-    LINK_HINTS = ("tmk/front", "procedure", "tender", "zakup")
+    # Current public TMK auction registry. The legacy zakupki.tmk-group.com
+    # SPA now commonly returns an external JS/cookie challenge to headless
+    # clients, while this registry exposes the same public auction objects.
+    BASE_URL = "https://stock.tmk-group.com/auction/"
+    SEARCH_HINTS = ("Применить", "Поиск", "Найти")
+    LINK_HINTS = ("/auction/", "stock.tmk-group.com")
