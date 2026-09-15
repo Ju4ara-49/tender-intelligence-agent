@@ -133,3 +133,21 @@ def test_criteria_store_update_rejects_contradictory_persisted_range(tmp_path):
     current = store.get("u1")
     assert current.min_price == 100
     assert current.max_price == 200
+
+
+def test_criteria_store_set_user_id_is_explicit_context(tmp_path):
+    db = TenderDatabase(tmp_path / "criteria-context.db")
+    store = CriteriaStore(db)
+    store.set_user_id("user-42")
+    store.update(min_price=123)
+    assert store.get().min_price == 123
+    assert store.get("user-42").min_price == 123
+    assert store.get("default").min_price != 123
+
+
+def test_criteria_store_set_user_id_normalizes_blank_to_default(tmp_path):
+    db = TenderDatabase(tmp_path / "criteria-default.db")
+    store = CriteriaStore(db)
+    store.set_user_id("  ")
+    store.update(min_price=456)
+    assert store.get("default").min_price == 456
