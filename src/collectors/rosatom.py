@@ -169,7 +169,7 @@ class RosatomCollector(_BrowserTenderCollector):
 
         return results
 
-    def _perform_search(self, page, query: str) -> None:
+    def _perform_search(self, page, query: str) -> bool:
         """Use Rosatom's published-procurement filter panel instead of a generic textbox."""
         try:
             panel = page.get_by_role("button", name="Параметры поиска", exact=True).first
@@ -199,7 +199,7 @@ class RosatomCollector(_BrowserTenderCollector):
                     except Exception:
                         locator.press("Enter", timeout=1500)
                     logger.info("rosatom: SEARCH_SUBMITTED selector=%s query=%s", selector, query)
-                    return
+                    return True
             except Exception:
                 continue
 
@@ -218,11 +218,12 @@ class RosatomCollector(_BrowserTenderCollector):
                 except Exception:
                     locator.press("Enter", timeout=1500)
                 logger.info("rosatom: SEARCH_SUBMITTED selector=role=textbox query=%s", query)
-                return
+                return True
         except Exception:
             pass
 
         logger.warning("rosatom: search field not found for query %r", query)
+        return False
 
     def get_details(self, external_id: str) -> Tender | None:
         """Refresh one Rosatom row through the published registry."""
