@@ -90,3 +90,25 @@ def test_region_filter_matches_one_value_in_multi_region_tender():
 def test_empty_region_filter_values_do_not_reject_tender():
     assert Orchestrator._passes_regions(_tender(region="Москва"), ["", "  "]) is True
 
+
+
+def test_criteria_rejects_contradictory_price_range():
+    with pytest.raises(ValueError, match="min_price"):
+        TenderCriteria(min_price=100, max_price=50)
+
+
+def test_criteria_rejects_contradictory_application_security_range():
+    with pytest.raises(ValueError, match="min_application_security_percent"):
+        TenderCriteria(min_application_security_percent=6, max_application_security_percent=5)
+
+
+def test_criteria_rejects_negative_submission_days():
+    with pytest.raises(ValueError, match="min_submission_days"):
+        TenderCriteria(min_submission_days=-1)
+
+
+def test_criteria_normalizes_ai_score_and_lists():
+    criteria = TenderCriteria(min_ai_score=150, exclude_keywords=["  test ", "TEST", ""], regions=[" Москва ", "Москва"])
+    assert criteria.min_ai_score == 100
+    assert criteria.exclude_keywords == ["test"]
+    assert criteria.regions == ["Москва"]
