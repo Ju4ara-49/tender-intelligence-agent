@@ -13,6 +13,16 @@ from src.settings import AppSettings
 logger = logging.getLogger(__name__)
 
 
+def _enabled_profile_users(orchestrator: Orchestrator) -> list[str]:
+    """Return distinct users having at least one enabled saved search profile."""
+    with orchestrator.db._connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT user_id FROM search_profiles "
+            "WHERE enabled = 1 AND TRIM(user_id) <> '' ORDER BY user_id"
+        ).fetchall()
+    return [str(row["user_id"]).strip() for row in rows if str(row["user_id"]).strip()]
+
+
 def run_scheduled(settings: AppSettings) -> None:
     """Запустить агент с периодическими проверками."""
     orchestrator = Orchestrator(settings)
@@ -23,7 +33,21 @@ def run_scheduled(settings: AppSettings) -> None:
     def job() -> None:
         logger.info("=== Запуск плановой проверки ===")
         try:
-            orchestrator.run_cycle()
+            users = _enabled_profile_users(orchestrator)
+            if users:
+                logger.info("Плановая проверка сохранённых профилей: пользователей=%d", len(users))
+                for user_id in users:
+                    if orchestrator.stop_requested:
+                        break
+                    try:
+                        results = orchestrator.run_cycle_for_user(user_id)
+                        logger.info("Пользователь %s: выполнено профилей=%d", user_id, len(results))
+                    except Exception:
+                        logger.exception("Ошибка плановой проверки пользователя %s", user_id)
+            else:
+                # Backward-compatible single-user/config mode when no Telegram
+                # profiles exist in the database.
+                orchestrator.run_cycle()
         except Exception:
             logger.exception("Ошибка в цикле мониторинга")
 
