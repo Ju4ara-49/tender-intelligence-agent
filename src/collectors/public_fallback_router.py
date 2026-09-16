@@ -1,14 +1,13 @@
 """Last-resort public search routing for blocked procurement portals.
 
-The first-party collector always runs first.  When the portal is unavailable
-or explicitly blocked, the router uses TenderGuru's public thematic indexes to
-keep keyword search operational without bypassing authentication, CAPTCHAs or
-other access controls.  Returned records retain the requested logical platform
-and carry adapter provenance in ``raw_data``.
+The first-party collector always runs first. When the portal is unavailable,
+the router uses TenderGuru's public thematic indexes without bypassing
+authentication, CAPTCHA or other access controls.
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from src.collectors.base import CollectorUnavailableError
@@ -32,7 +31,7 @@ class PublicFallbackRouter:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._collector, name)
 
-    def search(self, keywords: list[str], since=None) -> list[Tender]:
+    def search(self, keywords: list[str], since: datetime | None = None) -> list[Tender]:
         try:
             return self._collector.search(keywords, since=since)
         except CollectorUnavailableError as exc:
@@ -43,9 +42,14 @@ class PublicFallbackRouter:
                 self.platform,
                 exc,
             )
-            return self._fallback_search(keywords, exc)
+            return self._fallback_search(keywords, since, exc)
 
-    def _fallback_search(self, keywords: list[str], reason: Exception) -> list[Tender]:
+    def _fallback_search(
+        self,
+        keywords: list[str],
+        since: datetime | None,
+        reason: Exception,
+    ) -> list[Tender]:
         merged: dict[str, Tender] = {}
         for keyword in keywords:
             keyword = str(keyword).strip()
@@ -62,6 +66,15 @@ class PublicFallbackRouter:
                 logger.warning("%s: public fallback failed for %r: %s", self.platform, keyword, exc)
                 continue
             for tender in found:
+                if since is not None and tender.published_at is not None:
+                    published = tender.published_at
+                    if published.tzinfo is None:
+                        published = published.replace(tzinfo=timezone.utc)
+                    comparison_since = since
+                    if comparison_since.tzinfo is None:
+                        comparison_since = comparison_since.replace(tzinfo=timezone.utc)
+                    if published.astimezone(timezone.utc) < comparison_since.astimezone(timezone.utc):
+                        continue
                 tender.raw_data.setdefault("adapter_mode", "tenderguru_public_fallback")
                 tender.raw_data.setdefault("direct_portal_error", str(reason))
                 tender.raw_data.setdefault("requested_keyword", keyword)
