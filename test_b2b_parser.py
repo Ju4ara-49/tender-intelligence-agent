@@ -56,6 +56,39 @@ class B2BCenterCollectorTests(unittest.TestCase):
         self.assertFalse(conditions["advance_required"])
         self.assertEqual(conditions["postpayment_days"], 30)
 
+    def test_keyword_relevance_covers_required_smoke_keywords(self) -> None:
+        """Regression: `_keyword_matches_tender` must not silently drop real
+        matches for any of the three mandated smoke-test keywords, and must
+        accept them regardless of which word form is used as the query.
+
+        This previously dropped every подшипник/лебедка result outright
+        (missing from the variant table) and dropped станок/подшипник/лебедка
+        results whenever the query itself used a declined word form, because
+        the variant lookup was keyed only by the exact nominative singular.
+        """
+        cases = [
+            ("станок", "Поставка станка токарного"),
+            ("станки", "Поставка станка токарного"),
+            ("подшипник", "Поставка подшипников качения"),
+            ("подшипники", "Поставка подшипников качения"),
+            ("лебедка", "Закупка лебедки монтажной"),
+            ("лебедки", "Закупка лебедки монтажной"),
+        ]
+        for keyword, title in cases:
+            tender = Tender(
+                external_id="1",
+                platform="b2b_center",
+                title=title,
+                url="https://www.b2b-center.ru/market/tender-1-1/",
+                published_at=None,
+                deadline=None,
+            )
+            with self.subTest(keyword=keyword):
+                self.assertTrue(
+                    self.collector._keyword_matches_tender(tender, keyword),
+                    f"expected {keyword!r} to match title {title!r}",
+                )
+
     def test_title_cleanup_removes_service_prefix(self) -> None:
         self.assertEqual(
             self.collector._clean_procedure_title(
