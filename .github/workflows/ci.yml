@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -21,22 +21,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-
-      - name: Apply residual STEP-51 patch once
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ ! -f PATCHES/step51-residual.patch ]; then
-            exit 0
-          fi
-          git apply --check PATCHES/step51-residual.patch
-          git apply --index PATCHES/step51-residual.patch
-          rm -f PATCHES/step51-residual.patch .github/workflows/apply-step51-residual.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: apply STEP-51 residual regressions"
-          git push origin HEAD:main
 
       - name: Set up Python
         uses: actions/setup-python@v5
