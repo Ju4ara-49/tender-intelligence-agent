@@ -392,6 +392,7 @@ class TenderDatabase:
                     tender.description, tender.price, tender.currency,
                     tender.start_date.isoformat() if tender.start_date else None,
                     tender.end_date.isoformat() if tender.end_date else None,
+                    tender.deadline.isoformat() if tender.deadline else None,
                     tender.published_at.isoformat() if tender.published_at else None,
                     tender.region, tender.customer, tender.customer_inn, tender.law_type,
                     tender.detail_status, tender.detail_diagnostics,
