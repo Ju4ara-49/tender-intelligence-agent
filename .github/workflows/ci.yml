@@ -68,6 +68,7 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
+          set -o pipefail
           python tests/test_b2b_reliable_adapter.py 2>&1 | tee output/b2b_reliable_adapter.log
 
       - name: Run B2B quality gate tests
