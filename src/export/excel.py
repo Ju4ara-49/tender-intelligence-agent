@@ -130,7 +130,9 @@ def export_tenders_to_excel(
         for cell in ws[column][1:]:
             cell.number_format = "dd.mm.yyyy"
     for cell in ws["F"][1:]:
-        cell.number_format = '#,##0.00 "₽"'
+        # Currency is shown in the dedicated G column. Do not hard-code ₽ here:
+        # some platforms can return non-RUB prices.
+        cell.number_format = "#,##0.00"
     for cell in ws["J"][1:]:
         cell.number_format = "0"
     for cell in ws["M"][1:]:
