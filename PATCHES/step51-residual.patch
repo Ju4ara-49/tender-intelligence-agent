@@ -204,39 +204,3 @@ index 43836e5..afb9e0b 100644
 +    assert detailed.published_at.tzinfo is not None
 +    assert detailed.start_date is not None
 +    assert detailed.start_date.tzinfo is not None
-
-diff --git a/tests/test_tenderguru_fallback.py b/tests/test_tenderguru_fallback.py
-index a8e7827..2eaf61c 100644
---- a/tests/test_tenderguru_fallback.py
-+++ b/tests/test_tenderguru_fallback.py
-@@ -13,6 +13,31 @@ class TenderGuruFallbackTests(unittest.TestCase):
-         self.assertTrue(matches_keyword("Станки токарные", "станок"))
-         self.assertFalse(matches_keyword("Станция насосная", "станок"))
- 
-+    def test_keyword_morphology_is_insensitive_to_query_word_form(self) -> None:
-+        """Regression: querying with a declined form (e.g. plural
-+        "станки"/"подшипники"/"лебедки") must still match tender text
-+        written in any other form of the same word, not just the exact
-+        literal form of the query itself."""
-+        self.assertTrue(matches_keyword("Продаётся один станок", "станки"))
-+        self.assertTrue(matches_keyword("Куплю один подшипника", "подшипники"))
-+        self.assertTrue(matches_keyword("Закупка лебедок партией", "лебедка"))
-+
-+    @patch("src.collectors.tenderguru_fallback._SESSION.get")
-+    def test_search_resolves_topic_for_declined_query_form(self, get: Mock) -> None:
-+        """Regression: TOPIC_URLS lookup was keyed only by nominative
-+        singular, so searching with a plural/declined keyword (e.g.
-+        "станки") silently returned zero results instead of using the
-+        matching topic page."""
-+        get.return_value = Mock(
-+            raise_for_status=lambda: None,
-+            text='<div>Поставка станка Номер тендера: 301 <a href="/tender/301">Поставка станка</a></div>',
-+        )
-+        result = search(platform="b2b_center", keyword="станки", max_pages=1)
-+        self.assertEqual([x.external_id for x in result], ["301"])
-+        # The topic page must actually be requested (not short-circuited to
-+        # an empty result before any HTTP call), proving the lookup resolved.
-+        self.assertTrue(get.called)
-+
-     @patch("src.collectors.tenderguru_fallback._SESSION.get")
-     def test_rts_filters_to_rts_listings(self, get: Mock) -> None
