@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.crm.telegram import handle_callback
-from src.models.tender import Tender, TenderAnalysis
+from src.models.tender import Tender
 from src.notifications.telegram import TelegramNotifier
 from src.telegram_multiuser import MultiUserTelegramBot
 
@@ -46,7 +46,6 @@ class TelegramCrmWiringTests(unittest.TestCase):
 
     def test_notifier_emits_participation_callback_without_db_id(self) -> None:
         tender = Tender(platform="eis", external_id="1234567890", title="Test", url="https://example.test/tender")
-        analysis = TenderAnalysis(relevance_score=80, recommendation="participate", summary="ok")
         markup = TelegramNotifier._tender_keyboard(tender, None)
         callback = markup["inline_keyboard"][0][0]["callback_data"]
         self.assertEqual(callback, "crm:participate:eis:1234567890")
