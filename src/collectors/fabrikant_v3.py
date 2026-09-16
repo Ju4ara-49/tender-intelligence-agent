@@ -93,6 +93,12 @@ class FabrikantV3Collector(FabrikantV2Collector):
                 raw = detailed.raw_data if isinstance(detailed.raw_data, dict) else {}
                 raw["published_at_source"] = "detail_text"
                 detailed.raw_data = raw
+                # __post_init__'s UTC normalization already ran at
+                # construction time and does not re-fire on attribute
+                # assignment, so a naive Moscow-local datetime set here
+                # would otherwise stay naive/un-normalized on the Tender
+                # instance. Explicitly re-normalize after the assignment.
+                detailed.to_utc()
         if not detailed.region:
             region = self._extract_region_from_text(text)
             if region:
