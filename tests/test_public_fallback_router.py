@@ -49,19 +49,15 @@ class PublicFallbackRouterTests(unittest.TestCase):
     def test_unavailable_primary_uses_public_fallback_and_preserves_platform(self):
         collector = _UnavailableCollector()
         router = PublicFallbackRouter(collector, {"public_fallback": True, "max_results": 10})
-        fallback_result = Tender(
-            platform="tmk",
-            external_id="42",
-            title="Поставка подшипников",
-            url="https://www.tenderguru.ru/tender/42",
-            raw_data={},
-        )
+        fallback_result = Tender(platform="tmk", external_id="42", title="Поставка подшипников", url="https://www.tenderguru.ru/tender/42", raw_data={})
         with patch("src.collectors.public_fallback_router.tenderguru_search", return_value=[fallback_result]):
             result = router.search(["подшипников"])
         self.assertEqual([item.external_id for item in result], ["42"])
         self.assertEqual(result[0].platform, "tmk")
         self.assertEqual(result[0].raw_data["adapter_mode"], "tenderguru_public_fallback")
         self.assertEqual(result[0].raw_data["requested_keyword"], "подшипников")
+        self.assertFalse(result[0].raw_data["details_loaded"])
+        self.assertIs(router.get_details("42"), result[0])
 
     def test_empty_primary_can_use_public_fallback(self):
         collector = _EmptyCollector()
