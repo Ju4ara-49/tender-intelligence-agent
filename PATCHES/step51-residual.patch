@@ -204,3 +204,4 @@ index 43836e5..afb9e0b 100644
 +    assert detailed.published_at.tzinfo is not None
 +    assert detailed.start_date is not None
 +    assert detailed.start_date.tzinfo is not None
+
