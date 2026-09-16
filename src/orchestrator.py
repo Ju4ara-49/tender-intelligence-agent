@@ -227,11 +227,8 @@ class Orchestrator:
             return False, "min_price"
         if criteria.max_price is not None and (tender.price is None or tender.price > criteria.max_price):
             return False, "max_price"
-        if criteria.advance_required:
-            if not tender.advance_required:
-                return False, "advance_required"
-            if tender.advance_percent is None:
-                return False, "advance_percent_missing"
+        if criteria.advance_required and not tender.advance_required:
+            return False, "advance_required"
         if criteria.min_advance_percent > 0 and (
             tender.advance_percent is None or tender.advance_percent < criteria.min_advance_percent
         ):
