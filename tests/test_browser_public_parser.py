@@ -118,7 +118,6 @@ class BrowserPublicParserTests(unittest.TestCase):
         self.assertEqual(results[0].raw_data["procurement_platform"], "РТС-Тендер")
         self.assertIsNotNone(results[0].deadline)
 
-
     def test_reliable_browser_rejects_unrelated_global_listing(self) -> None:
         from src.collectors.browser_public_reliable import ReliableBrowserSearchMixin
         from src.models.tender import Tender
@@ -130,7 +129,6 @@ class BrowserPublicParserTests(unittest.TestCase):
         from src.models.tender import Tender
         tender = Tender(platform="fabrikant", external_id="2", title="Поставка станка токарно-винторезного", url="/2", description="")
         self.assertTrue(ReliableBrowserSearchMixin._tender_matches_query(tender, "станок"))
-
 
     def test_reliable_browser_accepts_all_live_keywords_and_inflections(self) -> None:
         from src.collectors.browser_public_reliable import ReliableBrowserSearchMixin
@@ -144,6 +142,41 @@ class BrowserPublicParserTests(unittest.TestCase):
             tender = Tender(platform="fabrikant", external_id=query, title=title, url="/x", description="")
             self.assertTrue(
                 ReliableBrowserSearchMixin._tender_matches_query(tender, query),
+                (query, title),
+            )
+
+    def test_reliable_browser_matches_regardless_of_query_word_form(self) -> None:
+        """Regression: a declined query form (e.g. plural "станки") must
+        still match tender text written in a *different* form of the same
+        word (e.g. singular "станок"), not only its own literal form."""
+        from src.collectors.browser_public_reliable import ReliableBrowserSearchMixin
+        from src.models.tender import Tender
+        cases = (
+            ("станки", "Продаётся один станок"),
+            ("подшипники", "Куплю один подшипника"),
+            ("лебедки", "Закупка одной лебедки монтажной"),
+        )
+        for query, title in cases:
+            tender = Tender(platform="fabrikant", external_id=query, title=title, url="/x", description="")
+            self.assertTrue(
+                ReliableBrowserSearchMixin._tender_matches_query(tender, query),
+                (query, title),
+            )
+
+    def test_browser_public_matches_regardless_of_query_word_form(self) -> None:
+        """Same regression as above, for the non-reliable browser_public
+        mixin's independent copy of the keyword-matching logic."""
+        from src.collectors.browser_public import RtsTenderCollector
+        from src.models.tender import Tender
+        cases = (
+            ("станки", "Продаётся один станок"),
+            ("подшипники", "Куплю один подшипника"),
+            ("лебедки", "Закупка одной лебедки монтажной"),
+        )
+        for query, title in cases:
+            tender = Tender(platform="rts_tender", external_id=query, title=title, url="/x", description="")
+            self.assertTrue(
+                RtsTenderCollector._tender_matches_query(tender, query),
                 (query, title),
             )
 
