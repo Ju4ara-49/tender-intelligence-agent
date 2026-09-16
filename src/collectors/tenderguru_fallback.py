@@ -9,7 +9,6 @@ of the pipeline can process it uniformly.
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from urllib.parse import urljoin
 
 import requests
