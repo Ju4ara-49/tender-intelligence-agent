@@ -1,10 +1,4 @@
-"""Last-resort public search routing for blocked procurement portals.
-
-The first-party collector always runs first. When the portal is unavailable,
-blocked, or produces an unverified zero-result response, the router uses
-TenderGuru's public thematic indexes without bypassing authentication, CAPTCHA
-or other access controls.
-"""
+"""Last-resort public search routing for blocked procurement portals."""
 from __future__ import annotations
 
 import logging
@@ -29,6 +23,7 @@ class PublicFallbackRouter:
         self.fallback_on_empty = bool(self.config.get("public_fallback_on_empty", True))
         self.timeout = int(self.config.get("timeout_seconds", 20))
         self.max_results = int(self.config.get("max_results", 100))
+        self._fallback_tenders: dict[str, Tender] = {}
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._collector, name)
@@ -73,7 +68,9 @@ class PublicFallbackRouter:
                 tender.raw_data.setdefault("adapter_mode", "tenderguru_public_fallback")
                 tender.raw_data.setdefault("direct_portal_error", str(reason))
                 tender.raw_data.setdefault("requested_keyword", keyword)
+                tender.raw_data.setdefault("details_loaded", False)
                 merged[tender.unique_key] = tender
+                self._fallback_tenders[str(tender.external_id)] = tender
                 if len(merged) >= self.max_results:
                     return list(merged.values())[: self.max_results]
         if not merged:
@@ -83,4 +80,8 @@ class PublicFallbackRouter:
         return list(merged.values())[: self.max_results]
 
     def get_details(self, external_id: str):
+        fallback = self._fallback_tenders.get(str(external_id))
+        if fallback is not None:
+            logger.info("%s: returning public fallback record for %s", self.platform, external_id)
+            return fallback
         return self._collector.get_details(external_id)
