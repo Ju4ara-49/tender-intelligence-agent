@@ -35,13 +35,37 @@ class TestPublicSearchFallback(unittest.TestCase):
         self.assertEqual(tender.raw_data["source_engine"], "bing")
         self.assertFalse(tender.raw_data["details_loaded"])
 
-    def test_google_is_used_when_bing_fails(self):
-        google_html = """
-        <html><body><div><a href='https://www.fabrikant.ru/procedure/456'>Станок токарный</a></div></body></html>
+    def test_yandex_is_used_when_bing_fails(self):
+        yandex_html = """
+        <html><body><li class='serp-item'>
+          <a href='https://www.fabrikant.ru/procedure/456'><h2>Станок токарный</h2></a>
+          <div>Закупка станка токарного оборудования</div>
+        </li></body></html>
         """
         def request(url, timeout):
             if "bing.com" in url:
                 raise RuntimeError("bing unavailable")
+            if "yandex.ru" in url:
+                return yandex_html
+            raise AssertionError("google must not be reached after Yandex succeeds")
+
+        with patch.object(public_search_fallback, "_request", side_effect=request):
+            result = public_search_fallback.search(
+                platform="fabrikant",
+                keyword="станок",
+                timeout=1,
+                max_results=5,
+            )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].raw_data["source_engine"], "yandex")
+
+    def test_google_is_used_when_bing_and_yandex_fail(self):
+        google_html = """
+        <html><body><div><a href='https://www.fabrikant.ru/procedure/456'>Станок токарный</a></div></body></html>
+        """
+        def request(url, timeout):
+            if "bing.com" in url or "yandex.ru" in url:
+                raise RuntimeError("search engine unavailable")
             return google_html
 
         with patch.object(public_search_fallback, "_request", side_effect=request):
