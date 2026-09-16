@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from src.collectors.base import CollectorUnavailableError
 from src.collectors.browser_public import RtsTenderCollector, TmkCollector
 from src.collectors.rosatom import RosatomCollector
+from src.models.tender import Tender
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,19 @@ class ReliableBrowserSearchMixin:
             "лебедка": ("лебедка", "лебедки", "лебедку", "лебедкой", "лебедкою", "лебедок", "лебедкам", "лебедками"),
             "редуктор": ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
         }
-        return any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(variant)}(?![а-яёa-z0-9])", haystack) for variant in variants.get(normalized_query, ()))
+        # Resolve the query to its canonical (nominative singular) key
+        # regardless of which declined form was searched for. A plain
+        # dict.get(normalized_query, ()) only worked when the query itself
+        # was already in nominative singular; any other form (plural,
+        # genitive, etc.) silently matched nothing even when the tender
+        # text plainly used a different form of the same word.
+        query_variants = variants.get(normalized_query)
+        if query_variants is None:
+            for forms in variants.values():
+                if normalized_query in forms:
+                    query_variants = forms
+                    break
+        return any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(variant)}(?![а-яёa-z0-9])", haystack) for variant in (query_variants or ()))
 
     @staticmethod
     def _normalize_search_text(value: str) -> str:
