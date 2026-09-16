@@ -46,6 +46,19 @@ def run_one(collector, keyword: str) -> dict:
         }
 
 
+def run_platform(collector) -> list[dict]:
+    """Probe one collector sequentially so its mutable parser state is isolated.
+
+    Several collectors intentionally retain state between discovery and detail
+    parsing (URLs, titles, active Fabrikant host, authenticated session). The
+    previous smoke test submitted three keywords against the same instance from
+    different worker threads, creating a race that could manufacture failures
+    which never occur in the real orchestrator. Parallelize by platform, not by
+    keyword, and keep each collector's keyword probes sequential.
+    """
+    return [run_one(collector, keyword) for keyword in KEYWORDS]
+
+
 def main() -> int:
     settings = load_settings()
     collectors = get_enabled_collectors(settings.config, enabled_platforms=list(PLATFORMS))
@@ -53,13 +66,9 @@ def main() -> int:
     missing = sorted(set(PLATFORMS) - found)
     results = []
     with ThreadPoolExecutor(max_workers=len(collectors) or 1) as pool:
-        futures = [
-            pool.submit(run_one, collector, keyword)
-            for collector in collectors
-            for keyword in KEYWORDS
-        ]
+        futures = [pool.submit(run_platform, collector) for collector in collectors]
         for future in as_completed(futures):
-            results.append(future.result())
+            results.extend(future.result())
 
     results.sort(key=lambda x: (x["platform"], x["keyword"]))
     report = {
