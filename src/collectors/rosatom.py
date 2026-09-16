@@ -25,6 +25,23 @@ class RosatomCollector(_BrowserTenderCollector):
     LINK_HINTS = ("procurements", "obj_id", "published_procurements")
     ALLOW_PUBLISHED_LISTING_FALLBACK = True
 
+    @classmethod
+    def _tender_matches_query(cls, tender: Tender, query: str) -> bool:
+        """Match a Rosatom numeric procedure id as well as normal keywords.
+
+        ``get_details()`` reuses the public search surface with the numeric
+        Rosatom ``obj_id``. The published table keeps that id in the row's
+        first column, while the procedure title does not contain it. The
+        generic browser relevance gate therefore rejected the exact procedure
+        after a successful search. Treat an exact numeric external id as a
+        verified match; normal keyword matching remains unchanged.
+        """
+        normalized = cls._normalize_search_text(query)
+        external_id = cls._normalize_search_text(str(tender.external_id or ""))
+        if normalized and external_id and normalized == external_id and normalized.isdigit():
+            return True
+        return super()._tender_matches_query(tender, query)
+
     @staticmethod
     def _clean_cell(value: str) -> str:
         return re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n;")
@@ -123,9 +140,6 @@ class RosatomCollector(_BrowserTenderCollector):
                 raw_data={"source": "zakupki.rosatom.ru", "obj_id": obj_id},
             ))
 
-        # Locate the semantic header anywhere in the document. In the live
-        # portal the data rows may be under <tbody>, so sibling traversal from
-        # a <thead> header is not reliable.
         all_rows = soup.find_all("tr")
         header_index = None
         for index, row in enumerate(all_rows):
@@ -203,8 +217,6 @@ class RosatomCollector(_BrowserTenderCollector):
             except Exception:
                 continue
 
-        # Fallback: use the first visible text box only after the filter panel
-        # has been opened; this avoids mistaking unrelated page controls for search.
         try:
             locator = page.get_by_role("textbox").first
             if locator.count() and locator.is_visible():
