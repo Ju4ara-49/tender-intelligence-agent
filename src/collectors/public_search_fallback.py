@@ -57,7 +57,13 @@ def _keyword_match(text: str, keyword: str) -> bool:
     query = _norm(keyword)
     if not query:
         return False
-    return query in normalized
+    if query in normalized:
+        return True
+    tokens = normalized.split()
+    for token in tokens:
+        if len(query) >= 6 and len(token) >= 6 and query[:-2] in token:
+            return True
+    return False
 
 
 def _stable_id(url: str) -> str:
