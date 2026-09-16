@@ -5,14 +5,14 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from src.collectors.base import CollectorUnavailableError
+from src.collectors.base import BaseCollector, CollectorUnavailableError
 from src.collectors.tenderguru_fallback import search as tenderguru_search
 from src.models.tender import Tender
 
 logger = logging.getLogger(__name__)
 
 
-class PublicFallbackRouter:
+class PublicFallbackRouter(BaseCollector):
     """Proxy a collector and recover external-access/zero-result searches."""
 
     def __init__(self, collector: Any, config: dict | None = None) -> None:
@@ -65,6 +65,8 @@ class PublicFallbackRouter:
                     comparison_since = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
                     if published.astimezone(timezone.utc) < comparison_since.astimezone(timezone.utc):
                         continue
+                if not isinstance(tender.raw_data, dict):
+                    tender.raw_data = {}
                 tender.raw_data.setdefault("adapter_mode", "tenderguru_public_fallback")
                 tender.raw_data.setdefault("direct_portal_error", str(reason))
                 tender.raw_data.setdefault("requested_keyword", keyword)
@@ -79,7 +81,7 @@ class PublicFallbackRouter:
             ) from reason
         return list(merged.values())[: self.max_results]
 
-    def get_details(self, external_id: str):
+    def get_details(self, external_id: str) -> Tender | None:
         fallback = self._fallback_tenders.get(str(external_id))
         if fallback is not None:
             logger.info("%s: returning public fallback record for %s", self.platform, external_id)
