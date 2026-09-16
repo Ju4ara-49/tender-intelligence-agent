@@ -39,10 +39,25 @@ def _norm(value: str) -> str:
     return re.sub(r"[^0-9a-zа-я]+", " ", str(value or "").casefold().replace("ё", "е")).strip()
 
 
+def _resolve_canonical(query: str) -> str | None:
+    """Resolve a keyword in any declined word form to its canonical
+    (nominative singular) key used by TOPIC_URLS/VARIANTS. Without this,
+    a plural or otherwise declined query (e.g. "станки", "подшипники")
+    would not be found by the dict's exact-key lookup, even though it is
+    a fully valid form of a supported keyword group."""
+    if query in VARIANTS:
+        return query
+    for canonical, forms in VARIANTS.items():
+        if query in forms:
+            return canonical
+    return None
+
+
 def matches_keyword(text: str, keyword: str) -> bool:
     normalized = _norm(text)
     query = _norm(keyword)
-    variants = VARIANTS.get(query, (query,))
+    canonical = _resolve_canonical(query)
+    variants = VARIANTS.get(canonical, (query,)) if canonical else (query,)
     return any(re.search(rf"(?<![а-яa-z0-9]){re.escape(_norm(v))}(?![а-яa-z0-9])", normalized) for v in variants)
 
 
@@ -54,7 +69,8 @@ def search(
     max_pages: int = 3,
     max_results: int = 100,
 ) -> list[Tender]:
-    topic = TOPIC_URLS.get(_norm(keyword))
+    canonical = _resolve_canonical(_norm(keyword))
+    topic = TOPIC_URLS.get(canonical) if canonical else None
     if not topic:
         return []
     results: dict[str, Tender] = {}
