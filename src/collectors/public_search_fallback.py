@@ -66,10 +66,6 @@ def _keyword_match(text: str, keyword: str) -> bool:
     return False
 
 
-def _stable_id(url: str) -> str:
-    return "public-search-" + hashlib.sha1(url.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
-
-
 def _bing_results(html: str, platform: str, keyword: str) -> list[tuple[str, str, str]]:
     soup = BeautifulSoup(html, "html.parser")
     results: list[tuple[str, str, str]] = []
@@ -104,6 +100,43 @@ def _google_results(html: str, platform: str, keyword: str) -> list[tuple[str, s
     return results
 
 
+def _yandex_results(html: str, platform: str, keyword: str) -> list[tuple[str, str, str]]:
+    """Parse Yandex's public HTML result page without relying on JS."""
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    selectors = (
+        "li.serp-item",
+        "div.organic",
+        "div[data-cid]",
+    )
+    nodes = []
+    for selector in selectors:
+        nodes.extend(soup.select(selector))
+    if not nodes:
+        nodes = soup.select("a[href]")
+
+    for node in nodes:
+        anchors = node.select("a[href]") if hasattr(node, "select") else []
+        for anchor in anchors or ([node] if getattr(node, "name", None) == "a" else []):
+            url = str(anchor.get("href", "")).strip()
+            if not url.startswith("http") or url in seen or not _allowed(url, platform):
+                continue
+            title_node = anchor.select_one("h2") or anchor
+            title = " ".join(title_node.stripped_strings).strip()
+            description = " ".join(node.stripped_strings).strip()
+            if not title or not _keyword_match(f"{title} {description}", keyword):
+                continue
+            seen.add(url)
+            results.append((url, title, description))
+            break
+    return results
+
+
+def _stable_id(url: str) -> str:
+    return "public-search-" + hashlib.sha1(url.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
+
+
 def _request(url: str, timeout: int) -> str:
     response = _SESSION.get(url, timeout=timeout)
     response.raise_for_status()
@@ -111,13 +144,14 @@ def _request(url: str, timeout: int) -> str:
 
 
 def search(*, platform: str, keyword: str, timeout: int = 15, max_results: int = 25) -> list[Tender]:
-    """Discover public portal pages through Bing, then Google if needed."""
+    """Discover public portal pages through Bing, Yandex, then Google."""
     if platform not in PLATFORM_DOMAINS or not str(keyword).strip():
         return []
 
     q = _query(platform, str(keyword).strip())
     engines = (
         ("bing", f"https://www.bing.com/search?q={quote_plus(q)}", _bing_results),
+        ("yandex", f"https://yandex.ru/search/?text={quote_plus(q)}", _yandex_results),
         ("google", f"https://www.google.com/search?q={quote_plus(q)}", _google_results),
     )
     found: dict[str, Tender] = {}
