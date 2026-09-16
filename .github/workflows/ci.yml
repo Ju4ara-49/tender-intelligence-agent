@@ -59,6 +59,7 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
+          set -o pipefail
           python test_b2b_parser.py 2>&1 | tee output/b2b_parser.log
 
       - name: Run B2B reliable adapter tests
