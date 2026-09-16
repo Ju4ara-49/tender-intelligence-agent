@@ -1,6 +1,8 @@
 from datetime import timezone
+from unittest.mock import patch
 
 from src.collectors.fabrikant_v3 import FabrikantV3Collector
+from src.models.tender import Tender
 
 
 def test_fabrikant_date_only_preserves_calendar_day_after_utc_normalization() -> None:
