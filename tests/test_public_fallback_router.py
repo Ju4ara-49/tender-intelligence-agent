@@ -32,6 +32,11 @@ class _WorkingCollector:
         return external_id
 
 
+class _EmptyCollector(_WorkingCollector):
+    def search(self, keywords, since=None):
+        return []
+
+
 class PublicFallbackRouterTests(unittest.TestCase):
     def test_primary_collector_is_used_first(self):
         collector = _WorkingCollector()
@@ -51,15 +56,21 @@ class PublicFallbackRouterTests(unittest.TestCase):
             url="https://www.tenderguru.ru/tender/42",
             raw_data={},
         )
-        with patch(
-            "src.collectors.public_fallback_router.tenderguru_search",
-            return_value=[fallback_result],
-        ):
+        with patch("src.collectors.public_fallback_router.tenderguru_search", return_value=[fallback_result]):
             result = router.search(["подшипников"])
         self.assertEqual([item.external_id for item in result], ["42"])
         self.assertEqual(result[0].platform, "tmk")
         self.assertEqual(result[0].raw_data["adapter_mode"], "tenderguru_public_fallback")
         self.assertEqual(result[0].raw_data["requested_keyword"], "подшипников")
+
+    def test_empty_primary_can_use_public_fallback(self):
+        collector = _EmptyCollector()
+        router = PublicFallbackRouter(collector, {"public_fallback": True})
+        fallback_result = Tender(platform="tmk", external_id="43", title="Станки", url="https://example/43", raw_data={})
+        with patch("src.collectors.public_fallback_router.tenderguru_search", return_value=[fallback_result]):
+            result = router.search(["станок"])
+        self.assertEqual([item.external_id for item in result], ["43"])
+        self.assertEqual(result[0].raw_data["adapter_mode"], "tenderguru_public_fallback")
 
     def test_fallback_can_be_disabled(self):
         collector = _UnavailableCollector()
