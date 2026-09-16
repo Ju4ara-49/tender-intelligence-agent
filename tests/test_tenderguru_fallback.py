@@ -13,7 +13,6 @@ class TenderGuruFallbackTests(unittest.TestCase):
         self.assertTrue(matches_keyword("Станки токарные", "станок"))
         self.assertFalse(matches_keyword("Станция насосная", "станок"))
 
-    @patch("src.collectors.tenderguru_fallback._SESSION.get")
     def test_keyword_morphology_is_insensitive_to_query_word_form(self) -> None:
         self.assertTrue(matches_keyword("Продаётся один станок", "станки"))
         self.assertTrue(matches_keyword("Куплю один подшипника", "подшипники"))
