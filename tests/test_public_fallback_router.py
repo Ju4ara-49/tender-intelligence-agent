@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from src.collectors.base import CollectorUnavailableError
+from src.collectors.base import BaseCollector, CollectorUnavailableError
 from src.collectors.public_fallback_router import PublicFallbackRouter
 from src.models.tender import Tender
 
@@ -38,6 +38,11 @@ class _EmptyCollector(_WorkingCollector):
 
 
 class PublicFallbackRouterTests(unittest.TestCase):
+    def test_router_satisfies_base_collector_contract(self):
+        router = PublicFallbackRouter(_WorkingCollector(), {"public_fallback": True})
+        self.assertIsInstance(router, BaseCollector)
+        self.assertEqual(router.platform, "tmk")
+
     def test_primary_collector_is_used_first(self):
         collector = _WorkingCollector()
         router = PublicFallbackRouter(collector, {"public_fallback": True})
