@@ -15,33 +15,32 @@ def make_tender(*, advance_required: bool, advance_percent: float | None) -> Ten
     )
 
 
+def criteria_for_advance(**overrides) -> TenderCriteria:
+    return TenderCriteria(
+        advance_required=overrides.pop("advance_required", True),
+        min_advance_percent=overrides.pop("min_advance_percent", 0),
+        min_submission_days=0,
+        max_application_security_percent=None,
+        **overrides,
+    )
+
+
 def test_advance_required_does_not_require_known_percent() -> None:
     tender = make_tender(advance_required=True, advance_percent=None)
-    criteria = TenderCriteria(
-        advance_required=True,
-        min_advance_percent=0,
-        min_submission_days=0,
-    )
+    criteria = criteria_for_advance()
 
     assert Orchestrator._passes_criteria(tender, criteria) == (True, "")
 
 
 def test_min_advance_percent_requires_known_percent() -> None:
     tender = make_tender(advance_required=True, advance_percent=None)
-    criteria = TenderCriteria(
-        advance_required=True,
-        min_advance_percent=10,
-        min_submission_days=0,
-    )
+    criteria = criteria_for_advance(min_advance_percent=10)
 
     assert Orchestrator._passes_criteria(tender, criteria) == (False, "min_advance_percent")
 
 
 def test_advance_required_rejects_tender_without_advance() -> None:
     tender = make_tender(advance_required=False, advance_percent=None)
-    criteria = TenderCriteria(
-        advance_required=True,
-        min_submission_days=0,
-    )
+    criteria = criteria_for_advance()
 
     assert Orchestrator._passes_criteria(tender, criteria) == (False, "advance_required")
