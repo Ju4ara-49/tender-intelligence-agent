@@ -14,6 +14,21 @@ class TenderGuruFallbackTests(unittest.TestCase):
         self.assertFalse(matches_keyword("Станция насосная", "станок"))
 
     @patch("src.collectors.tenderguru_fallback._SESSION.get")
+    def test_keyword_morphology_is_insensitive_to_query_word_form(self) -> None:
+        self.assertTrue(matches_keyword("Продаётся один станок", "станки"))
+        self.assertTrue(matches_keyword("Куплю один подшипника", "подшипники"))
+        self.assertTrue(matches_keyword("Закупка лебедок партией", "лебедка"))
+
+    @patch("src.collectors.tenderguru_fallback._SESSION.get")
+    def test_search_resolves_topic_for_declined_query_form(self, get: Mock) -> None:
+        get.return_value = Mock(
+            raise_for_status=lambda: None,
+            text='<div>Поставка станка Номер тендера: 301 <a href="/tender/301">Поставка станка</a></div>',
+        )
+        result = search(platform="b2b_center", keyword="станки", max_pages=1)
+        self.assertEqual([x.external_id for x in result], ["301"])
+        self.assertTrue(get.called)
+
     def test_rts_filters_to_rts_listings(self, get: Mock) -> None:
         get.return_value = Mock(
             raise_for_status=lambda: None,
