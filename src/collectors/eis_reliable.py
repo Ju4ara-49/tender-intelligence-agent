@@ -9,7 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from src.collectors.base import CollectorUnavailableError
-from src.collectors.eis_zakupki import EisZakupkiCollector, SEARCH_URL
+from src.collectors.eis_zakupki import BASE_URL, EisZakupkiCollector, SEARCH_URL
 from src.models.tender import Tender
 from src.collectors.tenderguru_fallback import search as tenderguru_search
 

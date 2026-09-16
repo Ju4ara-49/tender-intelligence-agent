@@ -147,5 +147,29 @@ class BrowserPublicParserTests(unittest.TestCase):
                 (query, title),
             )
 
+    def test_reliable_browser_matches_regardless_of_query_word_form(self) -> None:
+        from src.collectors.browser_public_reliable import ReliableBrowserSearchMixin
+        from src.models.tender import Tender
+        cases = (
+            ("станки", "Продаётся один станок"),
+            ("подшипники", "Куплю один подшипника"),
+            ("лебедки", "Закупка одной лебедки монтажной"),
+        )
+        for query, title in cases:
+            tender = Tender(platform="fabrikant", external_id=query, title=title, url="/x", description="")
+            self.assertTrue(ReliableBrowserSearchMixin._tender_matches_query(tender, query), (query, title))
+
+    def test_browser_public_matches_regardless_of_query_word_form(self) -> None:
+        from src.collectors.browser_public import RtsTenderCollector
+        from src.models.tender import Tender
+        cases = (
+            ("станки", "Продаётся один станок"),
+            ("подшипники", "Куплю один подшипника"),
+            ("лебедки", "Закупка одной лебедки монтажной"),
+        )
+        for query, title in cases:
+            tender = Tender(platform="rts_tender", external_id=query, title=title, url="/x", description="")
+            self.assertTrue(RtsTenderCollector._tender_matches_query(tender, query), (query, title))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1358,11 +1358,20 @@ class B2BCenterCollector(BaseCollector):
         )
         if query in text:
             return True
-        variants = {
-            "станок": ("станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"),
-            "редуктор": ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
-        }
-        return any(item in text for item in variants.get(query, ()))
+        variant_groups = (
+            ("станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"),
+            ("редуктор", "редуктора", "редукторы", "редукторов", "редукторам", "редукторами", "редукторе", "редуктором"),
+            ("подшипник", "подшипника", "подшипники", "подшипников", "подшипнику", "подшипникам", "подшипником", "подшипниками", "подшипнике", "подшипниках"),
+            ("лебедка", "лебедки", "лебедку", "лебедкой", "лебедкою", "лебедок", "лебедкам", "лебедками"),
+        )
+        # Match regardless of which word form the search keyword itself was
+        # entered in (singular or plural, nominative or declined): look up
+        # the variant group the query belongs to, then check the tender text
+        # against every form in that group, not just the query's own form.
+        for group in variant_groups:
+            if query in group:
+                return any(item in text for item in group)
+        return False
 
     @staticmethod
     def _normalize_datetime(

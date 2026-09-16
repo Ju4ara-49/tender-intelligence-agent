@@ -14,10 +14,9 @@ from src.collectors.browser_public_reliable import (
 from src.collectors.detail_contract import enforce_detail_contract
 from src.collectors.eis_reliable import ReliableEisZakupkiCollector
 from src.collectors.fabrikant_v3 import FabrikantV3Collector
+from src.collectors.public_fallback_router import PublicFallbackRouter
 
 
-# Все поддерживаемые площадки. Конкретное включение определяется одновременно
-# конфигурацией приложения и пользовательским выбором в Telegram.
 ALL_COLLECTORS: list[Type[BaseCollector]] = [
     ReliableEisZakupkiCollector,
     ReliableB2BCenterCollector,
@@ -34,15 +33,10 @@ def get_enabled_collectors(
 ) -> list[BaseCollector]:
     """Создать экземпляры реально разрешённых сборщиков.
 
-    Без явного пользовательского списка используются только площадки с
-    ``enabled: true`` в config.yaml. При наличии списка из Telegram он
-    дополнительно ограничивает этот набор: пользователь не может включить
-    площадку, которую администратор отключил в конфигурации.
-
-    Важное правило: отсутствие секции площадки в конфигурации означает
-    ``disabled``, а не ``enabled``. Это особенно важно для браузерных
-    сборщиков, у которых исторически был более разрешительный ``is_enabled``.
-    Реестр является последней точкой авторизации включения площадки.
+    First-party collectors always remain the primary adapter.  If a public
+    portal is unavailable from the current network, the optional fallback
+    router preserves keyword-search availability through a public thematic
+    index; it never bypasses authentication, CAPTCHA or access controls.
     """
     enabled: list[BaseCollector] = []
     selected = None
@@ -64,6 +58,8 @@ def get_enabled_collectors(
         platform_config = instance.get_platform_config(config)
         configured = collector_cls(platform_config)
         enforce_detail_contract(configured)
+        if bool(platform_config.get("public_fallback", True)):
+            configured = PublicFallbackRouter(configured, platform_config)
         enabled.append(configured)
 
     return enabled

@@ -93,6 +93,7 @@ class FabrikantV3Collector(FabrikantV2Collector):
                 raw = detailed.raw_data if isinstance(detailed.raw_data, dict) else {}
                 raw["published_at_source"] = "detail_text"
                 detailed.raw_data = raw
+                detailed.to_utc()
         if not detailed.region:
             region = self._extract_region_from_text(text)
             if region:

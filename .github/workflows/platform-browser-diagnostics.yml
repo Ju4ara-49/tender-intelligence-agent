@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths-ignore:
       - "docs/PROJECT_CHECKPOINT_*.md"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "docs/PROJECT_CHECKPOINT_*.md"
   workflow_dispatch:
 
 permissions:
@@ -51,11 +55,19 @@ jobs:
           test -s output/platform_browser_diagnostics/rosatom.png
           HARD_EXTERNAL_ACCESS=0 python tests/platform_browser_diagnostics_gate.py
 
+      - name: Verify keyword search through public fallback for every supported target
+        env:
+          PLATFORM_DIAGNOSTIC_QUERIES: "станок,подшипник,лебедка"
+          PYTHONPATH: .
+        run: python tests/platform_keyword_fallback_diagnostics.py
+
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: platform-browser-diagnostics
-          path: output/platform_browser_diagnostics/
+          path: |
+            output/platform_browser_diagnostics/
+            output/platform_keyword_fallback_diagnostics/
           if-no-files-found: error
           retention-days: 7

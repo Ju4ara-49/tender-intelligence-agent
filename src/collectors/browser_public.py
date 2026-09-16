@@ -78,7 +78,15 @@ class _BrowserTenderCollector(BaseCollector):
             "подшипник":("подшипник","подшипника","подшипники","подшипников","подшипнику","подшипникам","подшипником","подшипниками","подшипнике","подшипниках"),
             "лебедка":("лебедка","лебедки","лебедку","лебедкой","лебедок","лебедкам","лебедками","лебедкою"),
             "редуктор":("редуктор","редуктора","редукторы","редукторов","редукторам","редукторами","редукторе","редуктором")}
-        return any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(v)}(?![а-яёa-z0-9])",text) for v in variants.get(q,()))
+        # Resolve q to its canonical group regardless of declined form: a
+        # plain variants.get(q, ()) only matched when q was already the
+        # nominative singular key, so any other form of the same word
+        # (plural, genitive, etc.) silently matched nothing.
+        forms=variants.get(q)
+        if forms is None:
+            for group in variants.values():
+                if q in group:forms=group;break
+        return any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(v)}(?![а-яёa-z0-9])",text) for v in (forms or ()))
     @staticmethod
     def _normalize_search_text(value:str)->str:return re.sub(r"[^0-9a-zа-яё]+"," ",str(value or "").casefold()).strip()
     def get_details(self,external_id:str)->Tender|None:
