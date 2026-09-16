@@ -71,10 +71,13 @@ class TelegramNotifier:
         return {"inline_keyboard": rows}
 
     def send_text(self, text: str, chat_id: str | None = None) -> bool:
+        """Send plain text or apply the configured no-credentials dry-run policy."""
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         if not self.bot_token or not target_chat_id:
-            logger.info("Telegram [DRY-RUN]: %s", text)
-            return False
+            if self.dry_run_when_no_token:
+                logger.info("Telegram [DRY-RUN]: %s", text)
+                return False
+            raise RuntimeError("TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы в .env")
         return self._send(text, chat_id=target_chat_id)
 
     def _send(self, text: str, chat_id: str | None = None, reply_markup: dict | None = None) -> bool:
