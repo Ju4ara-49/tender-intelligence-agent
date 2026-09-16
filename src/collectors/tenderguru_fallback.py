@@ -1,10 +1,9 @@
 """Conservative public fallback for Russian procurement portals.
 
 This adapter is used only when the first-party portal is unreachable from the
-runner. It reads TenderGuru's public thematic indexes, never authenticates or
-bypasses access controls, and keeps the original aggregator URL as provenance.
-The resulting Tender still carries the requested logical platform so the rest
-of the pipeline can process it uniformly.
+runner. It reads TenderGuru's public thematic indexes, then falls back to
+ordinary public search-engine discovery if TenderGuru itself is unavailable.
+It never authenticates or bypasses access controls.
 """
 from __future__ import annotations
 
@@ -15,6 +14,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from src.models.tender import Tender
+from src.collectors.public_search_fallback import search as public_search
 
 BASE = "https://www.tenderguru.ru"
 TOPIC_URLS = {
@@ -66,53 +66,61 @@ def search(
     canonical = _resolve_canonical(_norm(keyword))
     topic = TOPIC_URLS.get(canonical) if canonical else None
     if not topic:
-        return []
+        return public_search(platform=platform, keyword=keyword, timeout=timeout, max_results=max_results)
     results: dict[str, Tender] = {}
-    for page_no in range(1, max_pages + 1):
-        url = urljoin(BASE, topic)
-        if page_no > 1:
-            url += f"?page={page_no}"
-        response = _SESSION.get(url, timeout=timeout)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        for link in soup.select("a[href*='/tender/']"):
-            href = urljoin(BASE, link.get("href", ""))
-            match = re.search(r"/tender/(\d+)", href)
-            if not match:
-                continue
-            external_id = match.group(1)
-            node = link
-            block = node
-            for _ in range(5):
-                parent = getattr(block, "parent", None)
-                if parent is None:
-                    break
-                text = " ".join(parent.stripped_strings)
-                if len(text) >= 40:
+    try:
+        for page_no in range(1, max_pages + 1):
+            url = urljoin(BASE, topic)
+            if page_no > 1:
+                url += f"?page={page_no}"
+            response = _SESSION.get(url, timeout=timeout)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            for link in soup.select("a[href*='/tender/']"):
+                href = urljoin(BASE, link.get("href", ""))
+                match = re.search(r"/tender/(\d+)", href)
+                if not match:
+                    continue
+                external_id = match.group(1)
+                node = link
+                block = node
+                for _ in range(5):
+                    parent = getattr(block, "parent", None)
+                    if parent is None:
+                        break
+                    text = " ".join(parent.stripped_strings)
+                    if len(text) >= 40:
+                        block = parent
+                        break
                     block = parent
-                    break
-                block = parent
-            text = " ".join(block.stripped_strings)
-            if not matches_keyword(text, keyword):
-                continue
-            if platform == "rts_tender" and not re.search(r"ртс[-\s]?тендер", _norm(text), re.I):
-                continue
-            if platform == "eis" and not re.search(r"44\s*-?\s*фз|223\s*-?\s*фз", text, re.I):
-                continue
-            title = " ".join(link.stripped_strings).strip() or text[:1000]
-            results[external_id] = Tender(
-                platform=platform,
-                external_id=external_id,
-                title=title[:1000],
-                url=href,
-                description=text[:10000],
-                raw_data={
-                    "source": "tenderguru_public_fallback",
-                    "source_url": url,
-                    "source_platform": platform,
-                    "keyword": keyword,
-                },
-            )
-            if len(results) >= max_results:
-                return list(results.values())
-    return list(results.values())
+                text = " ".join(block.stripped_strings)
+                if not matches_keyword(text, keyword):
+                    continue
+                if platform == "rts_tender" and not re.search(r"ртс[-\s]?тендер", _norm(text), re.I):
+                    continue
+                if platform == "eis" and not re.search(r"44\s*-?\s*фз|223\s*-?\s*фз", text, re.I):
+                    continue
+                title = " ".join(link.stripped_strings).strip() or text[:1000]
+                results[external_id] = Tender(
+                    platform=platform,
+                    external_id=external_id,
+                    title=title[:1000],
+                    url=href,
+                    description=text[:10000],
+                    raw_data={
+                        "source": "tenderguru_public_fallback",
+                        "source_url": url,
+                        "source_platform": platform,
+                        "keyword": keyword,
+                    },
+                )
+                if len(results) >= max_results:
+                    return list(results.values())
+        if results:
+            return list(results.values())
+    except requests.RequestException:
+        pass
+    except Exception:
+        pass
+
+    return public_search(platform=platform, keyword=keyword, timeout=timeout, max_results=max_results)
