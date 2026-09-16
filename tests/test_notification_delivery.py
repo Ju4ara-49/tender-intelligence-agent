@@ -60,3 +60,17 @@ def test_rich_delivery_state_accepts_identical_state(tmp_path):
 
     assert state.was_notified(tender) is True
     assert db.count_notifications() == 1
+
+
+def test_notification_state_detects_description_change(tmp_path):
+    db = TenderDatabase(tmp_path / "description.db")
+    state = NotificationDeliveryState(db)
+    tender = _tender()
+    tender.description = "Поставка запасных частей"
+    db.save_tender(tender)
+    state.mark_notified(tender)
+
+    tender.description = "Поставка запасных частей и комплектующих"
+    db.save_tender(tender)
+
+    assert state.was_notified(tender) is False
