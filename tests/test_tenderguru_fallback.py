@@ -28,6 +28,7 @@ class TenderGuruFallbackTests(unittest.TestCase):
         self.assertEqual([x.external_id for x in result], ["301"])
         self.assertTrue(get.called)
 
+    @patch("src.collectors.tenderguru_fallback._SESSION.get")
     def test_rts_filters_to_rts_listings(self, get: Mock) -> None:
         get.return_value = Mock(
             raise_for_status=lambda: None,
