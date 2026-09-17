@@ -32,6 +32,16 @@ def test_partial_missing_data_is_medium_not_unknown():
     assert "price" in factor.evidence
 
 
+def test_naive_now_is_normalized_before_aware_deadline_comparison():
+    now = datetime(2026, 9, 18, 12, 0)
+    tender = _base_tender(deadline=datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc))
+
+    assessment = RiskEngine().assess(tender, now=now)
+
+    assert assessment.level == "MEDIUM"
+    assert "short_deadline" in assessment.factor_codes
+
+
 def test_deadline_within_three_days_is_high():
     assessment = RiskEngine().assess(_base_tender(deadline=datetime.now(timezone.utc) + timedelta(days=2)))
     assert assessment.level == "HIGH"

@@ -1,0 +1,1 @@
+Risk persistence block complete. Next required implementation: orchestrator integration, Telegram presentation, Excel export, optional Ollama explanation, then full regression and CI verification.
