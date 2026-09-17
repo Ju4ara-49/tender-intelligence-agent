@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
 from src.models.tender import Tender, TenderAnalysis
+from src.tenderplan import TaskPriority, TenderTaskStore, ensure_application_task
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +29,55 @@ class TelegramNotifier:
         "rosatom": "Росатом",
     }
 
-    def __init__(self, bot_token: str = "", chat_id: str = "", dry_run_when_no_token: bool = True) -> None:
+    def __init__(
+        self,
+        bot_token: str = "",
+        chat_id: str = "",
+        dry_run_when_no_token: bool = True,
+        task_store: TenderTaskStore | None = None,
+    ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.dry_run_when_no_token = dry_run_when_no_token
+        self.task_store = task_store
 
     @property
     def is_configured(self) -> bool:
         return bool(self.bot_token and self.chat_id)
 
+    @staticmethod
+    def _task_priority(tender: Tender) -> TaskPriority:
+        if tender.deadline is None:
+            return TaskPriority.NORMAL
+        remaining = tender.deadline - datetime.now(timezone.utc)
+        if remaining.total_seconds() <= 3 * 86400:
+            return TaskPriority.CRITICAL
+        if remaining.total_seconds() <= 7 * 86400:
+            return TaskPriority.HIGH
+        return TaskPriority.NORMAL
+
+    def _ensure_application_task(self, tender: Tender) -> None:
+        """Create the TenderPlan application task after AI qualification.
+
+        The orchestrator calls the notifier only after the tender passes the
+        configured AI score, so this is the integration boundary between the
+        existing alert pipeline and TenderPlan. Existing task state is preserved.
+        """
+        if self.task_store is None:
+            return
+        try:
+            ensure_application_task(
+                self.task_store,
+                tender_key=tender.unique_key,
+                tender_title=tender.title,
+                deadline=tender.deadline,
+                priority=self._task_priority(tender),
+            )
+        except Exception:
+            logger.exception("TenderPlan: не удалось создать задачу для %s", tender.unique_key)
+
     def send_tender_alert(self, tender: Tender, analysis: TenderAnalysis, chat_id: str | None = None, tender_id: int | None = None) -> bool:
+        self._ensure_application_task(tender)
         message = self.format_message(tender, analysis)
         target_chat_id = str(chat_id).strip() if chat_id is not None else self.chat_id
         reply_markup = self._tender_keyboard(tender, tender_id)

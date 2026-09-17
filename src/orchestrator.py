@@ -19,6 +19,7 @@ from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
+from src.tenderplan import TenderTaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class Orchestrator:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.db = TenderDatabase(settings.database_path)
+        self.task_store = TenderTaskStore(settings.database_path)
         self.notification_state = NotificationDeliveryState(self.db)
         self.criteria_store = CriteriaStore(self.db)
         self.profile_store = SearchProfileStore(self.db)
@@ -52,6 +54,7 @@ class Orchestrator:
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
             dry_run_when_no_token=settings.telegram_dry_run,
+            task_store=self.task_store,
         )
         self.email_notifier = EmailNotifier(
             enabled=settings.email_enabled,
