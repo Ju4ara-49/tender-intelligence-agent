@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import timezone
+from unittest.mock import patch
 
 from bs4 import BeautifulSoup
 
+from src.collectors.base import BaseCollector
 from src.collectors.eis_reliable import ReliableEisZakupkiCollector
 from src.collectors.fabrikant_v3 import FabrikantV3Collector
-from src.collectors.registry import get_enabled_collectors
+import src.collectors.registry as registry
 
 
 def test_eis_procedure_dates_keep_explicit_time() -> None:
@@ -36,7 +37,11 @@ def test_eis_223_stub_is_rejected() -> None:
         "<html><body>Сведения о закупке Реестровый номер извещения Протоколы Личный кабинет</body></html>",
         "html.parser",
     )
-    assert collector._parse_details_page(soup, "12345678901234567890", "https://zakupki.gov.ru/223/purchase/public/purchase/info/common-info.html?regNumber=12345678901234567890") is None
+    assert collector._parse_details_page(
+        soup,
+        "12345678901234567890",
+        "https://zakupki.gov.ru/223/purchase/public/purchase/info/common-info.html?regNumber=12345678901234567890",
+    ) is None
 
 
 def test_fabrikant_223_header_and_region_matching() -> None:
@@ -62,7 +67,7 @@ def test_fabrikant_223_header_and_region_matching() -> None:
 
 
 def test_registry_constructs_each_enabled_collector_once() -> None:
-    class Probe:
+    class Probe(BaseCollector):
         platform = "probe"
         calls = 0
 
@@ -70,9 +75,18 @@ def test_registry_constructs_each_enabled_collector_once() -> None:
             type(self).calls += 1
             self.config = config or {}
 
-        def get_platform_config(self, config):
-            return config["collectors"][self.platform]
+        def search(self, keywords, since=None):
+            return []
 
-    # The real registry no longer instantiates an unconfigured collector just
-    # to discover its platform; class-level platform metadata is sufficient.
-    assert getattr(Probe, "platform") == "probe"
+        def get_details(self, external_id):
+            return None
+
+    config = {"collectors": {"probe": {"enabled": True, "max_results": 7}}}
+    with patch.object(registry, "ALL_COLLECTORS", [Probe]), patch.object(
+        registry, "enforce_detail_contract", lambda collector: None
+    ):
+        collectors = registry.get_enabled_collectors(config)
+
+    assert len(collectors) == 1
+    assert Probe.calls == 1
+    assert collectors[0].config["max_results"] == 7
