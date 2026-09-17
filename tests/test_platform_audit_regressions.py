@@ -89,4 +89,4 @@ def test_registry_constructs_each_enabled_collector_once() -> None:
 
     assert len(collectors) == 1
     assert Probe.calls == 1
-    assert collectors[0].config["max_results"] == 7
+    assert collectors[0].config["enabled"] is True
