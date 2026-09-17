@@ -1,0 +1,1 @@
+RiskAssessmentStore persists the deterministic risk assessment in SQLite. It stores one current assessment per tender, preserves structured factors as JSON, normalizes assessment timestamps to UTC, and reconstructs RiskAssessment/RiskFactor objects on read. It intentionally does not calculate risk or call Ollama.
