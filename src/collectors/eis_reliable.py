@@ -17,6 +17,15 @@ from src.collectors.tenderguru_fallback import search as tenderguru_search
 class ReliableEisZakupkiCollector(EisZakupkiCollector):
     """EIS collector with a final commercial-terms enrichment pass."""
 
+    def __init__(self, config: dict | None = None):
+        super().__init__(config)
+        # External aggregators are opt-in. The default must remain fail-closed:
+        # returning third-party tenders under the EIS platform identity can make
+        # a transport outage look like a successful first-party search.
+        self.allow_external_fallback = bool(
+            self.config.get("allow_external_fallback", False)
+        )
+
     def search(
         self,
         keywords: list[str],
@@ -38,26 +47,26 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
             unique: dict[str, Tender] = {item.unique_key: item for item in rss_results}
             return list(unique.values())
 
-        # GitHub-hosted runners can be unable to route to zakupki.gov.ru.
-        # Use a public indexed fallback instead of reporting a false zero-result
-        # search. The fallback is explicitly marked in raw_data and never
-        # bypasses EIS authentication or WAF controls.
-        fallback: list[Tender] = []
-        for keyword in clean_keywords:
-            try:
-                fallback.extend(
-                    tenderguru_search(
-                        platform=self.platform,
-                        keyword=keyword,
-                        timeout=min(max(self.timeout, 5), 20),
-                        max_results=self.records_per_page * self.max_pages,
+        if self.allow_external_fallback:
+            # Optional public aggregator fallback. It is deliberately disabled
+            # by default because the caller must never confuse aggregator data
+            # with first-party EIS data during a transport outage.
+            fallback: list[Tender] = []
+            for keyword in clean_keywords:
+                try:
+                    fallback.extend(
+                        tenderguru_search(
+                            platform=self.platform,
+                            keyword=keyword,
+                            timeout=min(max(self.timeout, 5), 20),
+                            max_results=self.records_per_page * self.max_pages,
+                        )
                     )
-                )
-            except Exception:
-                continue
-        if fallback:
-            unique = {item.unique_key: item for item in fallback}
-            return list(unique.values())
+                except Exception:
+                    continue
+            if fallback:
+                unique = {item.unique_key: item for item in fallback}
+                return list(unique.values())
 
         try:
             probe = self._get(
