@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +48,22 @@ class TenderTaskStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tender_tasks_due_status ON tender_tasks(due_at, status)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tender_task_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    field_name TEXT NOT NULL DEFAULT '',
+                    old_value TEXT,
+                    new_value TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tender_task_events_task ON tender_task_events(task_id, event_id)"
+            )
             conn.commit()
 
     @staticmethod
@@ -61,8 +76,52 @@ class TenderTaskStore:
             return None
         return datetime.fromisoformat(value).astimezone(timezone.utc)
 
+    @staticmethod
+    def _task_values(task: TenderTask) -> dict[str, str | None]:
+        return {
+            "tender_key": task.tender_key,
+            "title": task.title,
+            "due_at": TenderTaskStore._iso(task.due_at),
+            "responsible": task.responsible,
+            "priority": task.priority.value,
+            "status": task.status.value,
+            "created_at": TenderTaskStore._iso(task.created_at),
+            "completed_at": TenderTaskStore._iso(task.completed_at),
+            "notes": task.notes,
+        }
+
+    def _record_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        task_id: str,
+        event_type: str,
+        field_name: str = "",
+        old_value: str | None = None,
+        new_value: str | None = None,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO tender_task_events
+                (task_id, event_type, field_name, old_value, new_value, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(task_id),
+                str(event_type),
+                str(field_name),
+                old_value,
+                new_value,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
     def save(self, task: TenderTask) -> TenderTask:
+        values = self._task_values(task)
         with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT * FROM tender_tasks WHERE task_id = ?", (task.task_id,)
+            ).fetchone()
             conn.execute(
                 """
                 INSERT INTO tender_tasks
@@ -82,39 +141,66 @@ class TenderTaskStore:
                 """,
                 (
                     task.task_id,
-                    task.tender_key,
-                    task.title,
-                    self._iso(task.due_at),
-                    task.responsible,
-                    task.priority.value,
-                    task.status.value,
-                    self._iso(task.created_at),
-                    self._iso(task.completed_at),
-                    task.notes,
+                    values["tender_key"],
+                    values["title"],
+                    values["due_at"],
+                    values["responsible"],
+                    values["priority"],
+                    values["status"],
+                    values["created_at"],
+                    values["completed_at"],
+                    values["notes"],
                 ),
             )
+            if existing is None:
+                self._record_event(conn, task_id=task.task_id, event_type="created")
+            else:
+                for field_name in (
+                    "tender_key",
+                    "title",
+                    "due_at",
+                    "responsible",
+                    "priority",
+                    "status",
+                    "completed_at",
+                    "notes",
+                ):
+                    old_value = existing[field_name]
+                    new_value = values[field_name]
+                    if old_value != new_value:
+                        event_type = "status_changed" if field_name == "status" else "field_changed"
+                        self._record_event(
+                            conn,
+                            task_id=task.task_id,
+                            event_type=event_type,
+                            field_name=field_name,
+                            old_value=old_value,
+                            new_value=new_value,
+                        )
             conn.commit()
         return task
+
+    @staticmethod
+    def _from_row(row: sqlite3.Row) -> TenderTask:
+        return TenderTask(
+            task_id=row["task_id"],
+            tender_key=row["tender_key"],
+            title=row["title"],
+            due_at=TenderTaskStore._parse(row["due_at"]),
+            responsible=row["responsible"],
+            priority=TaskPriority(row["priority"]),
+            status=TaskStatus(row["status"]),
+            created_at=TenderTaskStore._parse(row["created_at"]),
+            completed_at=TenderTaskStore._parse(row["completed_at"]),
+            notes=row["notes"],
+        )
 
     def get(self, task_id: str) -> TenderTask | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM tender_tasks WHERE task_id = ?", (str(task_id),)
             ).fetchone()
-        if row is None:
-            return None
-        return TenderTask(
-            task_id=row["task_id"],
-            tender_key=row["tender_key"],
-            title=row["title"],
-            due_at=self._parse(row["due_at"]),
-            responsible=row["responsible"],
-            priority=TaskPriority(row["priority"]),
-            status=TaskStatus(row["status"]),
-            created_at=self._parse(row["created_at"]),
-            completed_at=self._parse(row["completed_at"]),
-            notes=row["notes"],
-        )
+        return self._from_row(row) if row is not None else None
 
     def list_for_tender(self, tender_key: str) -> list[TenderTask]:
         with self._connect() as conn:
@@ -122,21 +208,7 @@ class TenderTaskStore:
                 "SELECT * FROM tender_tasks WHERE tender_key = ? ORDER BY due_at, created_at, task_id",
                 (str(tender_key),),
             ).fetchall()
-        return [
-            TenderTask(
-                task_id=row["task_id"],
-                tender_key=row["tender_key"],
-                title=row["title"],
-                due_at=self._parse(row["due_at"]),
-                responsible=row["responsible"],
-                priority=TaskPriority(row["priority"]),
-                status=TaskStatus(row["status"]),
-                created_at=self._parse(row["created_at"]),
-                completed_at=self._parse(row["completed_at"]),
-                notes=row["notes"],
-            )
-            for row in rows
-        ]
+        return [self._from_row(row) for row in rows]
 
     def list_open(self, *, due_before: datetime | None = None) -> list[TenderTask]:
         sql = "SELECT * FROM tender_tasks WHERE status IN ('todo', 'in_progress')"
@@ -147,23 +219,24 @@ class TenderTaskStore:
         sql += " ORDER BY due_at, created_at, task_id"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [
-            TenderTask(
-                task_id=row["task_id"],
-                tender_key=row["tender_key"],
-                title=row["title"],
-                due_at=self._parse(row["due_at"]),
-                responsible=row["responsible"],
-                priority=TaskPriority(row["priority"]),
-                status=TaskStatus(row["status"]),
-                created_at=self._parse(row["created_at"]),
-                completed_at=self._parse(row["completed_at"]),
-                notes=row["notes"],
-            )
-            for row in rows
-        ]
+        return [self._from_row(row) for row in rows]
+
+    def list_events(self, task_id: str) -> list[dict[str, object]]:
+        """Return the immutable audit history of a task in chronological order."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT event_id, task_id, event_type, field_name, old_value, new_value, created_at
+                FROM tender_task_events
+                WHERE task_id = ?
+                ORDER BY event_id
+                """,
+                (str(task_id),),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def delete(self, task_id: str) -> None:
         with self._connect() as conn:
+            conn.execute("DELETE FROM tender_task_events WHERE task_id = ?", (str(task_id),))
             conn.execute("DELETE FROM tender_tasks WHERE task_id = ?", (str(task_id),))
             conn.commit()
