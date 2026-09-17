@@ -12,9 +12,10 @@ def test_application_task_id_is_stable_and_bounded():
     assert len(first) == len("application:") + 24
 
 
-def test_ensure_application_task_is_idempotent(tmp_path: Path):
+def test_ensure_application_task_is_idempotent_and_syncs_deadline(tmp_path: Path):
     store = TenderTaskStore(tmp_path / "agent.db")
     deadline = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+    updated_deadline = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
 
     first = ensure_application_task(
         store,
@@ -29,13 +30,20 @@ def test_ensure_application_task_is_idempotent(tmp_path: Path):
         store,
         tender_key="eis:123",
         tender_title="Обновлённое название",
-        deadline=datetime(2026, 9, 30, tzinfo=timezone.utc),
+        deadline=updated_deadline,
     )
 
     assert second.task_id == first.task_id
     assert second.status is TaskStatus.DONE
-    assert second.due_at == deadline
+    assert second.due_at == updated_deadline
     assert second.notes == "Поставка запасных частей"
+    events = store.list_events(second.task_id)
+    assert any(
+        event["field_name"] == "due_at"
+        and event["old_value"] == deadline.isoformat()
+        and event["new_value"] == updated_deadline.isoformat()
+        for event in events
+    )
 
 
 def test_ensure_application_task_uses_tender_deadline(tmp_path: Path):
