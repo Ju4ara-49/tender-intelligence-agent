@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Type
 
+from src.collectors._broad_defaults import broaden_discovery_config
 from src.collectors.base import BaseCollector
 from src.collectors.b2b_center_reliable import ReliableB2BCenterCollector
 from src.collectors.browser_public_reliable import (
@@ -54,15 +55,19 @@ def get_enabled_collectors(
         }
 
     for collector_cls in ALL_COLLECTORS:
-        instance = collector_cls()
-        platform_config = config.get("collectors", {}).get(instance.platform)
-        if not isinstance(platform_config, dict) or not bool(platform_config.get("enabled", False)):
-            continue
-        if selected is not None and instance.platform not in selected:
+        platform = str(getattr(collector_cls, "platform", "")).strip()
+        if not platform:
             continue
 
-        platform_config = instance.get_platform_config(config)
-        configured = collector_cls(platform_config)
+        platform_config = config.get("collectors", {}).get(platform)
+        if not isinstance(platform_config, dict) or not bool(platform_config.get("enabled", False)):
+            continue
+        if selected is not None and platform not in selected:
+            continue
+
+        configured = collector_cls(
+            broaden_discovery_config(platform_config)
+        )
         enforce_detail_contract(configured)
         enabled.append(configured)
 
