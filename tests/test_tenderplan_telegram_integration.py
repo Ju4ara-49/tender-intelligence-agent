@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 from src.models.tender import Tender, TenderAnalysis
@@ -30,7 +31,8 @@ def test_telegram_alert_creates_application_task_in_dry_run(tmp_path):
 
     assert notifier.send_tender_alert(tender, _analysis()) is False
 
-    task = store.get("application:" + __import__("hashlib").sha256(tender.unique_key.encode()).hexdigest()[:24])
+    task_id = "application:" + hashlib.sha256(tender.unique_key.encode()).hexdigest()[:24]
+    task = store.get(task_id)
     assert task is not None
     assert task.tender_key == tender.unique_key
     assert task.title == "Подать заявку"
