@@ -23,14 +23,18 @@ def ensure_application_task(
     deadline: datetime | None,
     priority: TaskPriority = TaskPriority.NORMAL,
 ) -> TenderTask:
-    """Create the default application task once and keep it idempotent.
+    """Create or synchronize the canonical application task for a tender.
 
-    Existing task state is never overwritten: completing/cancelling/reassigning a
-    task is a user decision and must survive later tender refreshes.
+    User-controlled state (status, responsible, priority and notes) is preserved.
+    The tender deadline remains source-of-truth and is synchronized when it changes;
+    the storage adapter records that change in the immutable task history.
     """
     task_id = application_task_id(tender_key)
     existing = store.get(task_id)
     if existing is not None:
+        if existing.due_at != deadline:
+            existing.due_at = deadline
+            store.save(existing)
         return existing
 
     task = TenderTask(
