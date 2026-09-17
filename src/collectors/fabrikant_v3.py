@@ -6,6 +6,9 @@ import re
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
+import requests
+
+from src.collectors.base import CollectorUnavailableError
 from src.collectors.fabrikant_v2 import FabrikantV2Collector
 from src.models.tender import Tender
 
@@ -13,7 +16,76 @@ logger = logging.getLogger(__name__)
 
 
 class FabrikantV3Collector(FabrikantV2Collector):
-    """Fabrikant V2 plus reliable common-field enrichment."""
+    """Fabrikant V2 plus reliable HTTP discovery and metadata enrichment."""
+
+    def _search_one(self, query: str) -> list[Tender]:
+        """Use the public registry over HTTP before falling back to browser code.
+
+        Both Fabrikant registries currently expose server-rendered tables. This
+        avoids requiring Playwright for a search that is already available as
+        ordinary HTML and makes CI/live diagnostics deterministic.
+        """
+        timeout = int(self.config.get("timeout_seconds", 30))
+        params = {"search": query}
+        try:
+            response = requests.get(
+                self.BASE_URL,
+                params=params,
+                timeout=timeout,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/151 Safari/537.36",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.7",
+                },
+            )
+            response.raise_for_status()
+            html = response.text or ""
+            results = self._parse_results(html)
+            if not results and params:
+                # Some registry revisions ignore the search query parameter but
+                # still expose the public listing. Parse it and apply the same
+                # semantic query gate locally.
+                response = requests.get(
+                    self.BASE_URL,
+                    timeout=timeout,
+                    headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "ru-RU,ru;q=0.9"},
+                )
+                response.raise_for_status()
+                results = self._parse_results(response.text or "")
+
+            return [
+                tender
+                for tender in results
+                if self._tender_matches_query(tender, query)
+            ]
+        except requests.RequestException as exc:
+            raise CollectorUnavailableError(
+                f"fabrikant: HTTP registry unavailable for {query!r}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    @classmethod
+    def _tender_matches_query(cls, tender: Tender, query: str) -> bool:
+        words = [w for w in re.findall(r"[\w-]+", str(query).casefold()) if len(w) >= 3]
+        if not words:
+            return True
+        text = cls._norm(" ".join((tender.title or "", tender.description or ""))).casefold()
+        variants = {
+            "подшипник": {"подшипник", "подшипника", "подшипники", "подшипников", "подшипнику", "подшипникам", "подшипником", "подшипниками", "подшипнике", "подшипниках"},
+            "станок": {"станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"},
+            "лебедка": {"лебедка", "лебедки", "лебедку", "лебедкой", "лебедок", "лебедкам", "лебедками"},
+        }
+        for word in words:
+            forms = variants.get(word)
+            if forms is None:
+                for canonical, group in variants.items():
+                    if word in group:
+                        forms = group
+                        break
+            if forms is None:
+                if word not in text:
+                    return False
+            elif not any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(form)}(?![а-яёa-z0-9])", text) for form in forms):
+                return False
+        return True
 
     def search(self, keywords: list[str], since=None) -> list[Tender]:
         """Search both public registries without losing procedure URL state."""
@@ -50,7 +122,7 @@ class FabrikantV3Collector(FabrikantV2Collector):
             cells = row.find_all(["th", "td"], recursive=False)
             headers = [cls._norm(" ".join(c.stripped_strings)) for c in cells]
             lowered = [x.lower() for x in headers]
-            has_notice = any("извещ" in x or "№" in x and "номер" in x for x in lowered)
+            has_notice = any("извещ" in x or ("№" in x and "номер" in x) for x in lowered)
             has_name = any("наимен" in x for x in lowered)
             has_customer = any("заказчик" in x for x in lowered)
             if has_notice and has_name and has_customer:
@@ -62,12 +134,10 @@ class FabrikantV3Collector(FabrikantV2Collector):
         """Prefer exact/header-prefix matches; never map 'Заказчик' to 'Регион заказчика'."""
         normalized = [cls._norm(str(x)).lower().rstrip(":") for x in headers]
         wanted_names = [cls._norm(name).lower().rstrip(":") for name in names]
-
         for wanted in wanted_names:
             for idx, header in enumerate(normalized):
                 if header == wanted:
                     return idx
-
         for wanted in wanted_names:
             for idx, header in enumerate(normalized):
                 if wanted and wanted in header:
@@ -182,7 +252,7 @@ class FabrikantV3Collector(FabrikantV2Collector):
             rf"(?:дата публикации|дата размещения|опубликовано|размещено)\D{{0,80}}(\d{{1,2}}\s+(?:{month})\s+20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?)",
             r"(?:дата публикации|дата размещения|опубликовано|размещено)\D{0,80}(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)",
             rf"(\d{{1,2}}\s+(?:{month})\s+20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?)\s*[•|-]?\s*начало(?: приема| подачи)?",
-            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)\s*[•|-]?\s*начало(?: приема|подачи)?",
+            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)\s*[•|-]?\s*начало(?:приема|подачи)?",
         )
         for pattern in patterns:
             match = re.search(pattern, normalized, re.I)
