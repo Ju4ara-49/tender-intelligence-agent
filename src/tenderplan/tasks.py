@@ -32,6 +32,7 @@ class TenderTask:
     task_id: str
     tender_key: str
     title: str
+    user_id: str = ""
     due_at: datetime | None = None
     responsible: str = ""
     priority: TaskPriority = TaskPriority.NORMAL
@@ -44,6 +45,7 @@ class TenderTask:
         self.task_id = str(self.task_id).strip()
         self.tender_key = str(self.tender_key).strip()
         self.title = str(self.title).strip()
+        self.user_id = str(self.user_id).strip()
         self.responsible = str(self.responsible).strip()
         self.notes = str(self.notes).strip()
         if not self.task_id:
@@ -121,6 +123,7 @@ class TenderTask:
             "task_id": self.task_id,
             "tender_key": self.tender_key,
             "title": self.title,
+            "user_id": self.user_id,
             "due_at": self.due_at.isoformat() if self.due_at else None,
             "responsible": self.responsible,
             "priority": self.priority.value,
