@@ -243,6 +243,7 @@ class TenderDatabase:
             "postpayment_days": normalized.get("postpayment_days"),
             "application_security_percent": normalized.get("application_security_percent"),
             "contract_security_percent": normalized.get("contract_security_percent"),
+            "documents": normalized.get("documents", raw_data.get("documents", [])),
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -283,6 +284,54 @@ class TenderDatabase:
         with self._connect() as conn:
             row = conn.execute("SELECT 1 FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return row is not None
+
+    @staticmethod
+    def _row_to_tender(row: sqlite3.Row) -> Tender:
+        """Reconstruct the canonical Tender model from persisted SQLite state."""
+        def parse_datetime(value):
+            if not value:
+                return None
+            return datetime.fromisoformat(str(value))
+
+        raw_data = {}
+        raw_value = row["raw_data"]
+        if raw_value:
+            try:
+                parsed = json.loads(raw_value)
+                if isinstance(parsed, dict):
+                    raw_data = parsed
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("Invalid tender raw_data for id=%s; using empty object", row["id"])
+
+        return Tender(
+            platform=row["platform"],
+            external_id=row["external_id"],
+            title=row["title"],
+            url=row["url"],
+            description=row["description"] or "",
+            price=row["price"],
+            currency=row["currency"] or "RUB",
+            start_date=parse_datetime(row["start_date"]),
+            end_date=parse_datetime(row["end_date"]),
+            published_at=parse_datetime(row["published_at"]),
+            deadline=parse_datetime(row["deadline"]),
+            region=row["region"] or "",
+            customer=row["customer"] or "",
+            customer_inn=row["customer_inn"] or "",
+            law_type=row["law_type"] or "",
+            detail_status=row["detail_status"] or "partial",
+            detail_diagnostics=row["detail_diagnostics"] or "",
+            raw_data=raw_data,
+        )
+
+    def get_tender(self, unique_key: str) -> Tender | None:
+        """Load a persisted tender through the same canonical Tender contract."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tenders WHERE unique_key = ?",
+                (unique_key,),
+            ).fetchone()
+        return self._row_to_tender(row) if row is not None else None
 
     def get_tender_id(self, unique_key: str) -> int | None:
         with self._connect() as conn:
