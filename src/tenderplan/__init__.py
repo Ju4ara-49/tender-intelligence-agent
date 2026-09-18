@@ -1,13 +1,38 @@
 """TenderPlan-inspired domain capabilities."""
 
-from .documents import DocumentExtractionStatus, TenderDocument, TenderDocumentStore, content_sha256\nfrom .lifecycle import (\n    ALLOWED_TRANSITIONS,\n    CRM_TO_LIFECYCLE,\n    TERMINAL_STATUSES,\n    InvalidLifecycleTransition,\n    TenderLifecycleStatus,\n    can_transition,\n    lifecycle_from_crm,\n    transition,\n)\nfrom .service import application_task_id, ensure_application_task, task_priority_for_deadline\nfrom .storage import TenderTaskStore
+from .documents import DocumentExtractionStatus, TenderDocument, TenderDocumentStore, content_sha256
+from .lifecycle import (
+    ALLOWED_TRANSITIONS,
+    CRM_TO_LIFECYCLE,
+    TERMINAL_STATUSES,
+    InvalidLifecycleTransition,
+    TenderLifecycleStatus,
+    can_transition,
+    lifecycle_from_crm,
+    transition,
+)
+from .service import application_task_id, ensure_application_task, task_priority_for_deadline
+from .storage import TenderTaskStore
 from .tasks import TaskPriority, TaskStatus, TenderTask
 
 __all__ = [
-    "TenderDocument",\n    "TenderDocumentStore",\n    "DocumentExtractionStatus",\n    "content_sha256",\n    "TenderLifecycleStatus",\n    "InvalidLifecycleTransition",\n    "TERMINAL_STATUSES",\n    "ALLOWED_TRANSITIONS",\n    "CRM_TO_LIFECYCLE",\n    "can_transition",\n    "transition",\n    "lifecycle_from_crm",\n    "TaskPriority",
+    "TenderDocument",
+    "TenderDocumentStore",
+    "DocumentExtractionStatus",
+    "content_sha256",
+    "TenderLifecycleStatus",
+    "InvalidLifecycleTransition",
+    "TERMINAL_STATUSES",
+    "ALLOWED_TRANSITIONS",
+    "CRM_TO_LIFECYCLE",
+    "can_transition",
+    "transition",
+    "lifecycle_from_crm",
+    "TaskPriority",
     "TaskStatus",
     "TenderTask",
     "TenderTaskStore",
     "application_task_id",
-    "ensure_application_task",\n    "task_priority_for_deadline",
+    "ensure_application_task",
+    "task_priority_for_deadline",
 ]
