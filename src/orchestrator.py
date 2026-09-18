@@ -24,6 +24,7 @@ from src.tenderplan import (
     TenderLifecycleStatus,
     TenderLifecycleStore,
     TenderTaskStore,
+    application_task_id,
     ensure_application_task,
     task_priority_for_deadline,
     TenderDocumentIngestor,
@@ -363,8 +364,30 @@ class Orchestrator:
         return bool(tender_regions & requested)
 
     def _ensure_tenderplan_task(self, tender: Tender) -> None:
-        """Persist the canonical application task independently of notifications."""
+        """Persist the application task only after the shortlist gate.
+        
+        Existing tasks are always synchronized/preserved. A new application task
+        must not appear while a tender is merely DISCOVERED or RELEVANT.
+        """
         try:
+            task_id = application_task_id(tender.unique_key)
+            existing = self.task_store.get(task_id)
+            current = self.lifecycle_store.get(tender.unique_key)
+            if existing is None and current not in {
+                TenderLifecycleStatus.SHORTLISTED,
+                TenderLifecycleStatus.ASSIGNED,
+                TenderLifecycleStatus.PREPARING,
+                TenderLifecycleStatus.SUBMITTED,
+                TenderLifecycleStatus.AUCTION,
+                TenderLifecycleStatus.WON,
+                TenderLifecycleStatus.LOST,
+            }:
+                logger.debug(
+                    "TenderPlan: application task deferred until shortlist for %s (state=%s)",
+                    tender.unique_key,
+                    current.value if current is not None else None,
+                )
+                return
             ensure_application_task(
                 self.task_store,
                 tender_key=tender.unique_key,
