@@ -29,12 +29,15 @@ class FabrikantCollector(_BrowserTenderCollector):
             return []
 
         merged: dict[str, Tender] = {}
+        # Keep detail URLs for both 223-FZ and 44-FZ searches. Clearing the
+        # cache inside the loop loses the URLs collected from the first register
+        # before orchestrator asks the collector to load details.
+        self._urls = {}
         for base_url in (
             "https://soap2.fabrikant.ru/223/catalog/procedure/published",
             "https://soap4.fabrikant.ru/44/catalog/procedure",
         ):
             self.BASE_URL = base_url
-            self._urls = {}
             for term in terms:
                 for tender in self._search_one(term):
                     merged[tender.unique_key] = tender
