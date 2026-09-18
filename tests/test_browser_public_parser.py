@@ -32,6 +32,28 @@ class BrowserPublicParserTests(unittest.TestCase):
             {"1234567", "7654321", "9876543", "11223344"},
         )
 
+    def test_search_treats_naive_publication_date_as_moscow_time(self) -> None:
+        from datetime import datetime, timezone
+        from src.models.tender import Tender
+
+        collector = RtsTenderCollector()
+        collector._search_one = lambda _query: [
+            Tender(
+                platform="rts_tender",
+                external_id="date-1",
+                title="Поставка",
+                url="https://example.test/date-1",
+                published_at=datetime(2026, 9, 18, 12, 0),
+            )
+        ]
+        since = datetime(2026, 9, 18, 8, 30, tzinfo=timezone.utc)
+
+        results = collector.search(["поставка"], since=since)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].external_id, "date-1")
+        self.assertEqual(results[0].published_at.tzinfo, timezone.utc)
+
     def test_browser_detail_extracts_downloadable_documents(self) -> None:
         html = """
         <html><body>
