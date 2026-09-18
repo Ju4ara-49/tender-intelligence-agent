@@ -154,11 +154,17 @@ class RosatomCollector(_BrowserTenderCollector):
                 cells = [self._clean_cell(cell.get_text(" ", strip=True)) for cell in row.find_all("td")]
                 if len(cells) < 2:
                     continue
-                tender = self._row_to_tender(cells)
+                row_href = ""
+                for anchor in row.find_all("a", href=True):
+                    candidate = str(anchor.get("href") or "").strip()
+                    if candidate and not candidate.lower().startswith(("javascript:", "#", "mailto:")):
+                        row_href = urljoin(self.BASE_URL, candidate)
+                        break
+                tender = self._row_to_tender(cells, href=row_href)
                 if tender is None or tender.external_id in seen:
                     continue
                 seen.add(tender.external_id)
-                self._urls[tender.external_id] = self.BASE_URL
+                self._urls[tender.external_id] = tender.url
                 results.append(tender)
 
         if not results:
@@ -238,20 +244,48 @@ class RosatomCollector(_BrowserTenderCollector):
         return False
 
     def get_details(self, external_id: str) -> Tender | None:
-        """Refresh one Rosatom row through the published registry."""
+        """Load the actual Rosatom detail page, not another search-result row."""
         target = str(external_id).strip()
         if not target:
             return None
-        try:
-            results = self._search_one(target)
-        except Exception as exc:
-            logger.warning("rosatom: detail lookup failed %s: %s", target, exc)
+
+        url = self._urls.get(target, "")
+        if not url or url == self.BASE_URL:
+            try:
+                results = self._search_one(target)
+            except Exception as exc:
+                logger.warning("rosatom: detail lookup failed %s: %s", target, exc)
+                return None
+            match = next((item for item in results if item.external_id == target), None)
+            url = str(getattr(match, "url", "") or "") if match is not None else ""
+            if url:
+                self._urls[target] = url
+
+        if not url or url == self.BASE_URL:
             return None
-        for tender in results:
-            if tender.external_id == target:
-                tender.raw_data["discovery_only"] = False
-                return tender
-        return None
+
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                page = browser.new_page(locale="ru-RU")
+                try:
+                    self._goto(page, url)
+                    page.wait_for_timeout(2500)
+                    self._open_information_sections(page)
+                    page.wait_for_timeout(1200)
+                    html = self._collect_rendered_html(page)
+                finally:
+                    browser.close()
+            soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
+            if any(x in soup_text for x in ("web application firewall", "временно заблокирован", "пожалуйста подождите")):
+                logger.warning("rosatom: detail page blocked for %s", target)
+                return None
+            tender = self._parse_detail(html, target, url)
+            tender.raw_data["discovery_only"] = False
+            return tender
+        except Exception as exc:
+            logger.warning("rosatom: detail page failed %s: %s", target, exc)
+            return None
 
     def _parse_detail(self, html: str, external_id: str, url: str) -> Tender:
         from bs4 import BeautifulSoup
@@ -287,6 +321,7 @@ class RosatomCollector(_BrowserTenderCollector):
         postpayment_days = self._extract_days(text, ("Отсрочка платежа", "Срок оплаты", "Условия оплаты", "Постоплата"))
         application_security = self._extract_percent(text, ("Обеспечение заявки", "Обеспечение предложения"))
         contract_security = self._extract_percent(text, ("Обеспечение исполнения", "Обеспечение контракта", "Обеспечение договора"))
+        documents = self._extract_documents(soup, url)
 
         official_number = ""
         match = re.search(r"Номер закупки на официальном сайте ГК «Росатом»\s*[:\-]?\s*(\d+)", text, re.I)
@@ -300,6 +335,7 @@ class RosatomCollector(_BrowserTenderCollector):
             "published_at": published_at.isoformat() if published_at else None,
             "start_date": start_date.isoformat() if start_date else None,
             "end_date": end_date.isoformat() if end_date else None,
+            "documents": documents,
         }
         if advance_percent is not None:
             raw_data["advance_payment"] = {"percent": advance_percent}
@@ -329,5 +365,6 @@ class RosatomCollector(_BrowserTenderCollector):
             postpayment_days=postpayment_days,
             application_security_percent=application_security,
             contract_security_percent=contract_security,
+            documents=documents,
             raw_data=raw_data,
         )

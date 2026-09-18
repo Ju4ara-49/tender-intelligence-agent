@@ -98,3 +98,13 @@ def test_assessment_is_deterministic_for_same_input():
     second = engine.assess(tender, now=now)
     assert first.level == second.level
     assert first.factor_codes == second.factor_codes
+
+
+def test_naive_now_and_deadline_are_normalized():
+    tender = _base_tender(deadline=datetime(2026, 9, 19, 12, 0))
+    assessment = RiskEngine().assess(
+        tender,
+        now=datetime(2026, 9, 18, 12, 0),
+    )
+    assert assessment.level == "HIGH"
+    assert "short_deadline" in assessment.factor_codes

@@ -157,3 +157,44 @@ def test_legacy_label_schema_is_migrated_without_case_duplicates(tmp_path):
     assert board.labels(1) == ["Участвуем"]
     board.add_label(1, "УЧАСТВУЕМ")
     assert board.labels(1) == ["Участвуем"]
+
+
+def test_crm_board_isolates_status_assignment_and_labels_between_users():
+    db = _db_with_tender()
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_REVIEWING)
+    first.assign(1, "Иван")
+    first.add_label(1, "Юристу")
+
+    assert first.get_status(1) == STATUS_REVIEWING
+    assert first.entry(1).assignee == "Иван"
+    assert first.labels(1) == ["Юристу"]
+
+    assert second.get_status(1) == STATUS_NEW
+    assert second.entry(1).assignee == ""
+    assert second.labels(1) == []
+
+    second.set_status(1, STATUS_REVIEWING)
+    second.set_status(1, STATUS_PARTICIPATING)
+    second.add_label(1, "Закупки")
+
+    assert first.get_status(1) == STATUS_REVIEWING
+    assert first.labels(1) == ["Юристу"]
+    assert second.get_status(1) == STATUS_PARTICIPATING
+    assert second.labels(1) == ["Закупки"]
+
+
+def test_scoped_crm_history_isolated_by_user():
+    db = _db_with_tender()
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_REVIEWING)
+    second.set_status(1, STATUS_REVIEWING)
+
+    assert len(first.history(1)) == 1
+    assert len(second.history(1)) == 1
+    assert first.history(1)[0]["new_value"] == STATUS_REVIEWING
+    assert second.history(1)[0]["new_value"] == STATUS_REVIEWING
