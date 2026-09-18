@@ -132,7 +132,7 @@ class TenderTaskStore:
                 INSERT INTO tender_tasks
                     (task_id, tender_key, user_id, title, due_at, responsible, priority, status,
                      created_at, completed_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     tender_key=excluded.tender_key,
                     user_id=excluded.user_id,
@@ -162,6 +162,10 @@ class TenderTaskStore:
             if existing is None:
                 self._record_event(conn, task_id=task.task_id, event_type="created")
             else:
+                if str(existing["user_id"] or "") != str(values["user_id"] or ""):
+                    raise ValueError(
+                        f"task_id {task.task_id!r} belongs to another user"
+                    )
                 for field_name in (
                     "tender_key",
                     "user_id",
@@ -231,9 +235,17 @@ class TenderTaskStore:
                 ).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def list_open(self, *, due_before: datetime | None = None) -> list[TenderTask]:
+    def list_open(
+        self,
+        *,
+        due_before: datetime | None = None,
+        user_id: str | None = None,
+    ) -> list[TenderTask]:
         sql = "SELECT * FROM tender_tasks WHERE status IN ('todo', 'in_progress')"
         params: list[str] = []
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params.append(str(user_id).strip())
         if due_before is not None:
             sql += " AND due_at IS NOT NULL AND due_at <= ?"
             params.append(self._iso(due_before) or "")
