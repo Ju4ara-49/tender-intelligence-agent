@@ -32,17 +32,25 @@ _ID_RE = re.compile(r"^[1-9]\d*$")
 
 def _board(bot: Any, chat_id: str | int | None = None) -> TenderBoard:
     """Return a CRM board isolated to the current Telegram user."""
-    if hasattr(bot, "crm_board") and not hasattr(bot, "crm_boards"):
-        # Backward-compatible test/embedded bot surface.
-        return bot.crm_board
     user_id = str(chat_id).strip() if chat_id is not None else ""
+    legacy = getattr(bot, "crm_board", None)
+    if legacy is not None and not hasattr(bot, "crm_boards"):
+        # Backward-compatible fake/embedded bot surface.
+        return legacy
+    if isinstance(legacy, TenderBoard) and getattr(bot, "_crm_board_user_id", "") == user_id:
+        return legacy
+
     boards = getattr(bot, "crm_boards", None)
     if boards is None:
         boards = {}
         bot.crm_boards = boards
     if user_id not in boards:
         boards[user_id] = TenderBoard(bot.orchestrator.db, user_id=user_id)
-    return boards[user_id]
+    board = boards[user_id]
+    if hasattr(bot, "crm_board") and getattr(bot, "crm_board", None) is None:
+        bot.crm_board = board
+        bot._crm_board_user_id = user_id
+    return board
 
 
 def _parse_id(value: str) -> int | None:
