@@ -26,3 +26,12 @@ def test_security_and_advance_factors():
 def test_serialization_is_stable():
     a=RiskEngine().assess(tender(application_security_percent=10)).to_dict()
     assert a["level"]=="MEDIUM" and set(a["factors"][0])=={"code","severity","evidence","source","explanation"}
+
+
+def test_naive_now_is_normalized_against_aware_deadline():
+    a = RiskEngine().assess(
+        tender(deadline=datetime(2026, 9, 19, 12)),
+        now=datetime(2026, 9, 18, 12),
+    )
+    assert a.level == "HIGH"
+    assert "short_deadline" in a.factor_codes
