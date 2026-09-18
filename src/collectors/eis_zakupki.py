@@ -751,7 +751,7 @@ class EisZakupkiCollector(BaseCollector):
             if not href or href.startswith(("#", "javascript:", "mailto:")):
                 continue
             absolute = urljoin(page_url, href)
-            label = self._clean_text(anchor.get_text(" ", strip=True))
+            label = EisZakupkiCollector._clean_text(anchor.get_text(" ", strip=True))
             haystack = f"{absolute} {label}".lower()
             if not absolute.lower().endswith(extensions) and not any(h in haystack for h in hints):
                 continue
