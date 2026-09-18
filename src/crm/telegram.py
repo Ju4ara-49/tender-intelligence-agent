@@ -23,6 +23,8 @@ _STATUS_NAMES = {
     "won": "Победа",
     "lost": "Проигрыш",
     "skipped": "Пропускаем",
+    "expired": "Просрочен",
+    "archived": "В архиве",
 }
 _STATUS_COMMANDS = {name.casefold(): key for key, name in _STATUS_NAMES.items()}
 _ID_RE = re.compile(r"^[1-9]\d*$")
