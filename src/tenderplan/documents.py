@@ -78,11 +78,19 @@ class TenderDocumentStore:
                     extraction_status TEXT NOT NULL DEFAULT 'pending',
                     extracted_text TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
+                    etag TEXT NOT NULL DEFAULT '',
+                    last_modified TEXT NOT NULL DEFAULT '',
                     UNIQUE(tender_key, url, version),
                     UNIQUE(tender_key, url, sha256)
                 )
                 """
             )
+            for column in ("etag", "last_modified"):
+                try:
+                    conn.execute(f"ALTER TABLE tender_documents ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        raise
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tender_documents_tender_url "
                 "ON tender_documents(tender_key, url, version)"
@@ -152,6 +160,8 @@ class TenderDocumentStore:
         downloaded_at: datetime | None = None,
         extraction_status: str = DocumentExtractionStatus.PENDING,
         extracted_text: str = "",
+        etag: str = "",
+        last_modified: str = "",
     ) -> TenderDocument:
         if len(str(sha256)) != 64:
             raise ValueError("sha256 must be a SHA-256 hex digest")
@@ -177,8 +187,8 @@ class TenderDocumentStore:
                 """
                 INSERT INTO tender_documents
                     (document_id, tender_key, url, filename, content_type, sha256,
-                     version, downloaded_at, extraction_status, extracted_text, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     version, downloaded_at, extraction_status, extracted_text, created_at, etag, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -192,6 +202,8 @@ class TenderDocumentStore:
                     str(extraction_status),
                     str(extracted_text or ""),
                     now.isoformat(),
+                    str(etag or ""),
+                    str(last_modified or ""),
                 ),
             )
             old_row = conn.execute(
