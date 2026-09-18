@@ -243,6 +243,7 @@ class TenderDatabase:
             "postpayment_days": normalized.get("postpayment_days"),
             "application_security_percent": normalized.get("application_security_percent"),
             "contract_security_percent": normalized.get("contract_security_percent"),
+            "documents": normalized.get("documents", raw_data.get("documents", [])),
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
