@@ -115,6 +115,7 @@ def test_telegram_crm_state_isolated_by_chat_id():
     assert handle_message(bot, "43", "/tender 1") is True
     assert "Новый" in bot.sent[-1][1]
 
+    assert handle_callback(bot, "43", "crm:status:1:reviewing") is True
     assert handle_callback(bot, "43", "crm:status:1:participating") is True
     assert bot.crm_board.get_status(1) == "reviewing"
     assert bot.crm_boards["43"].get_status(1) == "participating"
