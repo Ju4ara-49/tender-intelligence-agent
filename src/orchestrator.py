@@ -19,6 +19,7 @@ from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
+from src.risk import RiskEngine
 from src.tenderplan import (
     TenderLifecycleStatus,
     TenderLifecycleStore,
@@ -47,6 +48,7 @@ class Orchestrator:
         self.notification_state = NotificationDeliveryState(self.db)
         self.criteria_store = CriteriaStore(self.db)
         self.profile_store = SearchProfileStore(self.db)
+        self.risk_engine = RiskEngine()
         self.analyzer = TenderAnalyzer(
             model=settings.ai_model,
             ai_context=settings.ai_context,
@@ -442,6 +444,7 @@ class Orchestrator:
             "documents_discovered": 0,
             "documents_downloaded": 0,
             "documents_failed": 0,
+            "risk_assessed": 0,
         }
         self.clear_stop_request()
         self.last_run_results = []
@@ -526,6 +529,12 @@ class Orchestrator:
             stats["details_loaded"] += int(detail_status == "success" and detail_loaded)
             stats["details_partial"] += int(detail_status == "partial")
             stats["details_failed"] += int(detail_status == "failed")
+            try:
+                risk = self.risk_engine.assess(enriched)
+                enriched.raw_data["risk_assessment"] = risk.to_dict()
+                stats["risk_assessed"] += 1
+            except Exception:
+                logger.exception("Risk Engine: failed for %s", enriched.unique_key)
             enriched_pairs.append((collector, enriched))
             existing = self.db.exists(enriched.unique_key)
             self.db.save_tender(enriched)
@@ -565,13 +574,6 @@ class Orchestrator:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
                 continue
             export_tender_ids.append(tender_id)
-            # Passing deterministic search criteria means the tender is now
-            # shortlisted; this state must not depend on Telegram delivery.
-            self._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
-            # TenderPlan persistence is independent of notification history.
-            # A previously notified tender may still need its application task
-            # after a restart, DB migration, or a newly introduced task layer.
-            self._ensure_tenderplan_task(tender)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
@@ -585,12 +587,9 @@ class Orchestrator:
             stats["analyzed"] += 1
             if analysis.relevance_score < criteria.min_ai_score:
                 continue
-            try:
-                current_lifecycle = self.lifecycle_store.get(tender.unique_key)
-                if current_lifecycle is TenderLifecycleStatus.DISCOVERED:
-                    self.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
-            except Exception:
-                logger.exception("TenderPlan: failed to advance lifecycle for %s", tender.unique_key)
+            self._advance_lifecycle(tender, TenderLifecycleStatus.RELEVANT)
+            self._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
+            self._ensure_tenderplan_task(tender)
             if self._notify_and_record(
                 tender,
                 analysis,
