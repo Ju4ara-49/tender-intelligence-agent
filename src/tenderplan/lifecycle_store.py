@@ -108,13 +108,22 @@ class TenderLifecycleStore:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
+            inserted = conn.execute(
                 """
                 INSERT OR IGNORE INTO tender_lifecycle (tender_key, status, updated_at)
                 VALUES (?, ?, ?)
                 """,
                 (key, TenderLifecycleStatus.DISCOVERED.value, now),
-            )
+            ).rowcount
+            if inserted:
+                conn.execute(
+                    """
+                    INSERT INTO tender_lifecycle_events
+                        (tender_key, old_status, new_status, created_at)
+                    VALUES (?, NULL, ?, ?)
+                    """,
+                    (key, TenderLifecycleStatus.DISCOVERED.value, now),
+                )
             row = conn.execute(
                 "SELECT status FROM tender_lifecycle WHERE tender_key = ?",
                 (key,),
