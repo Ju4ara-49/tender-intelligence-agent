@@ -398,6 +398,29 @@ class Orchestrator:
         except Exception:
             logger.exception("TenderPlan: failed to create task for %s", tender.unique_key)
 
+    def _expire_lifecycle_if_needed(self, tender: Tender, *, now: datetime | None = None) -> bool:
+        """Move an open pre-submission lifecycle to EXPIRED when its deadline has passed."""
+        deadline = self._normalize_datetime(tender.deadline)
+        if deadline is None:
+            return False
+        current = self._normalize_datetime(now) if now is not None else datetime.now(timezone.utc)
+        if deadline >= current:
+            return False
+        current_state = self.lifecycle_store.get(tender.unique_key)
+        if current_state is None or current_state in {
+            TenderLifecycleStatus.SUBMITTED,
+            TenderLifecycleStatus.AUCTION,
+            TenderLifecycleStatus.WON,
+            TenderLifecycleStatus.LOST,
+            TenderLifecycleStatus.REJECTED,
+            TenderLifecycleStatus.CANCELLED,
+            TenderLifecycleStatus.EXPIRED,
+            TenderLifecycleStatus.ARCHIVED,
+        }:
+            return False
+        self._advance_lifecycle(tender, TenderLifecycleStatus.EXPIRED)
+        return self.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.EXPIRED
+
     def _advance_lifecycle(self, tender: Tender, target: TenderLifecycleStatus) -> None:
         """Advance lifecycle only when the explicit state machine permits it."""
         current: TenderLifecycleStatus | None = None
