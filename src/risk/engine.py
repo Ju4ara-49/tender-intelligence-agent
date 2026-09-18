@@ -39,6 +39,10 @@ class RiskEngine:
 
     def assess(self, tender: Tender, *, now: datetime | None = None) -> RiskAssessment:
         moment = now or datetime.now(timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        else:
+            moment = moment.astimezone(timezone.utc)
         missing = [name for name, value in (
             ("price", tender.price), ("deadline", tender.deadline), ("customer", tender.customer)
         ) if value is None or value == ""]
@@ -48,7 +52,11 @@ class RiskEngine:
             factors.append(RiskFactor("insufficient_data", severity, ", ".join(missing), "tender",
                                       f"Отсутствуют ключевые поля тендера: {', '.join(missing)}"))
         if tender.deadline is not None:
-            deadline = tender.deadline if tender.deadline.tzinfo else tender.deadline.replace(tzinfo=timezone.utc)
+            deadline = (
+                tender.deadline.replace(tzinfo=timezone.utc)
+                if tender.deadline.tzinfo is None
+                else tender.deadline.astimezone(timezone.utc)
+            )
             days = (deadline - moment).total_seconds() / 86400
             if days < 0:
                 factors.append(RiskFactor("deadline_passed", "high", deadline.isoformat(), "deadline",
