@@ -577,9 +577,9 @@ class Orchestrator:
             # Application task must exist even when notification delivery is
             # already deduplicated or Telegram is unavailable.
             self._ensure_tenderplan_task(tender)
-            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
-                stats["skipped_duplicate"] += 1
-                continue
+            # Notification deduplication is a delivery concern only. A previously
+            # notified tender must still be re-analyzed so persisted AI/lifecycle
+            # state can reflect title/price/deadline/document changes.
             try:
                 analysis = self.analyzer.analyze(tender)
             except Exception as exc:
@@ -592,6 +592,9 @@ class Orchestrator:
                 continue
             self._advance_lifecycle(tender, TenderLifecycleStatus.RELEVANT)
             self._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
+            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
+                stats["skipped_duplicate"] += 1
+                continue
             if self._notify_and_record(
                 tender,
                 analysis,
