@@ -4,12 +4,13 @@ from types import SimpleNamespace
 
 from src.models.tender import Tender, TenderAnalysis
 from src.orchestrator import Orchestrator
-from src.tenderplan import TenderTaskStore, application_task_id
+from src.tenderplan import TenderLifecycleStatus, TenderLifecycleStore, TenderTaskStore, application_task_id
 
 
 def _orchestrator(tmp_path: Path, notifier) -> Orchestrator:
     obj = Orchestrator.__new__(Orchestrator)
     obj.task_store = TenderTaskStore(tmp_path / "agent.db")
+    obj.lifecycle_store = TenderLifecycleStore(tmp_path / "agent.db")
     obj.notifier = notifier
     obj.notification_state = SimpleNamespace(mark_notified=lambda *args, **kwargs: None)
     return obj
@@ -82,3 +83,17 @@ def test_successful_notification_keeps_single_idempotent_task(tmp_path: Path):
         chat_id="123",
         recipient_key="user:123",
     )
+
+
+def test_qualifying_tender_advances_to_shortlisted_without_telegram(tmp_path: Path):
+    obj = _orchestrator(tmp_path, notifier=SimpleNamespace())
+    tender = _tender()
+    obj.lifecycle_store.ensure(tender.unique_key)
+
+    obj._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
+
+    assert obj.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.DISCOVERED
+
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    obj._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
+    assert obj.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.SHORTLISTED
