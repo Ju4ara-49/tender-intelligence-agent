@@ -8,7 +8,13 @@ from openpyxl import load_workbook
 from src.export.excel import export_tenders_to_excel
 from src.models.tender import Tender, TenderAnalysis
 from src.storage.database import TenderDatabase
-from src.tenderplan import TaskPriority, TenderTaskStore, ensure_application_task
+from src.tenderplan import (
+    TaskPriority,
+    TenderLifecycleStatus,
+    TenderLifecycleStore,
+    TenderTaskStore,
+    ensure_application_task,
+)
 
 
 def main() -> None:
@@ -47,6 +53,10 @@ def main() -> None:
             is_stub=False,
         ),
     )
+    lifecycle_store = TenderLifecycleStore(db_path)
+    lifecycle_store.ensure(tender.unique_key)
+    lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SHORTLISTED)
     task_store = TenderTaskStore(db_path)
     task = ensure_application_task(
         task_store,
@@ -70,6 +80,7 @@ def main() -> None:
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
         "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
+        "Risk", "Risk factors", "Lifecycle",
     ]
     assert headers == expected, headers
     for obsolete in ("НМЦК", "Дата поиска", "№ поиска", "Статус", "W", "X", "Y", "Комментарий по срокам"):
@@ -81,6 +92,7 @@ def main() -> None:
     assert ws["S2"].value == "in_progress"
     assert ws["T2"].value == "high"
     assert ws["U2"].value == "Иван"
+    assert ws["Y2"].value == "shortlisted"
     hyperlink = ws["Q2"].hyperlink
     assert hyperlink is not None
     assert hyperlink.target == "https://example.com/tender/GHA-TEST-001"
