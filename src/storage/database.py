@@ -303,6 +303,16 @@ class TenderDatabase:
             except (TypeError, ValueError, json.JSONDecodeError):
                 logger.warning("Invalid tender raw_data for id=%s; using empty object", row["id"])
 
+        normalized = raw_data.get("_normalized") if isinstance(raw_data, dict) else {}
+        if not isinstance(normalized, dict):
+            normalized = {}
+        documents = raw_data.get("documents") if isinstance(raw_data, dict) else []
+        if not isinstance(documents, list):
+            documents = []
+        field_sources = raw_data.get("field_sources") if isinstance(raw_data, dict) else {}
+        if not isinstance(field_sources, dict):
+            field_sources = {}
+
         return Tender(
             platform=row["platform"],
             external_id=row["external_id"],
@@ -319,8 +329,15 @@ class TenderDatabase:
             customer=row["customer"] or "",
             customer_inn=row["customer_inn"] or "",
             law_type=row["law_type"] or "",
+            advance_required=bool(normalized.get("advance_required", False)),
+            advance_percent=normalized.get("advance_percent"),
+            postpayment_days=normalized.get("postpayment_days"),
+            application_security_percent=normalized.get("application_security_percent"),
+            contract_security_percent=normalized.get("contract_security_percent"),
             detail_status=row["detail_status"] or "partial",
             detail_diagnostics=row["detail_diagnostics"] or "",
+            field_sources={str(k): str(v) for k, v in field_sources.items()},
+            documents=[dict(item) for item in documents if isinstance(item, dict)],
             raw_data=raw_data,
         )
 
