@@ -30,6 +30,7 @@ class NotificationDeliveryState:
     @classmethod
     def event_key(cls, tender: Tender) -> str:
         normalized = cls._normalized_fields(tender)
+        documents = tender.documents if tender.documents else normalized.get("documents", [])
         state = {
             "title": tender.title,
             "description": tender.description,
@@ -49,6 +50,7 @@ class NotificationDeliveryState:
             "postpayment_days": tender.postpayment_days,
             "application_security_percent": tender.application_security_percent,
             "contract_security_percent": tender.contract_security_percent,
+            "documents": documents,
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

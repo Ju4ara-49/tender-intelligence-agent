@@ -38,10 +38,10 @@ def test_document_search_and_change_events(tmp_path: Path):
     events = store.events_for_tender("eis:123")
     assert [event["event_type"] for event in events] == ["created", "changed", "created"]
     assert events[2]["url"] == "https://example.test/wildcard.txt"
-    assert events[-1]["old_version"] == 1
-    assert events[-1]["new_version"] == 2
-    assert events[-1]["old_sha256"] == first.sha256
-    assert events[-1]["new_sha256"] == second.sha256
+    assert events[1]["old_version"] == 1
+    assert events[1]["new_version"] == 2
+    assert events[1]["old_sha256"] == first.sha256
+    assert events[1]["new_sha256"] == second.sha256
 
 
 def test_pdf_docx_and_xlsx_extraction(tmp_path: Path):
