@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .lifecycle import TenderLifecycleStatus, transition
+from .lifecycle import TenderLifecycleStatus, TERMINAL_STATUSES, InvalidLifecycleTransition, transition
 
 
 class TenderLifecycleStore:
@@ -104,17 +104,33 @@ class TenderLifecycleStore:
         return actual
 
     def set(self, tender_key: str, target: TenderLifecycleStatus) -> TenderLifecycleStatus:
+        """Advance the lifecycle to *target* through the validated state machine.
+
+        Every transition is validated against ALLOWED_TRANSITIONS; terminal
+        states can never revert to a non-terminal state. There is deliberately
+        no bypass flag: user-initiated jumps must walk the allowed path (see
+        tenderplan.service.register_participation for the CRM entry point).
+        """
         key = str(tender_key)
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
+            inserted = conn.execute(
                 """
                 INSERT OR IGNORE INTO tender_lifecycle (tender_key, status, updated_at)
                 VALUES (?, ?, ?)
                 """,
                 (key, TenderLifecycleStatus.DISCOVERED.value, now),
-            )
+            ).rowcount
+            if inserted:
+                conn.execute(
+                    """
+                    INSERT INTO tender_lifecycle_events
+                        (tender_key, old_status, new_status, created_at)
+                    VALUES (?, NULL, ?, ?)
+                    """,
+                    (key, TenderLifecycleStatus.DISCOVERED.value, now),
+                )
             row = conn.execute(
                 "SELECT status FROM tender_lifecycle WHERE tender_key = ?",
                 (key,),
@@ -125,6 +141,10 @@ class TenderLifecycleStore:
             if current is target:
                 conn.commit()
                 return current
+            if current in TERMINAL_STATUSES and target not in TERMINAL_STATUSES:
+                raise InvalidLifecycleTransition(
+                    f"cannot transition from terminal state {current.value} to {target.value}"
+                )
             next_status = transition(current, target)
             conn.execute(
                 "UPDATE tender_lifecycle SET status = ?, updated_at = ? WHERE tender_key = ?",

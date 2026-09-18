@@ -13,7 +13,12 @@ from .lifecycle import (
     lifecycle_from_crm,
     transition,
 )
-from .service import application_task_id, ensure_application_task, task_priority_for_deadline
+from .service import (
+    application_task_id,
+    ensure_application_task,
+    register_participation,
+    task_priority_for_deadline,
+)
 from .storage import TenderTaskStore
 from .tasks import TaskPriority, TaskStatus, TenderTask
 
@@ -39,5 +44,6 @@ __all__ = [
     "TenderTaskStore",
     "application_task_id",
     "ensure_application_task",
+    "register_participation",
     "task_priority_for_deadline",
 ]

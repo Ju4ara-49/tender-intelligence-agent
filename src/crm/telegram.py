@@ -7,11 +7,15 @@
 from __future__ import annotations
 
 import html
+import logging
 import re
 from typing import Any
 
 from src.crm import ALL_STATUSES, TenderBoard
 from src.storage import ALLOWED_TRANSITIONS
+from src.tenderplan import register_participation
+
+logger = logging.getLogger(__name__)
 
 _STATUS_NAMES = {
     "new": "Новый",
@@ -162,6 +166,49 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
     return False
 
 
+def _advance_tenderplan_on_participate(
+    bot: Any,
+    chat_id: str,
+    tender_id: int,
+    unique_key: str | None = None,
+) -> None:
+    """Mirror an explicit participation action into the TenderPlan domain.
+
+    Goes only through the TenderPlan service layer (register_participation):
+    the lifecycle is advanced via TenderLifecycleStore's validated state
+    machine and the user-scoped application task is ensured idempotently.
+    Never raises into the Telegram flow; the TenderPlan side is best-effort,
+    while the CRM board status change above remains authoritative for CRM.
+    """
+    orchestrator = getattr(bot, "orchestrator", None)
+    lifecycle_store = getattr(orchestrator, "lifecycle_store", None)
+    task_store = getattr(orchestrator, "task_store", None)
+    if lifecycle_store is None or task_store is None:
+        # Legacy/embedded bot surface without TenderPlan wiring.
+        return
+    try:
+        tender = orchestrator.db.get_tender_by_id(tender_id)
+        if tender is None:
+            logger.warning(
+                "TenderPlan: tender_id=%s not found; participation not registered",
+                tender_id,
+            )
+            return
+        register_participation(
+            lifecycle_store,
+            task_store,
+            tender_key=str(unique_key or tender.unique_key),
+            tender_title=tender.title,
+            user_id=str(chat_id).strip(),
+            deadline=tender.deadline,
+        )
+    except Exception:
+        logger.exception(
+            "TenderPlan: failed to register participation for tender_id=%s",
+            tender_id,
+        )
+
+
 def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
     """Обработать inline-кнопки CRM."""
     if data.startswith("crm:participate:"):
@@ -182,6 +229,7 @@ def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
             # The button is an explicit user command to participate. It is
             # intentionally allowed to jump from the initial "new" state.
             new_status = _board(bot, chat_id).set_status(tender_id, "participating", force=True)
+            _advance_tenderplan_on_participate(bot, chat_id, tender_id, unique_key)
             bot._send(chat_id, f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
@@ -196,6 +244,8 @@ def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
         return False
     try:
         new_status = _board(bot, chat_id).set_status(tender_id, status)
+        if new_status == "participating":
+            _advance_tenderplan_on_participate(bot, chat_id, tender_id)
         bot._send(chat_id, f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.", bot._keyboard())
     except (ValueError, TypeError) as exc:
         bot._send(chat_id, html.escape(str(exc)), bot._keyboard())

@@ -303,6 +303,10 @@ class TenderDatabase:
             except (TypeError, ValueError, json.JSONDecodeError):
                 logger.warning("Invalid tender raw_data for id=%s; using empty object", row["id"])
 
+        normalized = raw_data.get("_normalized") if isinstance(raw_data, dict) else {}
+        if not isinstance(normalized, dict):
+            normalized = {}
+
         return Tender(
             platform=row["platform"],
             external_id=row["external_id"],
@@ -317,10 +321,17 @@ class TenderDatabase:
             deadline=parse_datetime(row["deadline"]),
             region=row["region"] or "",
             customer=row["customer"] or "",
-            customer_inn=row["customer_inn"] or "",
+            customer_inn=row["customer_inn"] or normalized.get("customer_inn", ""),
             law_type=row["law_type"] or "",
             detail_status=row["detail_status"] or "partial",
             detail_diagnostics=row["detail_diagnostics"] or "",
+            advance_required=normalized.get("advance_required", False),
+            advance_percent=normalized.get("advance_percent"),
+            postpayment_days=normalized.get("postpayment_days"),
+            application_security_percent=normalized.get("application_security_percent"),
+            contract_security_percent=normalized.get("contract_security_percent"),
+            documents=normalized.get("documents", raw_data.get("documents", [])),
+            field_sources=normalized.get("field_sources", raw_data.get("field_sources", {})),
             raw_data=raw_data,
         )
 
@@ -337,6 +348,12 @@ class TenderDatabase:
         with self._connect() as conn:
             row = conn.execute("SELECT id FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return int(row["id"]) if row is not None else None
+
+    def get_tender_by_id(self, tender_id: int) -> Tender | None:
+        """Load one persisted tender by primary key through the canonical model."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM tenders WHERE id = ?", (int(tender_id),)).fetchone()
+        return self._row_to_tender(row) if row is not None else None
 
     def _current_notification_event_key(self, unique_key: str) -> tuple[int, str] | None:
         with self._connect() as conn:
