@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
@@ -261,6 +262,7 @@ class FabrikantCollector(_BrowserTenderCollector):
         published = self._date_field(soup, text, ("дата публикации", "дата размещения", "дата создания", "дата начала", "дата закупки", "опубликовано"))
         deadline = self._date_field(soup, text, ("окончание подачи заявок", "дата окончания подачи заявок", "срок подачи заявок", "окончательный срок подачи заявок", "дата окончания приема заявок", "прием заявок до", "завершение подачи"))
         price = self._extract_price(text)
+        documents = self._extract_documents(soup, url)
         title = subject or self._clean_title(soup, external_id)
         return Tender(
             platform=self.platform,
@@ -274,8 +276,33 @@ class FabrikantCollector(_BrowserTenderCollector):
             start_date=published,
             region=region,
             customer=customer,
+            documents=documents,
             raw_data={"source": url, "published_at": published.isoformat() if published else None, "subject": subject, "customer": customer, "region": region},
         )
+
+    @staticmethod
+    def _extract_documents(soup: BeautifulSoup, base_url: str) -> list[dict[str, str]]:
+        documents: list[dict[str, str]] = []
+        seen: set[str] = set()
+        extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".rar")
+        hints = ("документ", "вложен", "приложен", "скачать", "download", "attachment", "file")
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
+            absolute = urljoin(base_url, href)
+            parsed = urlparse(absolute)
+            if parsed.scheme not in ("http", "https"):
+                continue
+            label = " ".join(anchor.stripped_strings).strip()
+            haystack = f"{absolute} {label}".casefold()
+            if not any(h in haystack for h in hints) and not any(parsed.path.casefold().endswith(ext) for ext in extensions):
+                continue
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            documents.append({"url": absolute, "filename": Path(parsed.path).name or label or "document"})
+        return documents
 
     _FIELD_LABELS = (
         "предмет закупки", "предмет торгов", "наименование закупки", "наименование процедуры", "объект закупки", "предмет договора", "наименование товара",
