@@ -28,6 +28,8 @@ class TenderDocument:
     extraction_status: str = DocumentExtractionStatus.PENDING
     extracted_text: str = ""
     created_at: datetime | None = None
+    etag: str = ""
+    last_modified: str = ""
 
     def __post_init__(self) -> None:
         if not str(self.document_id).strip():
@@ -138,6 +140,8 @@ class TenderDocumentStore:
             extraction_status=str(row["extraction_status"]),
             extracted_text=str(row["extracted_text"]),
             created_at=TenderDocumentStore._parse(row["created_at"]),
+            etag=str(row["etag"] or ""),
+            last_modified=str(row["last_modified"] or ""),
         )
 
     def latest(self, tender_key: str, url: str) -> TenderDocument | None:
