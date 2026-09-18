@@ -375,6 +375,7 @@ class Orchestrator:
 
     def _advance_lifecycle(self, tender: Tender, target: TenderLifecycleStatus) -> None:
         """Advance lifecycle only when the explicit state machine permits it."""
+        current: TenderLifecycleStatus | None = None
         try:
             current = self.lifecycle_store.get(tender.unique_key)
             if current is not None and current is not target:
