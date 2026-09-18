@@ -127,6 +127,10 @@ class TenderTaskStore:
             existing = conn.execute(
                 "SELECT * FROM tender_tasks WHERE task_id = ?", (task.task_id,)
             ).fetchone()
+            if existing is not None and str(existing["user_id"] or "") != str(values["user_id"] or ""):
+                raise ValueError(
+                    f"task_id {task.task_id!r} belongs to another user"
+                )
             conn.execute(
                 """
                 INSERT INTO tender_tasks
@@ -162,10 +166,6 @@ class TenderTaskStore:
             if existing is None:
                 self._record_event(conn, task_id=task.task_id, event_type="created")
             else:
-                if str(existing["user_id"] or "") != str(values["user_id"] or ""):
-                    raise ValueError(
-                        f"task_id {task.task_id!r} belongs to another user"
-                    )
                 for field_name in (
                     "tender_key",
                     "user_id",
