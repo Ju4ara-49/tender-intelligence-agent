@@ -19,7 +19,13 @@ from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
-from src.tenderplan import (\n    TenderLifecycleStatus,\n    TenderLifecycleStore,\n    TenderTaskStore,\n    ensure_application_task,\n    task_priority_for_deadline,\n)
+from src.tenderplan import (
+    TenderLifecycleStatus,
+    TenderLifecycleStore,
+    TenderTaskStore,
+    ensure_application_task,
+    task_priority_for_deadline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,7 @@ class Orchestrator:
         self.settings = settings
         self.db = TenderDatabase(settings.database_path)
         self.task_store = TenderTaskStore(settings.database_path)
+        self.lifecycle_store = TenderLifecycleStore(settings.database_path)
         self.notification_state = NotificationDeliveryState(self.db)
         self.criteria_store = CriteriaStore(self.db)
         self.profile_store = SearchProfileStore(self.db)
