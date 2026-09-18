@@ -239,10 +239,13 @@ class TenderDocumentStore:
         needle = str(query or "").strip()
         if not needle:
             return []
-        pattern = f"%{needle}%"
+        # Treat user search text literally: SQL LIKE would otherwise
+        # interpret '%' and '_' as wildcards.
+        escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
         sql = (
             "SELECT * FROM tender_documents "
-            "WHERE extracted_text LIKE ? COLLATE NOCASE"
+            "WHERE extracted_text LIKE ? COLLATE NOCASE ESCAPE '\\\\'"
         )
         params: list[object] = [pattern]
         if tender_key is not None:
