@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging
 import re
+from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
