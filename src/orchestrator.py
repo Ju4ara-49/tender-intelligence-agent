@@ -547,6 +547,10 @@ class Orchestrator:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
                 continue
             export_tender_ids.append(tender_id)
+            # TenderPlan persistence is independent of notification history.
+            # A previously notified tender may still need its application task
+            # after a restart, DB migration, or a newly introduced task layer.
+            self._ensure_tenderplan_task(tender)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
@@ -566,11 +570,6 @@ class Orchestrator:
                     self.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
             except Exception:
                 logger.exception("TenderPlan: failed to advance lifecycle for %s", tender.unique_key)
-            # TenderPlan state must not depend on Telegram delivery or notification deduplication.
-            self._ensure_tenderplan_task(tender)
-            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
-                stats["skipped_duplicate"] += 1
-                continue
             if self._notify_and_record(
                 tender,
                 analysis,
