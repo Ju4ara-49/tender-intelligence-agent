@@ -363,15 +363,16 @@ class Orchestrator:
         }
         return bool(tender_regions & requested)
 
-    def _ensure_tenderplan_task(self, tender: Tender) -> None:
+    def _ensure_tenderplan_task(self, tender: Tender, *, user_id: str | int | None = None) -> None:
         """Persist the application task only after the shortlist gate.
         
         Existing tasks are always synchronized/preserved. A new application task
         must not appear while a tender is merely DISCOVERED or RELEVANT.
         """
         try:
-            task_id = application_task_id(tender.unique_key)
-            existing = self.task_store.get(task_id)
+            task_id = application_task_id(tender.unique_key, user_id)
+            owner = "" if user_id is None else str(user_id).strip()
+            existing = self.task_store.get(task_id, user_id=owner if user_id is not None else None)
             current = self.lifecycle_store.get(tender.unique_key)
             if existing is None and current not in {
                 TenderLifecycleStatus.SHORTLISTED,
@@ -392,6 +393,7 @@ class Orchestrator:
                 self.task_store,
                 tender_key=tender.unique_key,
                 tender_title=tender.title,
+                user_id=user_id,
                 deadline=tender.deadline,
                 priority=task_priority_for_deadline(tender.deadline),
             )
@@ -641,7 +643,7 @@ class Orchestrator:
             # TenderPlan task is a downstream action: create it only after the
             # deterministic gate and AI relevance gate have moved the tender to
             # SHORTLISTED. It remains independent from Telegram delivery.
-            self._ensure_tenderplan_task(tender)
+            self._ensure_tenderplan_task(tender, user_id=user_id)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
