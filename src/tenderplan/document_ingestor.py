@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from io import BytesIO
+import zipfile
+import xml.etree.ElementTree as ET
+
+import openpyxl
+from pypdf import PdfReader
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -64,4 +70,41 @@ class TenderDocumentIngestor:
             return soup.get_text(" ", strip=True), DocumentExtractionStatus.EXTRACTED
         if "text/" in lowered or path.endswith((".txt", ".csv", ".xml", ".json")):
             return content.decode("utf-8", errors="replace").strip(), DocumentExtractionStatus.EXTRACTED
+        if "pdf" in lowered or path.endswith(".pdf"):
+            try:
+                reader = PdfReader(BytesIO(content))
+                text = "\\n".join(page.extract_text() or "" for page in reader.pages).strip()
+                return text, DocumentExtractionStatus.EXTRACTED
+            except Exception:
+                return "", DocumentExtractionStatus.FAILED
+        if (
+            "wordprocessingml" in lowered
+            or path.endswith(".docx")
+        ):
+            try:
+                with zipfile.ZipFile(BytesIO(content)) as archive:
+                    xml = archive.read("word/document.xml")
+                root = ET.fromstring(xml)
+                text = " ".join(
+                    node.text.strip()
+                    for node in root.iter()
+                    if node.tag.endswith("}t") and node.text and node.text.strip()
+                )
+                return text, DocumentExtractionStatus.EXTRACTED
+            except Exception:
+                return "", DocumentExtractionStatus.FAILED
+        if (
+            "spreadsheetml" in lowered
+            or path.endswith(".xlsx")
+        ):
+            try:
+                workbook = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+                parts = []
+                for sheet in workbook.worksheets:
+                    for row in sheet.iter_rows(values_only=True):
+                        parts.extend(str(value).strip() for value in row if value is not None and str(value).strip())
+                workbook.close()
+                return " ".join(parts), DocumentExtractionStatus.EXTRACTED
+            except Exception:
+                return "", DocumentExtractionStatus.FAILED
         return "", DocumentExtractionStatus.PENDING
