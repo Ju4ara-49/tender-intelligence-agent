@@ -138,10 +138,6 @@ class TelegramCrmWiringTests(unittest.TestCase):
         self.assertIn("WHITELIST_FILE = PROJECT_ROOT / \"data\" / \"telegram_allowed_users.json\"", source)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
     def test_notifier_does_not_create_tenderplan_tasks(self) -> None:
         from pathlib import Path
         from src.tenderplan import TenderTaskStore
@@ -154,3 +150,7 @@ if __name__ == "__main__":
         notifier.send_tender_alert(tender, analysis)
 
         self.assertEqual(store.list_for_tender(tender.unique_key), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
