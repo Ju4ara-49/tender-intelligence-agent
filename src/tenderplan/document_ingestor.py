@@ -12,6 +12,7 @@ import openpyxl
 from pypdf import PdfReader
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 from bs4 import BeautifulSoup
 
@@ -40,10 +41,23 @@ class TenderDocumentIngestor:
         content_type: str = "",
     ) -> DocumentIngestResult:
         latest = self.store.latest(tender_key, url)
-        request = Request(url, headers={"User-Agent": "TenderIntelligenceAgent/1.0"})
-        with urlopen(request, timeout=self.timeout) as response:
-            content = response.read()
-            detected_type = (response.headers.get("Content-Type") or content_type or "").split(";", 1)[0].strip()
+        headers = {"User-Agent": "TenderIntelligenceAgent/1.0"}
+        if latest is not None:
+            if getattr(latest, "etag", ""):
+                headers["If-None-Match"] = latest.etag
+            if getattr(latest, "last_modified", ""):
+                headers["If-Modified-Since"] = latest.last_modified
+        request = Request(url, headers=headers)
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                content = response.read()
+                detected_type = (response.headers.get("Content-Type") or content_type or "").split(";", 1)[0].strip()
+                etag = response.headers.get("ETag", "")
+                last_modified = response.headers.get("Last-Modified", "")
+        except HTTPError as exc:
+            if exc.code == 304 and latest is not None:
+                return DocumentIngestResult(document=latest, downloaded=False)
+            raise
 
         digest = content_sha256(content)
         if latest is not None and latest.sha256 == digest:
@@ -58,6 +72,8 @@ class TenderDocumentIngestor:
             sha256=digest,
             extraction_status=status,
             extracted_text=text,
+            etag=etag,
+            last_modified=last_modified,
         )
         return DocumentIngestResult(document=document, downloaded=True)
 
