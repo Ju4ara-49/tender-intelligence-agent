@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
@@ -11,6 +11,7 @@ from src.collectors.base import BaseCollector, CollectorUnavailableError
 from src.models.tender import Tender
 from src.collectors.tenderguru_fallback import search as tenderguru_search
 logger = logging.getLogger(__name__)
+MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
 
 class _BrowserTenderCollector(BaseCollector):
     BASE_URL=""
@@ -26,7 +27,7 @@ class _BrowserTenderCollector(BaseCollector):
         for term in terms:
             for tender in self._search_one(term):
                 if since is not None and tender.published_at is not None:
-                    published=tender.published_at if tender.published_at.tzinfo else tender.published_at.astimezone()
+                    published=tender.published_at if tender.published_at.tzinfo else tender.published_at.replace(tzinfo=MOSCOW_TZ)
                     if published<since:continue
                 merged[tender.unique_key]=tender
                 if len(merged)>=self.max_results:break
