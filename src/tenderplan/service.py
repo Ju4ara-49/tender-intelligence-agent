@@ -9,9 +9,10 @@ from .storage import TenderTaskStore
 from .tasks import TaskPriority, TenderTask
 
 
-def application_task_id(tender_key: str) -> str:
-    """Return a stable task id for the canonical application task of a tender."""
-    digest = hashlib.sha256(str(tender_key).encode("utf-8")).hexdigest()[:24]
+def application_task_id(tender_key: str, user_id: str | int | None = None) -> str:
+    """Return a stable task id scoped to a user when user_id is provided."""
+    identity = str(tender_key) if user_id is None else f"{str(user_id).strip()}\0{str(tender_key)}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     return f"application:{digest}"
 
 
@@ -20,6 +21,7 @@ def ensure_application_task(
     *,
     tender_key: str,
     tender_title: str,
+    user_id: str | int | None = None,
     deadline: datetime | None,
     priority: TaskPriority = TaskPriority.NORMAL,
 ) -> TenderTask:
@@ -29,8 +31,9 @@ def ensure_application_task(
     The tender deadline remains source-of-truth and is synchronized when it changes;
     the storage adapter records that change in the immutable task history.
     """
-    task_id = application_task_id(tender_key)
-    existing = store.get(task_id)
+    task_id = application_task_id(tender_key, user_id)
+    owner = "" if user_id is None else str(user_id).strip()
+    existing = store.get(task_id, user_id=owner if user_id is not None else None)
     if existing is not None:
         if existing.due_at != deadline:
             existing.due_at = deadline
@@ -41,6 +44,7 @@ def ensure_application_task(
         task_id=task_id,
         tender_key=tender_key,
         title="Подать заявку",
+        user_id=owner,
         due_at=deadline,
         priority=priority,
         notes=str(tender_title or "").strip(),
