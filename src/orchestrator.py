@@ -665,6 +665,7 @@ class Orchestrator:
                 excel_path,
                 tender_ids=export_tender_ids,
                 search_number=search_number,
+                user_id=user_id,
             )
             logger.info("Excel: создан новый файл текущего прогона: %s", export_path)
             self.email_notifier.send_excel(export_path, search_number)
