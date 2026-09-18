@@ -53,3 +53,14 @@ def test_lifecycle_store_archives_terminal_tender(tmp_path: Path):
     assert store.get(key) is TenderLifecycleStatus.ARCHIVED
     with pytest.raises(ValueError):
         store.set(key, TenderLifecycleStatus.RELEVANT)
+
+
+def test_lifecycle_set_initializes_missing_row_atomically(tmp_path: Path):
+    store = TenderLifecycleStore(tmp_path / "agent.db")
+    key = "eis:atomic"
+    assert store.set(key, TenderLifecycleStatus.RELEVANT) is TenderLifecycleStatus.RELEVANT
+    assert store.get(key) is TenderLifecycleStatus.RELEVANT
+    assert [(e["old_status"], e["new_status"]) for e in store.history(key)] == [
+        (None, "discovered"),
+        ("discovered", "relevant"),
+    ]
