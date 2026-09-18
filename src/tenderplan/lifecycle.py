@@ -101,7 +101,7 @@ CRM_TO_LIFECYCLE: dict[str, TenderLifecycleStatus] = {
     "participating": TenderLifecycleStatus.SHORTLISTED,
     "docs_preparation": TenderLifecycleStatus.PREPARING,
     "submitted": TenderLifecycleStatus.SUBMITTED,
-    "waiting_result": TenderLifecycleStatus.AUCTION,
+    "waiting_result": TenderLifecycleStatus.SUBMITTED,
     "won": TenderLifecycleStatus.WON,
     "lost": TenderLifecycleStatus.LOST,
     "skipped": TenderLifecycleStatus.REJECTED,
