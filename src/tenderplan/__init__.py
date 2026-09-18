@@ -1,5 +1,6 @@
 """TenderPlan-inspired domain capabilities."""
 
+from .lifecycle_store import TenderLifecycleStore
 from .documents import DocumentExtractionStatus, TenderDocument, TenderDocumentStore, content_sha256
 from .lifecycle import (
     ALLOWED_TRANSITIONS,
@@ -16,7 +17,7 @@ from .storage import TenderTaskStore
 from .tasks import TaskPriority, TaskStatus, TenderTask
 
 __all__ = [
-    "TenderDocument",
+    "TenderLifecycleStore",\n    "TenderDocument",
     "TenderDocumentStore",
     "DocumentExtractionStatus",
     "content_sha256",
