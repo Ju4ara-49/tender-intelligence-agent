@@ -162,7 +162,19 @@ class TelegramNotifier:
         risks = ""
         if analysis.risks:
             safe_risks = [html.escape(str(r)) for r in analysis.risks[:3]]
-            risks = "\n⚠️ <b>Риски:</b> " + "; ".join(safe_risks)
+            risks = "\n⚠️ <b>Риски AI:</b> " + "; ".join(safe_risks)
+        risk_assessment = tender.raw_data.get("risk_assessment") if isinstance(tender.raw_data, dict) else {}
+        if isinstance(risk_assessment, dict) and risk_assessment.get("level"):
+            level = html.escape(str(risk_assessment["level"]))
+            factor_codes = [
+                html.escape(str(item.get("code")))
+                for item in risk_assessment.get("factors", [])
+                if isinstance(item, dict) and item.get("code")
+            ]
+            deterministic = f"\n🛡️ <b>Risk Engine:</b> {level}"
+            if factor_codes:
+                deterministic += " — " + ", ".join(factor_codes[:4])
+            risks += deterministic
         stub_note = "\n<i>(ИИ-заглушка — используется вместо локального Ollama)</i>" if analysis.is_stub else ""
         rec_map = {"participate": "Участвовать", "skip": "Пропустить", "review": "На проверку"}
         rec = html.escape(str(rec_map.get(analysis.recommendation, analysis.recommendation or "")))
