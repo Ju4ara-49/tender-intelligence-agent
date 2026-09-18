@@ -28,3 +28,24 @@ def test_rosatom_results_keep_direct_row_link_for_detail_loading():
     assert len(results) == 1
     assert results[0].url == "https://zakupki.rosatom.ru/procurements/123456"
     assert collector._urls["123456"] == results[0].url
+
+
+def test_fabrikant_search_preserves_detail_urls_across_both_registers():
+    collector = FabrikantCollector({})
+    def fake_search(_term):
+        if "soap2" in collector.BASE_URL:
+            external_id = "223-1"
+            url = "https://soap2.fabrikant.ru/223/procedure/223-1"
+        else:
+            external_id = "44-1"
+            url = "https://soap4.fabrikant.ru/44/procedure/44-1"
+        collector._urls[external_id] = url
+        return [Tender(platform="fabrikant", external_id=external_id, title="Поставка", url=url)]
+    from src.models.tender import Tender
+    collector._search_one = fake_search
+
+    results = collector.search(["подшипники"])
+
+    assert {item.external_id for item in results} == {"223-1", "44-1"}
+    assert collector._urls["223-1"] == "https://soap2.fabrikant.ru/223/procedure/223-1"
+    assert collector._urls["44-1"] == "https://soap4.fabrikant.ru/44/procedure/44-1"
