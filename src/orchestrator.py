@@ -19,7 +19,7 @@ from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
-from src.tenderplan import TenderTaskStore, ensure_application_task, task_priority_for_deadline
+from src.tenderplan import (\n    TenderLifecycleStatus,\n    TenderLifecycleStore,\n    TenderTaskStore,\n    ensure_application_task,\n    task_priority_for_deadline,\n)
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +443,10 @@ class Orchestrator:
             enriched_pairs.append((collector, enriched))
             existing = self.db.exists(enriched.unique_key)
             self.db.save_tender(enriched)
+            try:
+                self.lifecycle_store.ensure(enriched.unique_key)
+            except Exception:
+                logger.exception("TenderPlan: failed to persist lifecycle for %s", enriched.unique_key)
             stats["saved"] += 1
             if not existing:
                 stats["new"] += 1
@@ -488,6 +492,12 @@ class Orchestrator:
             stats["analyzed"] += 1
             if analysis.relevance_score < criteria.min_ai_score:
                 continue
+            try:
+                current_lifecycle = self.lifecycle_store.get(tender.unique_key)
+                if current_lifecycle is TenderLifecycleStatus.DISCOVERED:
+                    self.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+            except Exception:
+                logger.exception("TenderPlan: failed to advance lifecycle for %s", tender.unique_key)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
