@@ -554,6 +554,7 @@ class EisZakupkiCollector(BaseCollector):
             published_at=published_at,
             region=region,
             customer=customer,
+            customer_inn=customer_inn,
             law_type=law_type,
             raw_data={
                 "keyword": keyword,
@@ -621,6 +622,8 @@ class EisZakupkiCollector(BaseCollector):
             customer = self._extract_customer_from_text(
                 text
             )
+
+        customer_inn = self._extract_customer_inn(text)
 
         price = self._extract_detail_price(
             text
@@ -704,6 +707,7 @@ class EisZakupkiCollector(BaseCollector):
             text
         )
         commercial = self._extract_commercial_conditions(text)
+        documents = self._extract_documents(soup, url)
 
         return Tender(
             platform=self.platform,
@@ -725,6 +729,7 @@ class EisZakupkiCollector(BaseCollector):
             postpayment_days=commercial["postpayment_days"],
             application_security_percent=commercial["application_security_percent"],
             contract_security_percent=commercial["contract_security_percent"],
+            documents=documents,
             raw_data={
                 "details_loaded": True,
                 "source_url": url,
@@ -733,6 +738,28 @@ class EisZakupkiCollector(BaseCollector):
                 "commercial_conditions": commercial,
             },
         )
+
+    @staticmethod
+    def _extract_documents(soup: BeautifulSoup, page_url: str) -> list[dict[str, str]]:
+        """Extract downloadable procurement attachments from the EIS detail page."""
+        documents: list[dict[str, str]] = []
+        seen: set[str] = set()
+        extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".rar")
+        hints = ("документ", "документы", "вложен", "вложения", "приложен", "приложения", "скачать", "download", "attachment", "file", "файл", "файлы")
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
+            absolute = urljoin(page_url, href)
+            label = self._clean_text(anchor.get_text(" ", strip=True))
+            haystack = f"{absolute} {label}".lower()
+            if not absolute.lower().endswith(extensions) and not any(h in haystack for h in hints):
+                continue
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            documents.append({"url": absolute, "filename": label or absolute.rsplit("/", 1)[-1]})
+        return documents
 
     # ==================================================================
     # REGISTRATION NUMBER
@@ -1441,6 +1468,12 @@ class EisZakupkiCollector(BaseCollector):
                 return value[:1000]
 
         return ""
+
+    @staticmethod
+    def _extract_customer_inn(text: str) -> str:
+        """Extract a customer INN from the EIS detail text."""
+        match = re.search(r"(?:ИНН|ИНН\s+заказчика)\s*[:№]?\s*(\d{10,12})\b", str(text or ""), re.IGNORECASE)
+        return match.group(1) if match else ""
 
     # ==================================================================
     # PRICE
