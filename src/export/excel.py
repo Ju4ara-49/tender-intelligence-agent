@@ -18,6 +18,7 @@ def export_tenders_to_excel(
     output_path: Path | str,
     tender_ids: list[int] | None = None,
     search_number: int | None = None,
+    user_id: str | int | None = None,
 ) -> Path:
     """Экспортирует результаты текущего прогона в отдельный Excel."""
 
@@ -104,7 +105,10 @@ def export_tenders_to_excel(
             except (TypeError, ValueError, json.JSONDecodeError):
                 risks = str(row["risks"])
 
-        tasks = task_store.list_for_tender(f"{row['platform']}:{row['external_id']}")
+        tasks = task_store.list_for_tender(
+            f"{row['platform']}:{row['external_id']}",
+            user_id=None if user_id is None else str(user_id).strip(),
+        )
         task = tasks[0] if tasks else None
         risk = raw_data.get("risk_assessment") if isinstance(raw_data.get("risk_assessment"), dict) else {}
         risk_level = str(risk.get("level") or "")
