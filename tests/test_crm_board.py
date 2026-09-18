@@ -176,6 +176,7 @@ def test_crm_board_isolates_status_assignment_and_labels_between_users():
     assert second.entry(1).assignee == ""
     assert second.labels(1) == []
 
+    second.set_status(1, STATUS_REVIEWING)
     second.set_status(1, STATUS_PARTICIPATING)
     second.add_label(1, "Закупки")
 
