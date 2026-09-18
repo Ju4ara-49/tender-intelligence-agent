@@ -25,6 +25,8 @@ from src.tenderplan import (
     TenderTaskStore,
     ensure_application_task,
     task_priority_for_deadline,
+    TenderDocumentIngestor,
+    TenderDocumentStore,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,7 @@ class Orchestrator:
         self.db = TenderDatabase(settings.database_path)
         self.task_store = TenderTaskStore(settings.database_path)
         self.lifecycle_store = TenderLifecycleStore(settings.database_path)
+        self.document_ingestor = TenderDocumentIngestor(TenderDocumentStore(settings.database_path))
         self.notification_state = NotificationDeliveryState(self.db)
         self.criteria_store = CriteriaStore(self.db)
         self.profile_store = SearchProfileStore(self.db)
@@ -152,6 +155,54 @@ class Orchestrator:
         if diagnostics:
             tender.raw_data["detail_diagnostics"] = diagnostics[:4000]
         return self._normalize_tender_datetimes(tender)
+
+    def _ingest_tender_documents(self, tender: Tender) -> tuple[int, int, int]:
+        """Download and version declared tender documents; never fail the tender itself."""
+        if not tender.documents:
+            return 0, 0, 0
+        discovered = downloaded = failed = 0
+        extracted_texts: list[str] = []
+        versions: list[dict[str, object]] = []
+        for item in tender.documents:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or item.get("href") or item.get("link") or "").strip()
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            discovered += 1
+            try:
+                result = self.document_ingestor.ingest(
+                    tender_key=tender.unique_key,
+                    url=url,
+                    filename=str(item.get("name") or item.get("filename") or "").strip(),
+                    content_type=str(item.get("content_type") or item.get("mime_type") or "").strip(),
+                )
+                downloaded += int(result.downloaded)
+                document = result.document
+                versions.append(
+                    {
+                        "url": document.url,
+                        "version": document.version,
+                        "sha256": document.sha256,
+                        "extraction_status": document.extraction_status,
+                    }
+                )
+                if document.extracted_text:
+                    extracted_texts.append(document.extracted_text)
+            except Exception as exc:
+                failed += 1
+                logger.warning(
+                    "TenderPlan: document ingestion failed for %s (%s): %s",
+                    tender.unique_key,
+                    url,
+                    exc,
+                )
+        if extracted_texts:
+            tender.raw_data["document_contents"] = "\n".join(extracted_texts)
+            tender.raw_data["document_search_text"] = tender.raw_data["document_contents"]
+        if versions:
+            tender.raw_data["document_versions"] = versions
+        return discovered, downloaded, failed
 
     def _enrich_tender(self, collector, tender: Tender) -> tuple[Tender, bool]:
         get_details = getattr(collector, "get_details", None)
@@ -370,6 +421,9 @@ class Orchestrator:
             "saved": 0,
             "ai_failed": 0,
             "platform_errors": 0,
+            "documents_discovered": 0,
+            "documents_downloaded": 0,
+            "documents_failed": 0,
         }
         self.clear_stop_request()
         self.last_run_results = []
@@ -443,6 +497,13 @@ class Orchestrator:
             if self.stop_requested:
                 break
             enriched, detail_loaded = self._enrich_tender(collector, tender)
+            discovered_docs, downloaded_docs, failed_docs = self._ingest_tender_documents(enriched)
+            stats["documents_discovered"] += discovered_docs
+            stats["documents_downloaded"] += downloaded_docs
+            stats["documents_failed"] += failed_docs
+            if discovered_docs:
+                enriched._enrich_commercial_terms()
+                enriched._persist_normalized_fields()
             detail_status = str(getattr(enriched, "detail_status", "partial") or "partial").lower()
             stats["details_loaded"] += int(detail_status == "success" and detail_loaded)
             stats["details_partial"] += int(detail_status == "partial")
