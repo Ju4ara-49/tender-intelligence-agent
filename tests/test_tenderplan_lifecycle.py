@@ -104,7 +104,7 @@ def test_crm_status_mapping_is_explicit():
     from src.tenderplan import TenderLifecycleStatus, lifecycle_from_crm
     assert lifecycle_from_crm("new") is TenderLifecycleStatus.DISCOVERED
     assert lifecycle_from_crm("docs_preparation") is TenderLifecycleStatus.PREPARING
-    assert lifecycle_from_crm("waiting_result") is TenderLifecycleStatus.AUCTION
+    assert lifecycle_from_crm("waiting_result") is TenderLifecycleStatus.SUBMITTED
     assert lifecycle_from_crm("skipped") is TenderLifecycleStatus.REJECTED
     assert lifecycle_from_crm(" SUBMITTED ") is TenderLifecycleStatus.SUBMITTED
 
