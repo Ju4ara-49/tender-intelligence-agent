@@ -59,6 +59,7 @@ def export_tenders_to_excel(
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
         "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
+        "Risk", "Risk factors",
     ]
     ws.append(headers)
 
@@ -104,6 +105,13 @@ def export_tenders_to_excel(
 
         tasks = task_store.list_for_tender(f"{row['platform']}:{row['external_id']}")
         task = tasks[0] if tasks else None
+        risk = raw_data.get("risk_assessment") if isinstance(raw_data.get("risk_assessment"), dict) else {}
+        risk_level = str(risk.get("level") or "")
+        risk_factors = "; ".join(
+            str(item.get("code") or "").strip()
+            for item in risk.get("factors", [])
+            if isinstance(item, dict) and str(item.get("code") or "").strip()
+        )
         ws.append([
             platform, row["external_id"] or "", row["title"] or "", row["customer"] or "",
             row["region"] or "", row["price"], row["currency"] or "RUB",
@@ -114,7 +122,7 @@ def export_tenders_to_excel(
             task.status.value if task else "",
             task.priority.value if task else "",
             task.responsible if task else "",
-            task.notes if task else "",
+            task.notes if task else "", risk_level, risk_factors,
         ])
 
     # Q = Ссылка: делаем URL настоящей гиперссылкой Excel.
@@ -130,7 +138,7 @@ def export_tenders_to_excel(
     widths = {
         1: 14, 2: 22, 3: 55, 4: 32, 5: 18, 6: 20, 7: 8, 8: 14, 9: 24,
         10: 20, 11: 8, 12: 30, 13: 10, 14: 18, 15: 45, 16: 35, 17: 55,
-        18: 20, 19: 18, 20: 18, 21: 22, 22: 40,
+        18: 20, 19: 18, 20: 18, 21: 22, 22: 40, 23: 12, 24: 35,
     }
     for column, width in widths.items():
         ws.column_dimensions[get_column_letter(column)].width = width
