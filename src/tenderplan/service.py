@@ -46,3 +46,16 @@ def ensure_application_task(
         notes=str(tender_title or "").strip(),
     )
     return store.save(task)
+
+
+def task_priority_for_deadline(deadline: datetime | None) -> TaskPriority:
+    """Derive a default urgency from the tender application deadline."""
+    if deadline is None:
+        return TaskPriority.NORMAL
+    from datetime import datetime, timezone
+    remaining = deadline - datetime.now(timezone.utc)
+    if remaining.total_seconds() <= 3 * 86400:
+        return TaskPriority.CRITICAL
+    if remaining.total_seconds() <= 7 * 86400:
+        return TaskPriority.HIGH
+    return TaskPriority.NORMAL
