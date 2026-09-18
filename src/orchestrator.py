@@ -373,6 +373,23 @@ class Orchestrator:
         except Exception:
             logger.exception("TenderPlan: failed to create task for %s", tender.unique_key)
 
+    def _advance_lifecycle(self, tender: Tender, target: TenderLifecycleStatus) -> None:
+        """Advance lifecycle only when the explicit state machine permits it."""
+        try:
+            current = self.lifecycle_store.get(tender.unique_key)
+            if current is not None and current is not target:
+                from src.tenderplan.lifecycle import can_transition
+
+                if can_transition(current, target):
+                    self.lifecycle_store.set(tender.unique_key, target)
+        except Exception:
+            logger.exception(
+                "TenderPlan: failed to advance lifecycle %s -> %s for %s",
+                current.value if current is not None else None,
+                target.value,
+                tender.unique_key,
+            )
+
     def _notify_and_record(
         self,
         tender: Tender,
@@ -547,6 +564,9 @@ class Orchestrator:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
                 continue
             export_tender_ids.append(tender_id)
+            # Passing deterministic search criteria means the tender is now
+            # shortlisted; this state must not depend on Telegram delivery.
+            self._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
             # TenderPlan persistence is independent of notification history.
             # A previously notified tender may still need its application task
             # after a restart, DB migration, or a newly introduced task layer.
