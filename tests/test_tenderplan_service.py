@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.tenderplan import TaskStatus, TenderTaskStore, application_task_id, ensure_application_task
+from src.tenderplan import TaskPriority, TaskStatus, TenderTaskStore, application_task_id, ensure_application_task, task_priority_for_deadline
 
 
 def test_application_task_id_is_stable_and_bounded():
