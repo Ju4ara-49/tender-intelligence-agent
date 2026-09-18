@@ -87,6 +87,25 @@ class TenderDocumentStore:
                 "CREATE INDEX IF NOT EXISTS idx_tender_documents_tender_url "
                 "ON tender_documents(tender_key, url, version)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tender_document_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tender_key TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    old_version INTEGER,
+                    new_version INTEGER NOT NULL,
+                    old_sha256 TEXT,
+                    new_sha256 TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tender_document_events_tender "
+                "ON tender_document_events(tender_key, created_at)"
+            )
             conn.commit()
 
     @staticmethod
@@ -175,6 +194,29 @@ class TenderDocumentStore:
                     now.isoformat(),
                 ),
             )
+            old_row = conn.execute(
+                "SELECT version, sha256 FROM tender_documents "
+                "WHERE tender_key = ? AND url = ? AND version = ?",
+                (str(tender_key), str(url), version - 1),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO tender_document_events
+                    (tender_key, url, event_type, old_version, new_version,
+                     old_sha256, new_sha256, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(tender_key),
+                    str(url),
+                    "created" if old_row is None else "changed",
+                    int(old_row["version"]) if old_row else None,
+                    version,
+                    str(old_row["sha256"]) if old_row else None,
+                    str(sha256),
+                    now.isoformat(),
+                ),
+            )
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM tender_documents WHERE document_id = ?", (document_id,)
@@ -191,3 +233,33 @@ class TenderDocumentStore:
                 (str(tender_key),),
             ).fetchall()
         return [self._from_row(row) for row in rows]
+
+    def search(self, query: str, tender_key: str | None = None) -> list[TenderDocument]:
+        """Search extracted document text deterministically; no AI is required."""
+        needle = str(query or "").strip()
+        if not needle:
+            return []
+        pattern = f"%{needle}%"
+        sql = (
+            "SELECT * FROM tender_documents "
+            "WHERE extracted_text LIKE ? COLLATE NOCASE"
+        )
+        params: list[object] = [pattern]
+        if tender_key is not None:
+            sql += " AND tender_key = ?"
+            params.append(str(tender_key))
+        sql += " ORDER BY tender_key, url, version DESC"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._from_row(row) for row in rows]
+
+    def events_for_tender(self, tender_key: str) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT event_id, tender_key, url, event_type, old_version, "
+                "new_version, old_sha256, new_sha256, created_at "
+                "FROM tender_document_events WHERE tender_key = ? "
+                "ORDER BY event_id",
+                (str(tender_key),),
+            ).fetchall()
+        return [dict(row) for row in rows]
