@@ -574,9 +574,6 @@ class Orchestrator:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
                 continue
             export_tender_ids.append(tender_id)
-            # Application task must exist even when notification delivery is
-            # already deduplicated or Telegram is unavailable.
-            self._ensure_tenderplan_task(tender)
             # Notification deduplication is a delivery concern only. A previously
             # notified tender must still be re-analyzed so persisted AI/lifecycle
             # state can reflect title/price/deadline/document changes.
@@ -592,6 +589,10 @@ class Orchestrator:
                 continue
             self._advance_lifecycle(tender, TenderLifecycleStatus.RELEVANT)
             self._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
+            # TenderPlan task is a downstream action: create it only after the
+            # deterministic gate and AI relevance gate have moved the tender to
+            # SHORTLISTED. It remains independent from Telegram delivery.
+            self._ensure_tenderplan_task(tender)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
