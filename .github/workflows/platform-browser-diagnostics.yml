@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths-ignore:
       - "docs/PROJECT_CHECKPOINT_*.md"
+  pull_request:
+    paths:
+      - "src/collectors/**"
+      - "tests/platform_browser_diagnostics.py"
+      - "tests/platform_browser_diagnostics_gate.py"
+      - ".github/workflows/platform-browser-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
