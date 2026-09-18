@@ -32,7 +32,6 @@ class TenderTask:
     task_id: str
     tender_key: str
     title: str
-    user_id: str = ""
     due_at: datetime | None = None
     responsible: str = ""
     priority: TaskPriority = TaskPriority.NORMAL
@@ -40,6 +39,7 @@ class TenderTask:
     created_at: datetime | None = None
     completed_at: datetime | None = None
     notes: str = ""
+    user_id: str = ""
 
     def __post_init__(self) -> None:
         self.task_id = str(self.task_id).strip()
