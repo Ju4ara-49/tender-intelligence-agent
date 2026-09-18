@@ -245,7 +245,7 @@ class TenderDocumentStore:
         pattern = f"%{escaped}%"
         sql = (
             "SELECT * FROM tender_documents "
-            "WHERE extracted_text LIKE ? COLLATE NOCASE ESCAPE '\\\\'"
+            "WHERE extracted_text LIKE ? COLLATE NOCASE ESCAPE '\\'"
         )
         params: list[object] = [pattern]
         if tender_key is not None:
