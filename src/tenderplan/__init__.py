@@ -17,7 +17,8 @@ from .storage import TenderTaskStore
 from .tasks import TaskPriority, TaskStatus, TenderTask
 
 __all__ = [
-    "TenderLifecycleStore",\n    "TenderDocument",
+    "TenderLifecycleStore",
+    "TenderDocument",
     "TenderDocumentStore",
     "DocumentExtractionStatus",
     "content_sha256",
