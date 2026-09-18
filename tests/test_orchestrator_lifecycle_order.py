@@ -32,3 +32,30 @@ def test_low_ai_score_does_not_shortlist(tmp_path: Path):
     assert analysis.relevance_score < 70
     obj._advance_lifecycle(tender, TenderLifecycleStatus.RELEVANT)
     assert obj.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.RELEVANT
+
+
+def test_expired_tender_moves_open_lifecycle_to_expired(tmp_path: Path):
+    obj = _obj(tmp_path)
+    tender = _tender()
+    obj.lifecycle_store.ensure(tender.unique_key)
+    assert obj._expire_lifecycle_if_needed(
+        tender,
+        now=datetime(2026, 10, 2, tzinfo=timezone.utc),
+    ) is True
+    assert obj.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.EXPIRED
+
+
+def test_expired_submitted_tender_is_not_regressed(tmp_path: Path):
+    obj = _obj(tmp_path)
+    tender = _tender()
+    obj.lifecycle_store.ensure(tender.unique_key)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SHORTLISTED)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.ASSIGNED)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.PREPARING)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SUBMITTED)
+    assert obj._expire_lifecycle_if_needed(
+        tender,
+        now=datetime(2026, 10, 2, tzinfo=timezone.utc),
+    ) is False
+    assert obj.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.SUBMITTED
