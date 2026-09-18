@@ -74,3 +74,17 @@ def test_notification_state_detects_description_change(tmp_path):
     db.save_tender(tender)
 
     assert state.was_notified(tender) is False
+
+
+def test_notification_state_detects_document_change(tmp_path):
+    db = TenderDatabase(tmp_path / "documents.db")
+    state = NotificationDeliveryState(db)
+    tender = _tender()
+    tender.documents = [{"url": "https://example.test/doc-v1.pdf", "filename": "doc.pdf"}]
+    db.save_tender(tender)
+    state.mark_notified(tender)
+
+    tender.documents = [{"url": "https://example.test/doc-v2.pdf", "filename": "doc.pdf"}]
+    db.save_tender(tender)
+
+    assert state.was_notified(tender) is False
