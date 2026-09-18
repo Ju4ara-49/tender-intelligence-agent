@@ -287,6 +287,7 @@ class RosatomCollector(_BrowserTenderCollector):
         postpayment_days = self._extract_days(text, ("Отсрочка платежа", "Срок оплаты", "Условия оплаты", "Постоплата"))
         application_security = self._extract_percent(text, ("Обеспечение заявки", "Обеспечение предложения"))
         contract_security = self._extract_percent(text, ("Обеспечение исполнения", "Обеспечение контракта", "Обеспечение договора"))
+        documents = self._extract_documents(soup, url)
 
         official_number = ""
         match = re.search(r"Номер закупки на официальном сайте ГК «Росатом»\s*[:\-]?\s*(\d+)", text, re.I)
@@ -300,6 +301,7 @@ class RosatomCollector(_BrowserTenderCollector):
             "published_at": published_at.isoformat() if published_at else None,
             "start_date": start_date.isoformat() if start_date else None,
             "end_date": end_date.isoformat() if end_date else None,
+            "documents": documents,
         }
         if advance_percent is not None:
             raw_data["advance_payment"] = {"percent": advance_percent}
@@ -329,5 +331,6 @@ class RosatomCollector(_BrowserTenderCollector):
             postpayment_days=postpayment_days,
             application_security_percent=application_security,
             contract_security_percent=contract_security,
+            documents=documents,
             raw_data=raw_data,
         )
