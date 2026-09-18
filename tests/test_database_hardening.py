@@ -49,6 +49,43 @@ def test_search_numbers_are_unique_under_concurrency(tmp_path):
     assert sorted(numbers) == list(range(1, 41))
 
 
+def test_tender_round_trip_restores_normalized_contract(tmp_path):
+    db = TenderDatabase(tmp_path / "roundtrip.sqlite3")
+    tender = Tender(
+        platform="eis",
+        external_id="roundtrip-1",
+        title="Поставка запасных частей",
+        url="https://example.test/tender/roundtrip-1",
+        description="Аванс 30 процентов, отсрочка платежа 15 календарных дней",
+        price=250000.0,
+        region="Москва",
+        customer="ООО Тест",
+        customer_inn="7701234567",
+        law_type="44-ФЗ",
+        application_security_percent=2.0,
+        contract_security_percent=10.0,
+        field_sources={"customer_inn": "detail", "price": "detail"},
+        documents=[{"url": "https://example.test/doc.pdf", "filename": "doc.pdf"}],
+    )
+
+    tender_id = db.save_tender(tender)
+    restored = db.get_tender(tender.unique_key)
+
+    assert restored is not None
+    assert restored.unique_key == tender.unique_key
+    assert restored.customer_inn == "7701234567"
+    assert restored.advance_required is True
+    assert restored.advance_percent == 30.0
+    assert restored.postpayment_days == 15
+    assert restored.application_security_percent == 2.0
+    assert restored.contract_security_percent == 10.0
+    assert restored.documents == tender.documents
+    assert restored.field_sources == tender.field_sources
+    assert restored.raw_data["_normalized"]["customer_inn"] == "7701234567"
+    assert restored.detail_status == tender.detail_status
+    assert db.get_tender_id(tender.unique_key) == tender_id
+
+
 def test_tender_history_records_creation_and_real_change(tmp_path):
     db = TenderDatabase(tmp_path / "test.sqlite3")
     tender_id = db.save_tender(_tender(price=100.0))
