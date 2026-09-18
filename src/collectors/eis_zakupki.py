@@ -723,6 +723,7 @@ class EisZakupkiCollector(BaseCollector):
             published_at=published_at,
             region=region,
             customer=customer,
+            customer_inn=customer_inn,
             law_type=law_type,
             advance_required=bool(commercial["advance_required"]),
             advance_percent=commercial["advance_percent"],
