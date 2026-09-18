@@ -21,7 +21,7 @@ def test_rosatom_detail_document_contract():
 def test_rosatom_results_keep_direct_row_link_for_detail_loading():
     html = """<table>
     <tr><th>Номер закупки</th><th>Предмет договора</th><th>НМЦ, руб</th></tr>
-    <tr><td>123456 (789)</td><td>Поставка запасных частей</td><td>100000</td></tr>
+    <tr><td><a href="/procurements/123456">123456 (789)</a></td><td>Поставка запасных частей</td><td>100000</td></tr>
     </table>"""
     collector = RosatomCollector({})
     results = collector._parse_results(html)
