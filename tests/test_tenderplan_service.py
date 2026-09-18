@@ -83,3 +83,8 @@ def test_application_task_isolated_between_users(tmp_path: Path):
     )
     assert first.task_id != second.task_id
     assert {task.user_id for task in store.list_for_tender("eis:123")} == {"user-a", "user-b"}
+
+
+def test_task_priority_accepts_naive_deadline():
+    deadline = datetime(2026, 9, 19, 12, 0)
+    assert task_priority_for_deadline(deadline) is TaskPriority.CRITICAL
