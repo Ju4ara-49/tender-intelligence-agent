@@ -73,7 +73,7 @@ class TenderDocumentIngestor:
         if "pdf" in lowered or path.endswith(".pdf"):
             try:
                 reader = PdfReader(BytesIO(content))
-                text = "\\n".join(page.extract_text() or "" for page in reader.pages).strip()
+                text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
                 return text, DocumentExtractionStatus.EXTRACTED
             except Exception:
                 return "", DocumentExtractionStatus.FAILED
