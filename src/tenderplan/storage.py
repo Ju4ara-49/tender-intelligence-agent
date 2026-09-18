@@ -31,6 +31,7 @@ class TenderTaskStore:
                 CREATE TABLE IF NOT EXISTS tender_tasks (
                     task_id TEXT PRIMARY KEY,
                     tender_key TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL,
                     due_at TEXT,
                     responsible TEXT NOT NULL DEFAULT '',
@@ -42,8 +43,11 @@ class TenderTaskStore:
                 )
                 """
             )
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tender_tasks)").fetchall()}
+            if "user_id" not in cols:
+                conn.execute("ALTER TABLE tender_tasks ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tender_tasks_tender ON tender_tasks(tender_key)"
+                "CREATE INDEX IF NOT EXISTS idx_tender_tasks_tender_user ON tender_tasks(tender_key, user_id)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tender_tasks_due_status ON tender_tasks(due_at, status)"
@@ -80,6 +84,7 @@ class TenderTaskStore:
     def _task_values(task: TenderTask) -> dict[str, str | None]:
         return {
             "tender_key": task.tender_key,
+            "user_id": task.user_id,
             "title": task.title,
             "due_at": TenderTaskStore._iso(task.due_at),
             "responsible": task.responsible,
@@ -125,11 +130,12 @@ class TenderTaskStore:
             conn.execute(
                 """
                 INSERT INTO tender_tasks
-                    (task_id, tender_key, title, due_at, responsible, priority, status,
+                    (task_id, tender_key, user_id, title, due_at, responsible, priority, status,
                      created_at, completed_at, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     tender_key=excluded.tender_key,
+                    user_id=excluded.user_id,
                     title=excluded.title,
                     due_at=excluded.due_at,
                     responsible=excluded.responsible,
@@ -142,6 +148,7 @@ class TenderTaskStore:
                 (
                     task.task_id,
                     values["tender_key"],
+                    values["user_id"],
                     values["title"],
                     values["due_at"],
                     values["responsible"],
@@ -157,6 +164,7 @@ class TenderTaskStore:
             else:
                 for field_name in (
                     "tender_key",
+                    "user_id",
                     "title",
                     "due_at",
                     "responsible",
@@ -186,6 +194,7 @@ class TenderTaskStore:
             task_id=row["task_id"],
             tender_key=row["tender_key"],
             title=row["title"],
+            user_id=str(row["user_id"] or ""),
             due_at=TenderTaskStore._parse(row["due_at"]),
             responsible=row["responsible"],
             priority=TaskPriority(row["priority"]),
@@ -195,19 +204,31 @@ class TenderTaskStore:
             notes=row["notes"],
         )
 
-    def get(self, task_id: str) -> TenderTask | None:
+    def get(self, task_id: str, *, user_id: str | None = None) -> TenderTask | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM tender_tasks WHERE task_id = ?", (str(task_id),)
-            ).fetchone()
+            if user_id is None:
+                row = conn.execute(
+                    "SELECT * FROM tender_tasks WHERE task_id = ?", (str(task_id),)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM tender_tasks WHERE task_id = ? AND user_id = ?",
+                    (str(task_id), str(user_id).strip()),
+                ).fetchone()
         return self._from_row(row) if row is not None else None
 
-    def list_for_tender(self, tender_key: str) -> list[TenderTask]:
+    def list_for_tender(self, tender_key: str, *, user_id: str | None = None) -> list[TenderTask]:
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM tender_tasks WHERE tender_key = ? ORDER BY due_at, created_at, task_id",
-                (str(tender_key),),
-            ).fetchall()
+            if user_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM tender_tasks WHERE tender_key = ? ORDER BY due_at, created_at, task_id",
+                    (str(tender_key),),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM tender_tasks WHERE tender_key = ? AND user_id = ? ORDER BY due_at, created_at, task_id",
+                    (str(tender_key), str(user_id).strip()),
+                ).fetchall()
         return [self._from_row(row) for row in rows]
 
     def list_open(self, *, due_before: datetime | None = None) -> list[TenderTask]:
