@@ -140,3 +140,17 @@ class TelegramCrmWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_notifier_does_not_create_tenderplan_tasks(self) -> None:
+        from pathlib import Path
+        from src.tenderplan import TenderTaskStore
+
+        store = TenderTaskStore(Path(tempfile.mkdtemp()) / "tasks.db")
+        notifier = TelegramNotifier(task_store=store)
+        tender = Tender(platform="eis", external_id="task-guard", title="Test", url="https://example.test/tender")
+        analysis = TenderAnalysis(relevance_score=80, recommendation="participate", summary="ok")
+
+        notifier.send_tender_alert(tender, analysis)
+
+        self.assertEqual(store.list_for_tender(tender.unique_key), [])
