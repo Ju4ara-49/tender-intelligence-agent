@@ -86,3 +86,13 @@ def test_task_store_open_due_filter_excludes_done_tasks(tmp_path: Path):
 def test_task_store_missing_returns_none(tmp_path: Path):
     store = TenderTaskStore(tmp_path / "agent.db")
     assert store.get("missing") is None
+
+
+def test_task_store_isolates_same_tender_between_users(tmp_path: Path):
+    store = TenderTaskStore(tmp_path / "agent.db")
+    store.save(TenderTask(task_id="u1-task", tender_key="eis:1", title="Задача 1", user_id="u1"))
+    store.save(TenderTask(task_id="u2-task", tender_key="eis:1", title="Задача 2", user_id="u2"))
+
+    assert [task.task_id for task in store.list_for_tender("eis:1", user_id="u1")] == ["u1-task"]
+    assert [task.task_id for task in store.list_for_tender("eis:1", user_id="u2")] == ["u2-task"]
+    assert store.get("u1-task", user_id="u2") is None
