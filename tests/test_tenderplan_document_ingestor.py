@@ -58,3 +58,46 @@ def test_ingestor_does_not_create_duplicate_version_for_unchanged_content(
     assert second.downloaded is False
     assert second.document.document_id == first.document.document_id
     assert len(store.list_for_tender("eis:1")) == 1
+
+
+def test_ingestor_uses_conditional_request_for_unchanged_document(tmp_path: Path):
+    class ConditionalHandler(BaseHTTPRequestHandler):
+        requests = 0
+        payload = b"stable document"
+        etag = '"stable-v1"'
+
+        def do_GET(self):
+            type(self).requests += 1
+            if self.headers.get("If-None-Match") == self.etag:
+                self.send_response(304)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("ETag", self.etag)
+            self.end_headers()
+            self.wfile.write(self.payload)
+
+        def log_message(self, format, *args):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), ConditionalHandler)
+    thread = Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{httpd.server_port}/spec.txt"
+        store = TenderDocumentStore(tmp_path / "conditional.db")
+        ingestor = TenderDocumentIngestor(store)
+
+        first = ingestor.ingest(tender_key="eis:conditional", url=url)
+        second = ingestor.ingest(tender_key="eis:conditional", url=url)
+
+        assert first.downloaded is True
+        assert second.downloaded is False
+        assert second.document.document_id == first.document.document_id
+        assert second.document.etag == '"stable-v1"'
+        assert ConditionalHandler.requests == 2
+        assert len(store.list_for_tender("eis:conditional")) == 1
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=2)
