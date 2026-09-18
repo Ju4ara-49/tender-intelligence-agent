@@ -586,6 +586,7 @@ class Orchestrator:
             self.db.save_tender(enriched)
             try:
                 self.lifecycle_store.ensure(enriched.unique_key)
+                self._expire_lifecycle_if_needed(enriched)
             except Exception:
                 logger.exception("TenderPlan: failed to persist lifecycle for %s", enriched.unique_key)
             stats["saved"] += 1
@@ -606,6 +607,8 @@ class Orchestrator:
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
+            if self.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.EXPIRED:
+                continue
             if not self._passes_regions(tender, selected_regions):
                 stats["excluded_by_region"] += 1
                 continue
