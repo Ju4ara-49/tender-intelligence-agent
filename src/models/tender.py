@@ -132,7 +132,7 @@ class Tender:
     @staticmethod
     def _extract_percent(text: str, labels: tuple[str, ...]) -> float | None:
         label = "|".join(re.escape(item) for item in labels)
-        pattern = rf"(?:{label})[^%\d]{{0,100}}(\d{{1,3}}(?:[.,]\d+)?)\s*%"
+        pattern = rf"(?:{label})[^%\d]{{0,100}}(\d{{1,3}}(?:[.,]\d+)?)\s*(?:%|процент\w*)"
         match = re.search(pattern, text, re.I)
         if not match:
             return None
