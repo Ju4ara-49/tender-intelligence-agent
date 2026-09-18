@@ -313,6 +313,16 @@ class TenderDatabase:
         if not isinstance(field_sources, dict):
             field_sources = {}
 
+        normalized = raw_data.get("_normalized") if isinstance(raw_data, dict) else {}
+        if not isinstance(normalized, dict):
+            normalized = {}
+        documents = raw_data.get("documents") if isinstance(raw_data, dict) else []
+        if not isinstance(documents, list):
+            documents = []
+        field_sources = raw_data.get("field_sources") if isinstance(raw_data, dict) else {}
+        if not isinstance(field_sources, dict):
+            field_sources = {}
+
         return Tender(
             platform=row["platform"],
             external_id=row["external_id"],
