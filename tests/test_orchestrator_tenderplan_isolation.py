@@ -38,6 +38,9 @@ def test_tenderplan_task_is_created_without_telegram(tmp_path: Path):
     obj = _orchestrator(tmp_path, notifier=SimpleNamespace())
     tender = _tender()
 
+    obj.lifecycle_store.ensure(tender.unique_key)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SHORTLISTED)
     obj._ensure_tenderplan_task(tender)
 
     task = obj.task_store.get(application_task_id(tender.unique_key))
@@ -52,6 +55,9 @@ def test_telegram_failure_does_not_remove_tenderplan_task(tmp_path: Path):
 
     obj = _orchestrator(tmp_path, notifier=FailingNotifier())
     tender = _tender()
+    obj.lifecycle_store.ensure(tender.unique_key)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SHORTLISTED)
     obj._ensure_tenderplan_task(tender)
 
     sent = obj._notify_and_record(
@@ -73,6 +79,9 @@ def test_successful_notification_keeps_single_idempotent_task(tmp_path: Path):
     obj = _orchestrator(tmp_path, notifier=WorkingNotifier())
     tender = _tender()
 
+    obj.lifecycle_store.ensure(tender.unique_key)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SHORTLISTED)
     obj._ensure_tenderplan_task(tender)
     obj._ensure_tenderplan_task(tender)
     assert len(obj.task_store.list_for_tender(tender.unique_key)) == 1
@@ -97,3 +106,19 @@ def test_qualifying_tender_advances_to_shortlisted_without_telegram(tmp_path: Pa
     obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
     obj._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
     assert obj.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.SHORTLISTED
+
+
+def test_application_task_is_deferred_until_shortlisted(tmp_path: Path):
+    obj = _orchestrator(tmp_path, notifier=SimpleNamespace())
+    tender = _tender()
+    obj.lifecycle_store.ensure(tender.unique_key)
+
+    obj._ensure_tenderplan_task(tender)
+
+    assert obj.task_store.get(application_task_id(tender.unique_key)) is None
+
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    obj.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SHORTLISTED)
+    obj._ensure_tenderplan_task(tender)
+
+    assert obj.task_store.get(application_task_id(tender.unique_key)) is not None
