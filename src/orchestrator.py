@@ -19,7 +19,7 @@ from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
-from src.tenderplan import TenderTaskStore
+from src.tenderplan import TenderTaskStore, ensure_application_task, task_priority_for_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +302,37 @@ class Orchestrator:
         }
         return bool(tender_regions & requested)
 
+    def _ensure_tenderplan_task(self, tender: Tender) -> None:
+        """Persist the canonical application task independently of notifications."""
+        try:
+            ensure_application_task(
+                self.task_store,
+                tender_key=tender.unique_key,
+                tender_title=tender.title,
+                deadline=tender.deadline,
+                priority=task_priority_for_deadline(tender.deadline),
+            )
+        except Exception:
+            logger.exception("TenderPlan: failed to create task for %s", tender.unique_key)
+
+    def _notify_and_record(
+        self,
+        tender: Tender,
+        analysis: object,
+        *,
+        chat_id: str | None,
+        recipient_key: str,
+    ) -> bool:
+        """Send notification and record delivery without affecting persistence."""
+        try:
+            sent = self.notifier.send_tender_alert(tender, analysis, chat_id=chat_id)
+        except Exception:
+            logger.exception("Telegram: notification failed for %s", tender.unique_key)
+            return False
+        if sent:
+            self.notification_state.mark_notified(tender, recipient_key=recipient_key)
+        return bool(sent)
+
     def run_cycle(
         self,
         user_id: str | int | None = None,
@@ -460,8 +491,13 @@ class Orchestrator:
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
-            if self.notifier.send_tender_alert(tender, analysis, chat_id=target_chat_id):
-                self.notification_state.mark_notified(tender, recipient_key=recipient_key)
+            self._ensure_tenderplan_task(tender)
+            if self._notify_and_record(
+                tender,
+                analysis,
+                chat_id=target_chat_id,
+                recipient_key=recipient_key,
+            ):
                 stats["notified"] += 1
 
         try:
