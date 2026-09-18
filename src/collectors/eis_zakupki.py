@@ -554,6 +554,7 @@ class EisZakupkiCollector(BaseCollector):
             published_at=published_at,
             region=region,
             customer=customer,
+            customer_inn=customer_inn,
             law_type=law_type,
             raw_data={
                 "keyword": keyword,
@@ -621,6 +622,8 @@ class EisZakupkiCollector(BaseCollector):
             customer = self._extract_customer_from_text(
                 text
             )
+
+        customer_inn = self._extract_customer_inn(text)
 
         price = self._extract_detail_price(
             text
@@ -742,7 +745,7 @@ class EisZakupkiCollector(BaseCollector):
         documents: list[dict[str, str]] = []
         seen: set[str] = set()
         extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".rar")
-        hints = ("документ", "вложен", "приложен", "скачать", "download", "attachment", "file")
+        hints = ("документ", "документы", "вложен", "вложения", "приложен", "приложения", "скачать", "download", "attachment", "file", "файл", "файлы")
         for anchor in soup.find_all("a", href=True):
             href = str(anchor.get("href") or "").strip()
             if not href or href.startswith(("#", "javascript:", "mailto:")):
@@ -1465,6 +1468,12 @@ class EisZakupkiCollector(BaseCollector):
                 return value[:1000]
 
         return ""
+
+    @staticmethod
+    def _extract_customer_inn(text: str) -> str:
+        """Extract a customer INN from the EIS detail text."""
+        match = re.search(r"(?:ИНН|ИНН\s+заказчика)\s*[:№]?\s*(\d{10,12})\b", str(text or ""), re.IGNORECASE)
+        return match.group(1) if match else ""
 
     # ==================================================================
     # PRICE
