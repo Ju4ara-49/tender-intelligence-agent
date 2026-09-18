@@ -20,8 +20,16 @@ STATUS_WAITING = "waiting_result"
 STATUS_WON = "won"
 STATUS_LOST = "lost"
 STATUS_SKIPPED = "skipped"
-ALL_STATUSES = (STATUS_NEW, STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS, STATUS_SUBMITTED, STATUS_WAITING, STATUS_WON, STATUS_LOST, STATUS_SKIPPED)
-ACTIVE_STATUSES = frozenset({STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS, STATUS_SUBMITTED, STATUS_WAITING})
+STATUS_EXPIRED = "expired"
+STATUS_ARCHIVED = "archived"
+ALL_STATUSES = (
+    STATUS_NEW, STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS,
+    STATUS_SUBMITTED, STATUS_WAITING, STATUS_WON, STATUS_LOST, STATUS_SKIPPED,
+    STATUS_EXPIRED, STATUS_ARCHIVED,
+)
+ACTIVE_STATUSES = frozenset({
+    STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS, STATUS_SUBMITTED, STATUS_WAITING,
+})
 _ALLOWED_TRANSITIONS = {
     STATUS_NEW: frozenset({STATUS_REVIEWING, STATUS_SKIPPED}),
     STATUS_REVIEWING: frozenset({STATUS_PARTICIPATING, STATUS_SKIPPED}),
@@ -29,7 +37,11 @@ _ALLOWED_TRANSITIONS = {
     STATUS_DOCS: frozenset({STATUS_SUBMITTED, STATUS_SKIPPED, STATUS_PARTICIPATING}),
     STATUS_SUBMITTED: frozenset({STATUS_WAITING, STATUS_SKIPPED}),
     STATUS_WAITING: frozenset({STATUS_WON, STATUS_LOST, STATUS_SUBMITTED}),
-    STATUS_WON: frozenset(), STATUS_LOST: frozenset({STATUS_REVIEWING}), STATUS_SKIPPED: frozenset({STATUS_REVIEWING}),
+    STATUS_WON: frozenset({STATUS_ARCHIVED}),
+    STATUS_LOST: frozenset({STATUS_REVIEWING, STATUS_ARCHIVED}),
+    STATUS_SKIPPED: frozenset({STATUS_REVIEWING, STATUS_ARCHIVED}),
+    STATUS_EXPIRED: frozenset({STATUS_ARCHIVED}),
+    STATUS_ARCHIVED: frozenset(),
 }
 
 class InvalidStatusTransition(ValueError):
@@ -250,6 +262,37 @@ class TenderBoard:
             result.append(item)
         return result
 
+    def expire_overdue(self, now: datetime | None = None) -> list[int]:
+        """Move open pre-submission CRM cards with passed deadlines to expired."""
+        moment = now or datetime.now(timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.astimezone(timezone.utc)
+        candidates = (STATUS_NEW, STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS)
+        placeholders = ",".join("?" for _ in candidates)
+        with self.db._connect() as conn:
+            rows = conn.execute(
+                f"SELECT t.id FROM tenders AS t LEFT JOIN tender_board AS b ON b.tender_id = t.id "
+                f"WHERE COALESCE(b.status, 'new') IN ({placeholders}) "
+                "AND t.deadline IS NOT NULL AND t.deadline < ?",
+                (*candidates, moment.isoformat()),
+            ).fetchall()
+        expired: list[int] = []
+        for row in rows:
+            tender_id = int(row["id"])
+            self.set_status(tender_id, STATUS_EXPIRED)
+            expired.append(tender_id)
+        return expired
+
+    def archive(self, tender_id: int) -> str:
+        """Archive only terminal CRM states."""
+        current = self.get_status(tender_id)
+        if current not in {STATUS_WON, STATUS_LOST, STATUS_SKIPPED, STATUS_EXPIRED}:
+            raise InvalidStatusTransition(
+                f"Cannot archive tender {tender_id} from '{current}'"
+            )
+        return self.set_status(tender_id, STATUS_ARCHIVED)
+
     def history(self, tender_id: int) -> list[dict[str, Any]]:
         with self.db._connect() as conn:
             self._require_tender(conn, tender_id)
@@ -259,4 +302,4 @@ class TenderBoard:
 
 ALLOWED_TRANSITIONS = _ALLOWED_TRANSITIONS
 
-__all__ = ["TenderDatabase", "TenderBoard", "BoardEntry", "InvalidStatusTransition", "ALL_STATUSES", "ACTIVE_STATUSES", "ALLOWED_TRANSITIONS", "STATUS_NEW", "STATUS_REVIEWING", "STATUS_PARTICIPATING", "STATUS_DOCS", "STATUS_SUBMITTED", "STATUS_WAITING", "STATUS_WON", "STATUS_LOST", "STATUS_SKIPPED"]
+__all__ = ["TenderDatabase", "TenderBoard", "BoardEntry", "InvalidStatusTransition", "ALL_STATUSES", "ACTIVE_STATUSES", "ALLOWED_TRANSITIONS", "STATUS_NEW", "STATUS_REVIEWING", "STATUS_PARTICIPATING", "STATUS_DOCS", "STATUS_SUBMITTED", "STATUS_WAITING", "STATUS_WON", "STATUS_LOST", "STATUS_SKIPPED", "STATUS_EXPIRED", "STATUS_ARCHIVED"]
