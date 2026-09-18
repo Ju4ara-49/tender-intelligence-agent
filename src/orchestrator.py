@@ -566,10 +566,11 @@ class Orchestrator:
                     self.lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
             except Exception:
                 logger.exception("TenderPlan: failed to advance lifecycle for %s", tender.unique_key)
+            # TenderPlan state must not depend on Telegram delivery or notification deduplication.
+            self._ensure_tenderplan_task(tender)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
-            self._ensure_tenderplan_task(tender)
             if self._notify_and_record(
                 tender,
                 analysis,
