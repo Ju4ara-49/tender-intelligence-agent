@@ -50,6 +50,29 @@ def test_pdf_docx_and_xlsx_extraction(tmp_path: Path):
     assert status == DocumentExtractionStatus.EXTRACTED
     assert text == ""
 
+    # Regression: PDF pages must be separated by a real newline, not the
+    # two-character literal "\\n", so extracted text remains searchable/readable.
+    class _Page:
+        def __init__(self, value: str):
+            self.value = value
+
+        def extract_text(self):
+            return self.value
+
+    class _Reader:
+        def __init__(self, _stream):
+            self.pages = [_Page("page one"), _Page("page two")]
+
+    import src.tenderplan.document_ingestor as document_ingestor_module
+    original_reader = document_ingestor_module.PdfReader
+    document_ingestor_module.PdfReader = _Reader
+    try:
+        text, status = ingestor._extract(b"pdf", "application/pdf", "spec.pdf")
+    finally:
+        document_ingestor_module.PdfReader = original_reader
+    assert status == DocumentExtractionStatus.EXTRACTED
+    assert text == "page one\npage two"
+
     document_xml = b"""<?xml version="1.0"?><document xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><body><p><r><t>Contract requirements</t></r></p></body></document>"""
     docx = BytesIO()
     with zipfile.ZipFile(docx, "w") as archive:
