@@ -53,6 +53,10 @@ def task_priority_for_deadline(deadline: datetime | None) -> TaskPriority:
     if deadline is None:
         return TaskPriority.NORMAL
     from datetime import datetime, timezone
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    else:
+        deadline = deadline.astimezone(timezone.utc)
     remaining = deadline - datetime.now(timezone.utc)
     if remaining.total_seconds() <= 3 * 86400:
         return TaskPriority.CRITICAL
