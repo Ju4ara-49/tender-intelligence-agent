@@ -704,6 +704,7 @@ class EisZakupkiCollector(BaseCollector):
             text
         )
         commercial = self._extract_commercial_conditions(text)
+        documents = self._extract_documents(soup, url)
 
         return Tender(
             platform=self.platform,
@@ -725,6 +726,7 @@ class EisZakupkiCollector(BaseCollector):
             postpayment_days=commercial["postpayment_days"],
             application_security_percent=commercial["application_security_percent"],
             contract_security_percent=commercial["contract_security_percent"],
+            documents=documents,
             raw_data={
                 "details_loaded": True,
                 "source_url": url,
@@ -733,6 +735,28 @@ class EisZakupkiCollector(BaseCollector):
                 "commercial_conditions": commercial,
             },
         )
+
+    @staticmethod
+    def _extract_documents(soup: BeautifulSoup, page_url: str) -> list[dict[str, str]]:
+        """Extract downloadable procurement attachments from the EIS detail page."""
+        documents: list[dict[str, str]] = []
+        seen: set[str] = set()
+        extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".rar")
+        hints = ("документ", "вложен", "приложен", "скачать", "download", "attachment", "file")
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
+            absolute = urljoin(page_url, href)
+            label = self._clean_text(anchor.get_text(" ", strip=True))
+            haystack = f"{absolute} {label}".lower()
+            if not absolute.lower().endswith(extensions) and not any(h in haystack for h in hints):
+                continue
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            documents.append({"url": absolute, "filename": label or absolute.rsplit("/", 1)[-1]})
+        return documents
 
     # ==================================================================
     # REGISTRATION NUMBER
