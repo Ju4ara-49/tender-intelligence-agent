@@ -25,6 +25,16 @@ def test_document_search_and_change_events(tmp_path: Path):
     assert [doc.version for doc in store.search("BEARINGS")] == [1]
     assert [doc.version for doc in store.search("seals", tender_key="eis:123")] == [2]
 
+    wildcard = store.save(
+        tender_key="eis:123",
+        url="https://example.test/wildcard.txt",
+        sha256=content_sha256(b"literal 100% and _marker"),
+        extraction_status=DocumentExtractionStatus.EXTRACTED,
+        extracted_text="literal 100% and _marker",
+    )
+    assert [doc.document_id for doc in store.search("100%")] == [wildcard.document_id]
+    assert [doc.document_id for doc in store.search("_marker")] == [wildcard.document_id]
+
     events = store.events_for_tender("eis:123")
     assert [event["event_type"] for event in events] == ["created", "changed"]
     assert events[-1]["old_version"] == 1
