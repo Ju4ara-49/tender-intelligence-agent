@@ -64,36 +64,71 @@ class TenderLifecycleStore:
         tender_key: str,
         status: TenderLifecycleStatus = TenderLifecycleStatus.DISCOVERED,
     ) -> TenderLifecycleStatus:
-        current = self.get(tender_key)
-        if current is not None:
-            return current
         now = datetime.now(timezone.utc).isoformat()
+        key = str(tender_key)
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO tender_lifecycle (tender_key, status, updated_at) VALUES (?, ?, ?)",
-                (str(tender_key), status.value, now),
-            )
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
-                INSERT INTO tender_lifecycle_events
-                    (tender_key, old_status, new_status, created_at)
-                VALUES (?, NULL, ?, ?)
+                INSERT OR IGNORE INTO tender_lifecycle (tender_key, status, updated_at)
+                VALUES (?, ?, ?)
                 """,
-                (str(tender_key), status.value, now),
+                (key, status.value, now),
             )
+            row = conn.execute(
+                "SELECT status FROM tender_lifecycle WHERE tender_key = ?",
+                (key,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"lifecycle row was not persisted: {key}")
+            actual = TenderLifecycleStatus(row["status"])
+            if actual is status:
+                event_exists = conn.execute(
+                    """
+                    SELECT 1 FROM tender_lifecycle_events
+                    WHERE tender_key = ? AND old_status IS NULL AND new_status = ?
+                    LIMIT 1
+                    """,
+                    (key, status.value),
+                ).fetchone()
+                if event_exists is None:
+                    conn.execute(
+                        """
+                        INSERT INTO tender_lifecycle_events
+                            (tender_key, old_status, new_status, created_at)
+                        VALUES (?, NULL, ?, ?)
+                        """,
+                        (key, status.value, now),
+                    )
             conn.commit()
-        return status
+        return actual
 
     def set(self, tender_key: str, target: TenderLifecycleStatus) -> TenderLifecycleStatus:
-        current = self.ensure(tender_key)
-        if current is target:
-            return current
-        next_status = transition(current, target)
+        key = str(tender_key)
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO tender_lifecycle (tender_key, status, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, TenderLifecycleStatus.DISCOVERED.value, now),
+            )
+            row = conn.execute(
+                "SELECT status FROM tender_lifecycle WHERE tender_key = ?",
+                (key,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"lifecycle row was not persisted: {key}")
+            current = TenderLifecycleStatus(row["status"])
+            if current is target:
+                conn.commit()
+                return current
+            next_status = transition(current, target)
             conn.execute(
                 "UPDATE tender_lifecycle SET status = ?, updated_at = ? WHERE tender_key = ?",
-                (next_status.value, now, str(tender_key)),
+                (next_status.value, now, key),
             )
             conn.execute(
                 """
@@ -101,7 +136,7 @@ class TenderLifecycleStore:
                     (tender_key, old_status, new_status, created_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                (str(tender_key), current.value, next_status.value, now),
+                (key, current.value, next_status.value, now),
             )
             conn.commit()
         return next_status
