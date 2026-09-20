@@ -17,6 +17,13 @@ from src.collectors.tenderguru_fallback import search as tenderguru_search
 class ReliableEisZakupkiCollector(EisZakupkiCollector):
     """EIS collector with a final commercial-terms enrichment pass."""
 
+    def __init__(self, config: dict | None = None) -> None:
+        super().__init__(config)
+        # The public-index fallback is a degraded mode and therefore opt-in: by
+        # default an unreachable EIS must fail closed instead of looking like a
+        # healthy search that legitimately found nothing.
+        self.allow_public_fallback = bool(self.config.get("allow_public_fallback", False))
+
     def search(
         self,
         keywords: list[str],
@@ -38,26 +45,23 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
             unique: dict[str, Tender] = {item.unique_key: item for item in rss_results}
             return list(unique.values())
 
-        # GitHub-hosted runners can be unable to route to zakupki.gov.ru.
-        # Use a public indexed fallback instead of reporting a false zero-result
-        # search. The fallback is explicitly marked in raw_data and never
-        # bypasses EIS authentication or WAF controls.
-        fallback: list[Tender] = []
-        for keyword in clean_keywords:
-            try:
-                fallback.extend(
-                    tenderguru_search(
-                        platform=self.platform,
-                        keyword=keyword,
-                        timeout=min(max(self.timeout, 5), 20),
-                        max_results=self.records_per_page * self.max_pages,
+        # GitHub-hosted runners can be unable to route to zakupki.gov.ru. The
+        # public indexed fallback is explicitly opt-in (`allow_public_fallback`)
+        # and never bypasses EIS authentication or WAF controls. Because it is a
+        # degraded source, using it must stay visible through `_last_search_error`
+        # instead of masquerading as a healthy first-party EIS search.
+        primary_unavailable = bool(rss_errors) and len(rss_errors) == len(clean_keywords)
+        if self.allow_public_fallback:
+            fallback = self._public_fallback(clean_keywords)
+            if fallback:
+                if primary_unavailable:
+                    self._last_search_error = (
+                        "eis: degraded public fallback used; primary search unavailable: "
+                        f"{type(rss_errors[-1]).__name__}: {rss_errors[-1]}"
                     )
-                )
-            except Exception:
-                continue
-        if fallback:
-            unique = {item.unique_key: item for item in fallback}
-            return list(unique.values())
+                return fallback
+        if primary_unavailable:
+            raise self._unavailable_error(rss_errors[-1]) from rss_errors[-1]
 
         try:
             probe = self._get(
@@ -73,12 +77,35 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
             )
         except Exception as exc:
             detail = rss_errors[-1] if rss_errors else exc
-            raise CollectorUnavailableError(
-                f"eis: search endpoint unavailable: {type(detail).__name__}: {detail}"
-            ) from detail
+            raise self._unavailable_error(detail) from detail
         if self._has_captcha(probe.text):
             raise CollectorUnavailableError("eis: search endpoint returned CAPTCHA/bot protection")
         return super().search(clean_keywords, since=since)
+
+    @staticmethod
+    def _unavailable_error(detail: Exception) -> CollectorUnavailableError:
+        return CollectorUnavailableError(
+            f"eis: search endpoint unavailable: {type(detail).__name__}: {detail}"
+        )
+
+    def _public_fallback(self, keywords: list[str]) -> list[Tender]:
+        """Best-effort public index; every item is marked as a degraded source."""
+        results: dict[str, Tender] = {}
+        for keyword in keywords:
+            try:
+                found = tenderguru_search(
+                    platform=self.platform,
+                    keyword=keyword,
+                    timeout=min(max(self.timeout, 5), 20),
+                    max_results=self.records_per_page * self.max_pages,
+                )
+            except Exception:
+                continue
+            for tender in found:
+                tender.raw_data["degraded"] = True
+                tender.raw_data["degraded_source"] = "tenderguru_public_fallback"
+                results[tender.unique_key] = tender
+        return list(results.values())
 
     def _search_rss(self, keyword: str, since: datetime | None) -> list[Tender]:
         """Use EIS's lightweight public RSS search instead of the heavy HTML registry.

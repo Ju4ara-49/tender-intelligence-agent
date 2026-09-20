@@ -190,8 +190,11 @@ class Orchestrator:
             config = collector.config if hasattr(collector, "config") else {}
             lookback_days = int(config.get("lookback_days", 3))
             since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-            found = collector.search(keywords=keywords, since=since) or []
+            # Clear before the call so a collector-reported degraded state
+            # (for example the EIS public fallback) is not erased afterwards by
+            # a blanket "success" reset.
             setattr(collector, "_last_search_error", "")
+            found = collector.search(keywords=keywords, since=since) or []
             logger.info(
                 "Discovery: platform=%s keywords=%d raw=%d",
                 platform,
