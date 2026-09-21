@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 from src.storage import (
+    STATUS_ARCHIVED,
     STATUS_DOCS,
     STATUS_LOST,
     STATUS_NEW,
     STATUS_PARTICIPATING,
     STATUS_REVIEWING,
+    STATUS_SKIPPED,
     STATUS_WON,
     InvalidStatusTransition,
     TenderBoard,
@@ -53,7 +55,33 @@ def test_force_transition_and_terminal_return_path():
         board.set_status(1, STATUS_REVIEWING)
 
     board.set_status(1, STATUS_LOST, force=True)
-    assert board.set_status(1, STATUS_REVIEWING) == STATUS_REVIEWING
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING)
+
+
+def test_terminal_status_lost_cannot_revert_to_reviewing():
+    board = TenderBoard(_db_with_tender())
+    board.set_status(1, STATUS_LOST, force=True)
+    assert board.get_status(1) == STATUS_LOST
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING)
+
+
+def test_terminal_status_skipped_cannot_revert_to_reviewing():
+    board = TenderBoard(_db_with_tender())
+    board.set_status(1, STATUS_REVIEWING)
+    board.set_status(1, STATUS_SKIPPED)
+    assert board.get_status(1) == STATUS_SKIPPED
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING)
+
+
+def test_terminal_state_archived_is_only_allowed_return():
+    board = TenderBoard(_db_with_tender())
+    board.set_status(1, STATUS_WON, force=True)
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING, force=False)
+    assert board.set_status(1, STATUS_ARCHIVED, force=True) == STATUS_ARCHIVED
 
 
 def test_assignment_and_labels_are_idempotent():

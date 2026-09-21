@@ -145,11 +145,13 @@ def test_crm_board_full_workflow_and_terminal_states(tmp_path):
     for status in (STATUS_REVIEWING, STATUS_PARTICIPATING, STATUS_DOCS, STATUS_SUBMITTED, STATUS_WAITING):
         board.set_status(tender2, status)
     board.set_status(tender2, STATUS_LOST)
-    assert board.set_status(tender2, STATUS_REVIEWING) == STATUS_REVIEWING
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(tender2, STATUS_REVIEWING)
 
     tender3 = db.save_tender(_tender(title="Пропуск", external_id="workflow-skip"))
     assert board.set_status(tender3, STATUS_SKIPPED) == STATUS_SKIPPED
-    assert board.set_status(tender3, STATUS_REVIEWING) == STATUS_REVIEWING
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(tender3, STATUS_REVIEWING)
 
 
 def test_crm_board_assignment_and_labels_are_idempotent(tmp_path):
