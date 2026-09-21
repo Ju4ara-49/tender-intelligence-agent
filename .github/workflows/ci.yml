@@ -2,7 +2,11 @@ name: Tender Intelligence Agent CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      # Project feature branches: run the same quality gate on every push so
+      # regressions (P4) are caught before a PR to main is opened.
+      - "feature/**"
     paths-ignore:
       - "docs/PROJECT_CHECKPOINT_*.md"
   pull_request:
