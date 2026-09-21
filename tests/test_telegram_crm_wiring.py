@@ -9,19 +9,39 @@ from unittest.mock import patch
 from src.crm.telegram import handle_callback
 from src.models.tender import Tender, TenderAnalysis
 from src.notifications.telegram import TelegramNotifier
+from src.storage.database import TenderDatabase
 from src.telegram_multiuser import MultiUserTelegramBot
 
 
 class _FakeBoard:
     def __init__(self) -> None:
         self.calls = []
+        self._status = "new"
+
+    def get_status(self, tender_id: int) -> str:
+        return self._status
 
     def set_status(self, tender_id: int, status: str, *, force: bool = False) -> str:
         self.calls.append((tender_id, status, force))
+        self._status = status
         return status
 
     def entry(self, tender_id: int):
         return SimpleNamespace(tender_id=tender_id, status="new", assignee="", labels=[], updated_at="")
+
+
+class _DbWithBoard:
+    """Реальный TenderDatabase + TenderBoard, чтобы callback менял фактический статус."""
+
+    def __init__(self, db) -> None:
+        self._db = db
+
+    def get_tender_id(self, unique_key: str):
+        return self._db.get_tender_id(unique_key)
+
+    @property
+    def crm_board(self):
+        return TenderBoard(self._db)
 
 
 class _FakeBot:
@@ -38,6 +58,23 @@ class _FakeBot:
 
 
 class TelegramCrmWiringTests(unittest.TestCase):
+    def test_participate_callback_does_not_resurrect_terminal_status(self) -> None:
+        """Regression: кнопка УЧАСТВОВАТЬ не должна воскрешать won/lost/skipped."""
+        db = TenderDatabase(Path(tempfile.mkdtemp()) / "terminal_crm.db")
+        tender_id = db.save_tender(Tender(platform="eis", external_id="TERM-1", title="Terminal", url="https://example.test/t"))
+        from src.storage import STATUS_LOST, STATUS_WON, TenderBoard
+
+        for status in (STATUS_WON, STATUS_LOST):
+            with self.subTest(status=status):
+                board = TenderBoard(db)
+                board.set_status(tender_id, status, force=True)
+                bot = _FakeBot()
+                bot.crm_board = TenderBoard(db)
+                bot.orchestrator.db = _DbWithBoard(db)
+                self.assertTrue(handle_callback(bot, "100", "crm:participate:eis:TERM-1"))
+                self.assertEqual(TenderBoard(db).get_status(tender_id), status)
+                self.assertIn("терминальном статусе", bot.messages[-1][1])
+
     def test_participate_callback_changes_crm_status(self) -> None:
         bot = _FakeBot()
         self.assertTrue(handle_callback(bot, "100", "crm:participate:eis:1234567890"))

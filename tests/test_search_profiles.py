@@ -124,3 +124,60 @@ def test_profile_store_rejects_negative_and_nonfinite_numeric_values(tmp_path):
             assert False, "expected invalid numeric profile value to be rejected"
         except ValueError:
             pass
+
+
+def test_profile_store_persists_new_filter_fields(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_newfields.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Новый", customer="ООО Ромашка", customer_inn="7701234567",
+        law_type="44-ФЗ", document_search=True,
+    ))
+    loaded = store.get("user-a", profile.id)
+    assert loaded.customer == "ООО Ромашка"
+    assert loaded.customer_inn == "7701234567"
+    assert loaded.law_type == "44-ФЗ"
+    assert loaded.document_search is True
+
+
+def test_profile_criteria_passes_new_filter_fields(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_criteria.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Фильтры", customer="ООО Ромашка", customer_inn="7701234567",
+        law_type="44-ФЗ",
+    ))
+    criteria = profile.criteria()
+    assert criteria.customer == "ООО Ромашка"
+    assert criteria.customer_inn == "7701234567"
+    assert criteria.law_type == "44-ФЗ"
+
+
+def test_profile_store_backward_compatible_with_old_db(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_old.sqlite3")
+    store = SearchProfileStore(db)
+    # Simulate old DB without new columns by creating a minimal table
+    with db._connect() as conn:
+        conn.execute("DROP TABLE IF EXISTS search_profiles")
+        conn.execute("""
+            CREATE TABLE search_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL, name TEXT NOT NULL, keywords TEXT NOT NULL DEFAULT '[]',
+                exclusions TEXT NOT NULL DEFAULT '[]', platforms TEXT NOT NULL DEFAULT '[]',
+                regions TEXT NOT NULL DEFAULT '[]', min_price REAL, max_price REAL,
+                advance_required INTEGER NOT NULL DEFAULT 0, min_advance_percent REAL NOT NULL DEFAULT 0,
+                max_postpayment_days INTEGER, min_submission_days INTEGER NOT NULL DEFAULT 7,
+                min_application_security_percent REAL NOT NULL DEFAULT 0,
+                max_application_security_percent REAL, min_contract_security_percent REAL NOT NULL DEFAULT 0,
+                max_contract_security_percent REAL, min_ai_score INTEGER NOT NULL DEFAULT 70,
+                enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                UNIQUE(user_id, name)
+            )
+        """)
+        # Should auto-migrate new columns
+    store2 = SearchProfileStore(db)
+    profile = store2.create("user-a", name="Test", keywords=["тест"])
+    assert profile.id is not None
+    loaded = store2.get("user-a", profile.id)
+    assert loaded.document_search is False
+    assert loaded.customer is None

@@ -1,3 +1,5 @@
+"""Morphology + query-operator tests for KeywordFilter."""
+
 from src.filters.keyword_filter import KeywordFilter
 from src.models.tender import Tender
 
@@ -30,3 +32,60 @@ def test_specific_keyword_still_rejects_unrelated_text():
 def test_stem_fallback_does_not_match_station_word():
     filt = KeywordFilter(["станок"], [], min_text_length=1)
     assert not filt.matches_strict(_tender("Строительство станции и монтаж оборудования"))
+
+
+def test_comma_or_logic():
+    """Comma-separated keywords create an OR group within a single keyword."""
+    filt = KeywordFilter(["станок, подшипник"], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка станков"))
+    assert filt.matches_strict(_tender("Поставка подшипников"))
+    assert not filt.matches_strict(_tender("Поставка офисных кресел"))
+
+
+def test_quoted_phrase_match():
+    """Double-quoted terms match as exact phrases (all words must appear)."""
+    filt = KeywordFilter(['"станок для"'], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка станок для металлообработки"))
+    assert not filt.matches_strict(_tender("Поставка станков"))
+
+
+def test_quoted_phrase_with_comma_or():
+    """Quotes + comma combine phrase and word OR."""
+    filt = KeywordFilter(['"строительство поставки", станок'], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Документ о строительство поставки"))
+    assert filt.matches_strict(_tender("Поставка станков"))
+    assert not filt.matches_strict(_tender("Поставка офисных кресел"))
+
+
+def test_wildcard_matches_prefix():
+    """Asterisk creates a wildcard prefix match."""
+    filt = KeywordFilter(["подшипн*"], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка подшипников"))
+    assert not filt.matches_strict(_tender("Поставка офисных кресел"))
+
+
+def test_wildcard_matches_direct_prefix():
+    """Wildcard matches words starting with the stem."""
+    filt = KeywordFilter(["стан*"], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка станков"))
+    assert not filt.matches_strict(_tender("Поставка серверов"))
+
+
+def test_keyword_list_or_logic():
+    """Multiple keywords in the list are OR'd: any keyword matching passes."""
+    filt = KeywordFilter(["станок", "подшипник"], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка станков"))
+    assert filt.matches_strict(_tender("Поставка подшипников"))
+
+
+def test_empty_query_after_parsing_skipped():
+    """A keyword that reduces to nothing should not crash the filter."""
+    filt = KeywordFilter(["***"], [], min_text_length=1)
+    assert not filt.matches_strict(_tender("Поставка подшипников"))
+
+
+def test_operator_parsing_does_not_break_excludes():
+    """Exclusions still work normally alongside operator parsing."""
+    filt = KeywordFilter(["станок, подшипник"], ["ремонт"], min_text_length=1)
+    assert not filt.matches_strict(_tender("Поставка ремонт станков"))
+    assert filt.matches_strict(_tender("Поставка станков для завода"))

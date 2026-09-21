@@ -196,6 +196,16 @@ class Tender:
             parts.extend(self._text_from_value(self.documents))
         return " ".join(str(part).strip() for part in parts if part is not None and str(part).strip()).strip()
 
+    @property
+    def search_text(self) -> str:
+        """Search text excluding document bodies — used when document_search is off."""
+        parts = [self.title, self.description, self.customer, self.region, self.customer_inn]
+        raw = self.raw_data or {}
+        for key in ("details", "lots", "lot", "specification", "specifications", "items", "products"):
+            if key in raw:
+                parts.extend(self._text_from_value(raw.get(key)))
+        return " ".join(str(part).strip() for part in parts if part is not None and str(part).strip()).strip()
+
 
 @dataclass
 class TenderAnalysis:

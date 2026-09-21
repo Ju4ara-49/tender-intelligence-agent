@@ -41,6 +41,9 @@ class TenderCriteria:
     min_ai_score: int = 70
     exclude_keywords: list[str] = field(default_factory=list)
     regions: list[str] = field(default_factory=list)
+    customer: str | None = None
+    customer_inn: str | None = None
+    law_type: str | None = None
 
     def __post_init__(self) -> None:
         """Reject contradictory numeric ranges before they reach the search pipeline."""
@@ -84,6 +87,12 @@ class TenderCriteria:
         self.min_ai_score = max(0, min(100, int(self.min_ai_score)))
         self.exclude_keywords = _clean_list(self.exclude_keywords)
         self.regions = _clean_list(self.regions)
+        if self.customer is not None:
+            self.customer = str(self.customer).strip() or None
+        if self.customer_inn is not None:
+            self.customer_inn = str(self.customer_inn).strip() or None
+        if self.law_type is not None:
+            self.law_type = str(self.law_type).strip() or None
 
 
 class CriteriaStore:
@@ -134,9 +143,12 @@ class CriteriaStore:
                     exclude_keywords TEXT NOT NULL DEFAULT '[]',
                     regions TEXT NOT NULL DEFAULT '[]',
                     enabled_platforms TEXT,
+                    customer TEXT,
+                    customer_inn TEXT,
+                    law_type TEXT,
                     updated_at TEXT NOT NULL
-                )
-                """
+                 )
+                 """
             )
             columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({self.USERS_TABLE})").fetchall()}
             for column, definition in (("exclude_keywords", "TEXT NOT NULL DEFAULT '[]'"), ("regions", "TEXT NOT NULL DEFAULT '[]'")):
@@ -148,13 +160,13 @@ class CriteriaStore:
                 if old_row is not None:
                     conn.execute(
                         f"""
-                        INSERT OR IGNORE INTO {self.USERS_TABLE} (
+                         INSERT OR IGNORE INTO {self.USERS_TABLE} (
                             user_id, min_price, max_price, advance_required, min_advance_percent,
                             max_postpayment_days, min_submission_days, min_application_security_percent,
                             max_application_security_percent, min_contract_security_percent,
                             max_contract_security_percent, min_ai_score, keywords, exclude_keywords,
-                            regions, enabled_platforms, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            regions, enabled_platforms, customer, customer_inn, law_type, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             self.DEFAULT_USER_ID, old_row["min_price"], old_row["max_price"], old_row["advance_required"],
@@ -162,7 +174,7 @@ class CriteriaStore:
                             old_row["min_application_security_percent"], old_row["max_application_security_percent"],
                             old_row["min_contract_security_percent"], old_row["max_contract_security_percent"],
                             old_row["min_ai_score"], old_row["keywords"], "[]", "[]",
-                            json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False), old_row["updated_at"],
+                            json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False), None, None, None, old_row["updated_at"],
                         ),
                     )
 
@@ -185,8 +197,8 @@ class CriteriaStore:
                         max_postpayment_days, min_submission_days, min_application_security_percent,
                         max_application_security_percent, min_contract_security_percent,
                         max_contract_security_percent, min_ai_score, keywords, exclude_keywords,
-                        regions, enabled_platforms, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        regions, enabled_platforms, customer, customer_inn, law_type, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id, source["min_price"], source["max_price"], source["advance_required"], source["min_advance_percent"],
@@ -196,6 +208,9 @@ class CriteriaStore:
                         source["exclude_keywords"] if source["exclude_keywords"] is not None else "[]",
                         source["regions"] if source["regions"] is not None else "[]",
                         source["enabled_platforms"] if source["enabled_platforms"] is not None else json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False),
+                        source["customer"] if source["customer"] is not None else None,
+                        source["customer_inn"] if source["customer_inn"] is not None else None,
+                        source["law_type"] if source["law_type"] is not None else None,
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
@@ -218,6 +233,7 @@ class CriteriaStore:
             max_application_security_percent=row["max_application_security_percent"], min_contract_security_percent=float(row["min_contract_security_percent"]),
             max_contract_security_percent=row["max_contract_security_percent"], min_ai_score=int(row["min_ai_score"]),
             exclude_keywords=self._loads(row["exclude_keywords"]), regions=self._loads(row["regions"]),
+            customer=row["customer"], customer_inn=row["customer_inn"], law_type=row["law_type"],
         )
 
     @staticmethod
@@ -231,7 +247,7 @@ class CriteriaStore:
         return _clean_list(data) if isinstance(data, list) else []
 
     def update(self, user_id: str | int | None = None, **values) -> None:
-        allowed = {"min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days", "min_submission_days", "min_application_security_percent", "max_application_security_percent", "min_contract_security_percent", "max_contract_security_percent", "min_ai_score"}
+        allowed = {"min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days", "min_submission_days", "min_application_security_percent", "max_application_security_percent", "min_contract_security_percent", "max_contract_security_percent", "min_ai_score", "customer", "customer_inn", "law_type"}
         values = {key: value for key, value in values.items() if key in allowed}
         if not values:
             return

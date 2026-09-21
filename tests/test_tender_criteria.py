@@ -173,3 +173,62 @@ def test_criteria_store_context_isolated_by_async_context(tmp_path):
         return await asyncio.gather(first, second)
 
     assert asyncio.run(scenario()) == [100, 200]
+
+
+def test_customer_filter_matches_by_name():
+    criteria = TenderCriteria(customer="ООО Ромашка")
+    ok, reason = Orchestrator._passes_criteria(_tender(customer="Заказчик ООО Ромашка"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(customer="ООО Солнечко"), criteria)
+    assert ok is False
+    assert reason == "customer"
+
+
+def test_customer_filter_empty_string_is_normalized_to_none():
+    criteria = TenderCriteria(customer="  ")
+    assert criteria.customer is None
+
+
+def test_customer_inn_filter_matches_exact():
+    criteria = TenderCriteria(customer_inn="7701234567")
+    ok, reason = Orchestrator._passes_criteria(_tender(customer_inn="7701234567"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(customer_inn="7709999999"), criteria)
+    assert ok is False
+    assert reason == "customer_inn"
+
+
+def test_customer_inn_filter_normalizes_spaces():
+    criteria = TenderCriteria(customer_inn="770 123 4567")
+    ok, _ = Orchestrator._passes_criteria(_tender(customer_inn="7701234567"), criteria)
+    assert ok is True
+
+
+def test_customer_inn_filter_rejects_missing_inn():
+    criteria = TenderCriteria(customer_inn="7701234567")
+    ok, reason = Orchestrator._passes_criteria(_tender(customer_inn=""), criteria)
+    assert ok is False
+    assert reason == "customer_inn"
+
+
+def test_law_type_filter_matches_by_shorthand():
+    criteria = TenderCriteria(law_type="44")
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type="44-ФЗ"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type="223-ФЗ"), criteria)
+    assert ok is False
+    assert reason == "law_type"
+
+
+def test_law_type_filter_matches_full_name():
+    criteria = TenderCriteria(law_type="44-ФЗ")
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type="44-ФЗ"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type=""), criteria)
+    assert ok is False
+    assert reason == "law_type"
+
+
+def test_law_type_filter_empty_string_is_normalized_to_none():
+    criteria = TenderCriteria(law_type="  ")
+    assert criteria.law_type is None

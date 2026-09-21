@@ -30,6 +30,10 @@ class SearchProfile:
     min_contract_security_percent: float = 0.0
     max_contract_security_percent: float | None = None
     min_ai_score: int = 70
+    customer: str | None = None
+    customer_inn: str | None = None
+    law_type: str | None = None
+    document_search: bool = False
     enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
@@ -49,6 +53,9 @@ class SearchProfile:
             min_ai_score=self.min_ai_score,
             exclude_keywords=list(self.exclusions),
             regions=list(self.regions),
+            customer=self.customer,
+            customer_inn=self.customer_inn,
+            law_type=self.law_type,
         )
 
 
@@ -103,6 +110,10 @@ class SearchProfileStore:
                     min_contract_security_percent REAL NOT NULL DEFAULT 0,
                     max_contract_security_percent REAL,
                     min_ai_score INTEGER NOT NULL DEFAULT 70,
+                    customer TEXT,
+                    customer_inn TEXT,
+                    law_type TEXT,
+                    document_search INTEGER NOT NULL DEFAULT 0,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -149,6 +160,10 @@ class SearchProfileStore:
                 "min_contract_security_percent": "REAL NOT NULL DEFAULT 0",
                 "max_contract_security_percent": "REAL",
                 "min_ai_score": "INTEGER NOT NULL DEFAULT 70",
+                "customer": "TEXT",
+                "customer_inn": "TEXT",
+                "law_type": "TEXT",
+                "document_search": "INTEGER NOT NULL DEFAULT 0",
                 "enabled": "INTEGER NOT NULL DEFAULT 1",
                 "created_at": "TEXT NOT NULL DEFAULT ''",
                 "updated_at": "TEXT NOT NULL DEFAULT ''",
@@ -185,6 +200,8 @@ class SearchProfileStore:
             max_application_security_percent=row["max_application_security_percent"],
             min_contract_security_percent=float(row["min_contract_security_percent"]),
             max_contract_security_percent=row["max_contract_security_percent"], min_ai_score=int(row["min_ai_score"]),
+            customer=row["customer"], customer_inn=row["customer_inn"], law_type=row["law_type"],
+            document_search=bool(row["document_search"]),
             enabled=bool(row["enabled"]), created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
@@ -233,7 +250,8 @@ class SearchProfileStore:
             "user_id", "name", "keywords", "exclusions", "platforms", "regions", "min_price", "max_price",
             "advance_required", "min_advance_percent", "max_postpayment_days", "min_submission_days",
             "min_application_security_percent", "max_application_security_percent", "min_contract_security_percent",
-            "max_contract_security_percent", "min_ai_score", "enabled", "created_at", "updated_at",
+            "max_contract_security_percent", "min_ai_score", "customer", "customer_inn", "law_type",
+            "document_search", "enabled", "created_at", "updated_at",
         )
         values_tuple = (
             profile.user_id, profile.name.strip(), self._json(profile.keywords), self._json(profile.exclusions),
@@ -241,7 +259,8 @@ class SearchProfileStore:
             int(profile.advance_required), profile.min_advance_percent, profile.max_postpayment_days,
             profile.min_submission_days, profile.min_application_security_percent, profile.max_application_security_percent,
             profile.min_contract_security_percent, profile.max_contract_security_percent, profile.min_ai_score,
-            int(profile.enabled), profile.created_at, profile.updated_at,
+            profile.customer, profile.customer_inn, profile.law_type,
+            int(profile.document_search), int(profile.enabled), profile.created_at, profile.updated_at,
         )
         with self.db._connect() as conn:
             cursor = conn.execute(
@@ -353,6 +372,9 @@ class SearchProfileStore:
                 min_contract_security_percent=criteria.min_contract_security_percent,
                 max_contract_security_percent=criteria.max_contract_security_percent,
                 min_ai_score=criteria.min_ai_score,
+                customer=criteria.customer,
+                customer_inn=criteria.customer_inn,
+                law_type=criteria.law_type,
             ),
         )
 

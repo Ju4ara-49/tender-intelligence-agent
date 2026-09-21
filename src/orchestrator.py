@@ -265,6 +265,12 @@ class Orchestrator:
                 return False, "min_submission_days"
         elif criteria.min_submission_days:
             return False, "deadline_missing"
+        if criteria.customer and not Orchestrator._matches_field(tender.customer, criteria.customer):
+            return False, "customer"
+        if criteria.customer_inn and not Orchestrator._matches_inn(tender.customer_inn, criteria.customer_inn):
+            return False, "customer_inn"
+        if criteria.law_type and not Orchestrator._matches_law_type(tender.law_type, criteria.law_type):
+            return False, "law_type"
         return True, ""
 
     @staticmethod
@@ -283,6 +289,46 @@ class Orchestrator:
         text = re.sub(r"\s*,\s*", " ", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip(" .,:;")
+
+    @staticmethod
+    def _normalize_text(value: str | None) -> str:
+        if value is None:
+            return ""
+        return re.sub(r"\s+", " ", str(value).strip().casefold().replace("ё", "е")).strip()
+
+    @classmethod
+    def _matches_field(cls, actual: str | None, expected: str) -> bool:
+        """Case-insensitive contains match for free-text fields like customer."""
+        if not actual:
+            return False
+        expected_norm = cls._normalize_text(expected)
+        if not expected_norm:
+            return True
+        actual_norm = cls._normalize_text(actual)
+        return expected_norm in actual_norm
+
+    @classmethod
+    def _matches_inn(cls, actual: str | None, expected: str) -> bool:
+        """INN is exact match ignoring internal spaces/dashes."""
+        if not actual:
+            return False
+        expected_norm = re.sub(r"[\s-]+", "", str(expected).strip())
+        actual_norm = re.sub(r"[\s-]+", "", str(actual).strip())
+        return bool(expected_norm) and actual_norm == expected_norm
+
+    @classmethod
+    def _matches_law_type(cls, actual: str | None, expected: str) -> bool:
+        """Match law_type: accept shorthand like '44' matching '44-ФЗ'."""
+        if not actual:
+            return False
+        expected_norm = cls._normalize_text(expected)
+        actual_norm = cls._normalize_text(actual)
+        if expected_norm in actual_norm:
+            return True
+        # Allow shorthand: "44" matches "44-фз"
+        if expected_norm.isdigit():
+            return bool(re.search(rf"\b{expected_norm}\b", actual_norm))
+        return False
 
     @classmethod
     def _passes_regions(cls, tender: Tender, regions: list[str] | None) -> bool:
@@ -312,6 +358,7 @@ class Orchestrator:
         regions: list[str] | None = None,
         notification_recipient_key: str | None = None,
         notification_chat_id: str | None = None,
+        search_documents: bool = True,
     ) -> dict[str, int]:
         search_number = self._get_next_search_number()
         stats = {
@@ -354,7 +401,9 @@ class Orchestrator:
             if notification_chat_id
             else (str(user_id).strip() if user_id is not None and str(user_id).strip() else None)
         )
-        self.keyword_filter = KeywordFilter(include=search_keywords, exclude=exclusions, min_text_length=min_text)
+        self.keyword_filter = KeywordFilter(
+            include=search_keywords, exclude=exclusions, min_text_length=min_text, search_documents=search_documents,
+        )
         collectors = get_enabled_collectors(self.settings.config, enabled_platforms=enabled_platforms)
         if not collectors:
             logger.warning("Нет включённых сборщиков. Проверьте config.yaml и настройки площадок.")
@@ -503,6 +552,7 @@ class Orchestrator:
                 regions=profile.regions,
                 notification_recipient_key=f"user:{user_id}",
                 notification_chat_id=user_id,
+                search_documents=profile.document_search,
             )
             self.profile_store.record_run(
                 user_id,

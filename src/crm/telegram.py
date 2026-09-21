@@ -147,6 +147,7 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
 
 def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
     """Обработать inline-кнопки CRM."""
+    from src.storage import STATUS_LOST, STATUS_SKIPPED, STATUS_WON
     if data.startswith("crm:participate:"):
         payload = data[len("crm:participate:"):]
         if ":" not in payload:
@@ -163,8 +164,22 @@ def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
             return True
         try:
             # The button is an explicit user command to participate. It is
-            # intentionally allowed to jump from the initial "new" state.
-            new_status = _board(bot).set_status(tender_id, "participating", force=True)
+            # intentionally allowed to jump from the initial "new" state, but
+            # terminal states (won/lost/skipped) must never be resurrected by
+            # an inline button (or a stale message replay) — only an explicit
+            # force=True transition may leave a terminal state.
+            current_status = _board(bot).get_status(tender_id)
+            if current_status not in {STATUS_WON, STATUS_LOST, STATUS_SKIPPED}:
+                new_status = _board(bot).set_status(tender_id, "participating", force=True)
+            else:
+                new_status = current_status
+                bot._send(
+                    chat_id,
+                    f"Тендер #{tender_id} в терминальном статусе "
+                    f"<b>{html.escape(_STATUS_NAMES[current_status])}</b> — изменение статуса через кнопку «УЧАСТВОВАТЬ» заблокировано.",
+                    bot._keyboard(),
+                )
+                return True
             bot._send(chat_id, f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())

@@ -46,6 +46,10 @@ def profile_from_form(form, user_id="web-local"):
         min_contract_security_percent=float(_v(form, "min_contract_security_percent", "0").replace(",", ".")),
         max_contract_security_percent=_float(form, "max_contract_security_percent"),
         min_ai_score=int(_v(form, "min_ai_score", "70")),
+        customer=_v(form, "customer") or None,
+        customer_inn=_v(form, "customer_inn") or None,
+        law_type=_v(form, "law_type") or None,
+        document_search=_v(form, "document_search") == "1",
     )
 
 CSS = """\
@@ -74,8 +78,12 @@ def render_form(profile=None, saved=False):
 <div class="row"><div class="label">Название ключа</div><input class="input" name="name" required value="{e(p.name)}" placeholder="Например, Оргтехника"></div>
 <div class="row"><div class="label">Ключевые слова</div><textarea class="textarea" name="keywords" placeholder="подшипники, запчасти, оргтехника">{e(', '.join(p.keywords))}</textarea></div>
 <div class="row"><div class="label">Исключая</div><textarea class="textarea" name="exclusions" placeholder="строительство, ремонт, продукты">{e(', '.join(p.exclusions))}</textarea></div>
-<div class="row"><div></div><label class="check"><input type="checkbox" checked disabled> Искать внутри документации</label></div>
+<div class="row"><div></div><label class="check"><input type="checkbox" name="document_search" value="1"{' checked' if p.document_search else ''}> Искать внутри документации</label></div>
 <div class="row"><div class="label">Регион</div><input class="input" name="regions" value="{e(', '.join(p.regions))}" placeholder="Санкт-Петербург, Ленинградская область, Москва"></div></section>
+<section class="panel"><h2>Дополнительные фильтры</h2>
+<div class="row"><div class="label">Заказчик</div><input class="input" name="customer" value="{e(p.customer)}" placeholder="Точное или частичное совпадение"></div>
+<div class="row"><div class="label">ИНН заказчика</div><input class="input" name="customer_inn" value="{e(p.customer_inn)}" placeholder="1234567890"></div>
+<div class="row"><div class="label">Тип закупки (ФЗ)</div><input class="input" name="law_type" value="{e(p.law_type)}" placeholder="44-ФЗ, 223-ФЗ, 615-ПП"></div></section>
 <section class="panel"><h2>Площадки</h2><div class="checks">{platforms}</div></section>
 <section class="panel"><h2>Основные фильтры</h2>
 <div class="row"><div class="label">Начальная цена</div><div class="range"><input class="input" name="min_price" value="{e(p.min_price)}" placeholder="от"><input class="input" name="max_price" value="{e(p.max_price)}" placeholder="до"></div></div>

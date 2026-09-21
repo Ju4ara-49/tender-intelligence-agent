@@ -112,6 +112,39 @@ def test_platform_worker_count_honors_concurrency_alias_and_bounds():
     assert Orchestrator._platform_worker_count({"concurrency": "bad"}, 6) == 6
 
 
+def test_keyword_filter_search_documents_controls_text_scope():
+    """When search_documents=False, document text is excluded from matching."""
+    from src.filters.keyword_filter import KeywordFilter
+
+    tender = _tender(
+        title="Закупка оборудования",
+        description="Техническое задание",
+        raw_data={"document_search_text": "подшипники SKF подходят"},
+    )
+    full_filt = KeywordFilter(["подшипники"], [], min_text_length=1, search_documents=True)
+    short_filt = KeywordFilter(["подшипники"], [], min_text_length=1, search_documents=False)
+    assert full_filt.matches_strict(tender)
+    assert not short_filt.matches_strict(tender)
+
+
+def test_matches_law_type_shorthand():
+    criteria = TenderCriteria(law_type="44")
+    assert Orchestrator._passes_criteria(_tender(law_type="44-ФЗ"), criteria) == (True, "")
+    assert Orchestrator._passes_criteria(_tender(law_type="223-ФЗ"), criteria)[0] is False
+
+
+def test_matches_customer_contains():
+    criteria = TenderCriteria(customer="Ромашка")
+    assert Orchestrator._passes_criteria(_tender(customer="ООО Ромашка"), criteria) == (True, "")
+    assert Orchestrator._passes_criteria(_tender(customer="ООО Солнечко"), criteria)[0] is False
+
+
+def test_matches_customer_inn_exact():
+    criteria = TenderCriteria(customer_inn="7701234567")
+    assert Orchestrator._passes_criteria(_tender(customer_inn="7701234567"), criteria) == (True, "")
+    assert Orchestrator._passes_criteria(_tender(customer_inn="7709999999"), criteria)[0] is False
+
+
 def test_excel_export_uses_post_filter_result_ids_not_diagnostic_persistence_ids():
     source = Path(Orchestrator.__module__.replace(".", "/") + ".py").read_text(encoding="utf-8")
     assert "export_tender_ids: list[int] = []" in source
