@@ -98,6 +98,7 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
                     keyword=keyword,
                     timeout=min(max(self.timeout, 5), 20),
                     max_results=self.records_per_page * self.max_pages,
+                    http_get=self._get,
                 )
             except Exception:
                 continue

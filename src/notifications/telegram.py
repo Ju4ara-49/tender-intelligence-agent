@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
 from src.models.tender import Tender, TenderAnalysis
+from src.tenderplan import TenderTaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +29,17 @@ class TelegramNotifier:
         "rosatom": "Росатом",
     }
 
-    def __init__(self, bot_token: str = "", chat_id: str = "", dry_run_when_no_token: bool = True) -> None:
+    def __init__(
+        self,
+        bot_token: str = "",
+        chat_id: str = "",
+        dry_run_when_no_token: bool = True,
+        task_store: TenderTaskStore | None = None,
+    ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.dry_run_when_no_token = dry_run_when_no_token
+        self.task_store = task_store
 
     @property
     def is_configured(self) -> bool:
@@ -121,7 +130,19 @@ class TelegramNotifier:
         risks = ""
         if analysis.risks:
             safe_risks = [html.escape(str(r)) for r in analysis.risks[:3]]
-            risks = "\n⚠️ <b>Риски:</b> " + "; ".join(safe_risks)
+            risks = "\n⚠️ <b>Риски AI:</b> " + "; ".join(safe_risks)
+        risk_assessment = tender.raw_data.get("risk_assessment") if isinstance(tender.raw_data, dict) else {}
+        if isinstance(risk_assessment, dict) and risk_assessment.get("level"):
+            level = html.escape(str(risk_assessment["level"]))
+            factor_codes = [
+                html.escape(str(item.get("code")))
+                for item in risk_assessment.get("factors", [])
+                if isinstance(item, dict) and item.get("code")
+            ]
+            deterministic = f"\n🛡️ <b>Risk Engine:</b> {level}"
+            if factor_codes:
+                deterministic += " — " + ", ".join(factor_codes[:4])
+            risks += deterministic
         stub_note = "\n<i>(ИИ-заглушка — используется вместо локального Ollama)</i>" if analysis.is_stub else ""
         rec_map = {"participate": "Участвовать", "skip": "Пропустить", "review": "На проверку"}
         rec = html.escape(str(rec_map.get(analysis.recommendation, analysis.recommendation or "")))
