@@ -59,12 +59,17 @@ class _FakeBot:
 
 class TelegramCrmWiringTests(unittest.TestCase):
     def test_participate_callback_does_not_resurrect_terminal_status(self) -> None:
-        """Regression: кнопка УЧАСТВОВАТЬ не должна воскрешать won/lost/skipped."""
+        """Regression: кнопка УЧАСТВОВАТЬ не должна воскрешать won/lost/skipped.
+
+        Единый контракт P1: participate идёт только по ALLOWED_TRANSITIONS
+        (без force=True), поэтому терминальный статус вызывает
+        InvalidStatusTransition и остаётся неизменным.
+        """
         db = TenderDatabase(Path(tempfile.mkdtemp()) / "terminal_crm.db")
         tender_id = db.save_tender(Tender(platform="eis", external_id="TERM-1", title="Terminal", url="https://example.test/t"))
-        from src.storage import STATUS_LOST, STATUS_WON, TenderBoard
+        from src.storage import STATUS_LOST, STATUS_SKIPPED, STATUS_WON, TenderBoard
 
-        for status in (STATUS_WON, STATUS_LOST):
+        for status in (STATUS_WON, STATUS_LOST, STATUS_SKIPPED):
             with self.subTest(status=status):
                 board = TenderBoard(db)
                 board.set_status(tender_id, status, force=True)
@@ -73,12 +78,21 @@ class TelegramCrmWiringTests(unittest.TestCase):
                 bot.orchestrator.db = _DbWithBoard(db)
                 self.assertTrue(handle_callback(bot, "100", "crm:participate:eis:TERM-1"))
                 self.assertEqual(TenderBoard(db).get_status(tender_id), status)
-                self.assertIn("терминальном статусе", bot.messages[-1][1])
+                refusal = bot.messages[-1][1]
+                # The callback reports the refusal through html.escape, so
+                # single quotes arrive as &#x27;.
+                self.assertIn("Cannot move tender", refusal)
+                self.assertIn(
+                    f"from &#x27;{status}&#x27; to &#x27;participating&#x27;",
+                    refusal,
+                )
 
     def test_participate_callback_changes_crm_status(self) -> None:
         bot = _FakeBot()
         self.assertTrue(handle_callback(bot, "100", "crm:participate:eis:1234567890"))
-        self.assertEqual(bot.crm_board.calls, [(42, "participating", True)])
+        # No force bypass: the callback must move the board only through the
+        # ALLOWED_TRANSITIONS state machine (force is never requested).
+        self.assertEqual(bot.crm_board.calls, [(42, "participating", False)])
         self.assertIn("Участвуем", bot.messages[-1][1])
 
     def test_notifier_emits_participation_callback_without_db_id(self) -> None:

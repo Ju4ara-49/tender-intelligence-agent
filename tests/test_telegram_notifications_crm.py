@@ -82,7 +82,7 @@ class TelegramNotificationCrmTests(unittest.TestCase):
         bot = _FakeBot()
         handled = handle_callback(bot, "777", "crm:participate:eis:12345")
         self.assertTrue(handled)
-        self.assertEqual(bot.crm_board.calls, [(42, "participating", True)])
+        self.assertEqual(bot.crm_board.calls, [(42, "participating", False)])
         self.assertIn("Статус тендера #42 изменён", bot.sent[-1][1])
 
     def test_notification_keeps_russian_recommendation(self) -> None:
