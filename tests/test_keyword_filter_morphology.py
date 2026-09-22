@@ -89,3 +89,35 @@ def test_operator_parsing_does_not_break_excludes():
     filt = KeywordFilter(["станок, подшипник"], ["ремонт"], min_text_length=1)
     assert not filt.matches_strict(_tender("Поставка ремонт станков"))
     assert filt.matches_strict(_tender("Поставка станков для завода"))
+
+
+def test_proximity_operator_matches_words_within_distance():
+    """(слово1 слово2)~N — все слова группы в пределах N слов друг от друга."""
+    filt = KeywordFilter(["(поставка подшипников)~3"], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка шариковых подшипников для насосов"))
+    assert not filt.matches_strict(
+        _tender("Поставка насосов и отдельно подшипников по отдельному лоту всей документации")
+    )
+
+
+def test_proximity_operator_applies_morphology():
+    filt = KeywordFilter(["(подшипник станок)~3"], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка подшипников и станков со склада"))
+
+
+def test_proximity_operator_requires_all_words():
+    filt = KeywordFilter(["(подшипник станок)~3"], [], min_text_length=1)
+    assert not filt.matches_strict(_tender("Поставка подшипников всех типов и размеров"))
+
+
+def test_proximity_operator_combines_with_comma_or():
+    filt = KeywordFilter(['"точное совпадение", (подшипник станок)~3'], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка подшипников и станков"))
+    assert filt.matches_strict(_tender("Тут написано точное совпадение документа"))
+    assert not filt.matches_strict(_tender("Поставка канцелярской продукции"))
+
+
+def test_proximity_distance_limits_match_window():
+    filt = KeywordFilter(["(поставка подшипников)~1"], [], min_text_length=1)
+    assert filt.matches_strict(_tender("Поставка подшипников разных типов"))
+    assert not filt.matches_strict(_tender("Поставка шариковых подшипников разных типов"))
