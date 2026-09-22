@@ -59,6 +59,10 @@ class _BrowserTenderCollector(BaseCollector):
         except Exception as exc:
             if self.platform=="rts_tender":return self._tenderguru_fallback(query,exc)
             raise CollectorUnavailableError(f"{self.platform}: browser search unavailable for {query!r}: {type(exc).__name__}: {exc}") from exc
+        if not html:
+            raise CollectorUnavailableError(
+                f"{self.platform}: portal returned an empty/invalid page for {query!r}"
+            )
         soup_text=" ".join(BeautifulSoup(html,"html.parser").stripped_strings).lower()
         if any(x in soup_text for x in ("web application firewall","временно заблокирован","пожалуйста подождите","для работы с сайтом необходимы включенные javascript и cookies")):
             raise CollectorUnavailableError(f"{self.platform}: portal returned access/challenge page")

@@ -20,6 +20,7 @@ from src.collectors.browser_public_reliable import (
 )
 from src.collectors.eis_zakupki import SEARCH_URL, EisZakupkiCollector
 from src.collectors.fabrikant_v2 import FabrikantV2Collector
+from src.collectors.fabrikant_v3 import FabrikantV3Collector
 from src.collectors.rosatom import RosatomCollector
 from src.models.tender import Tender
 
@@ -271,3 +272,67 @@ def test_fabrikant_multi_keyword_no_state_leakage(monkeypatch):
     results_a2 = collector.search(["станок"])
     assert len(results_a2) == 1
     assert results_a2[0].external_id == "STANOK"
+
+
+def _patch_browser_search(monkeypatch, collector, html):
+    """Mock the Playwright launch for the BASE _BrowserTenderCollector._search_one
+    path (Fabrikant uses this path, not the Reliable mixin).
+
+    A loaded result page always yields a non-empty HTML document from
+    page.content(); an EMPTY html ("") means page content collection failed
+    for every frame => unavailable/invalid response, NOT a legitimate zero
+    result.
+    """
+    fake_pw = MagicMock()
+    fake_browser = MagicMock()
+    fake_pw.chromium.launch.return_value = fake_browser
+    fake_browser.new_page.return_value = MagicMock()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: fake_pw)
+    monkeypatch.setattr(collector, "_goto", lambda *a, **kw: None)
+    monkeypatch.setattr(collector, "_perform_search", lambda *a, **kw: True)
+    monkeypatch.setattr(collector, "_collect_rendered_html", lambda *a, **kw: html)
+
+
+def _fabrikant():
+    collector = FabrikantV3Collector({})
+    collector.timeout_ms = 5000
+    collector.max_results = 100
+    collector.BASE_URL = "https://soap2.fabrikant.ru/223/catalog/procedure/published"
+    return collector
+
+
+def test_fabrikant_v3_valid_empty_result_is_empty(monkeypatch):
+    """Case A: a NON-empty page that contains zero procedure links is a genuine
+    EMPTY result ([]), not CollectorUnavailableError. A real zero-result Fabrikant
+    page still carries its HTML shell, so it must not be treated as a failure."""
+    empty_html = (
+        "<html><head><title>Фабрикант — поиск</title></head>"
+        "<body><h1>Поиск процедур</h1>"
+        "<p class='empty'>По вашему запросу ничего не найдено</p>"
+        "</body></html>"
+    )
+    collector = _fabrikant()
+    _patch_browser_search(monkeypatch, collector, empty_html)
+    assert collector._search_one("станок") == []
+
+
+def test_fabrikant_v3_empty_html_is_unavailable(monkeypatch):
+    """Case B: the rendered page yielded no content at all (page.content() failed
+    for every frame). This is an unavailable/invalid response, NOT a legitimate
+    zero-result search -> CollectorUnavailableError. Distinct from Case A."""
+    collector = _fabrikant()
+    _patch_browser_search(monkeypatch, collector, "")
+    with pytest.raises(CollectorUnavailableError, match="empty/invalid page"):
+        collector._search_one("станок")
+
+
+def test_fabrikant_v3_waf_response_is_unavailable(monkeypatch):
+    """Case B (WAF variant): a challenge-page marker is unavailable, not a
+    silent []. Uses a static mock string (no real WAF) to confirm Fabrikant now
+    has parity with RTS/TMK/Rosatom error semantics."""
+    collector = _fabrikant()
+    collector.BASE_URL = "https://soap4.fabrikant.ru/44/catalog/procedure"
+    waf_html = "<html><body>Web Application Firewall — временно заблокирован</body></html>"
+    _patch_browser_search(monkeypatch, collector, waf_html)
+    with pytest.raises(CollectorUnavailableError, match="access/challenge page"):
+        collector._search_one("станок")

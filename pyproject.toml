@@ -1,0 +1,16 @@
+[build-system]
+requires = "flit >=3.0.0"
+build-backend = "flit.core"
+
+[project]
+name = "tender-intelligence-agent"
+version = "0.1.0"
+description = "Tender intelligence agent with lifecycle management and search UX enhancements"
+authors = [{name="Jane Doe", email="jane@company.com"}]
+license = {file = "LICENSE"}
+
+[tool.pytest.ini_options]
+# Exclude backup artifacts from discovery: `backups/search_ux_*` mirrors test
+# filenames (e.g. test_search_profiles.py) and collides under the default
+# prepend import mode, surfacing as 4 collection errors on a bare `pytest -q`.
+addopts = "--ignore=backups"
