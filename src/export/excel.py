@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -11,6 +11,10 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
 from src.tenderplan import TenderLifecycleStore, TenderTaskStore
+
+# База хранит все даты в UTC (канонический контракт Tender), но пользователь
+# отчёта оперирует московским временем: дедлайны закупок РФ публикуются в МСК.
+MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
 
 
 def export_tenders_to_excel(
@@ -57,7 +61,7 @@ def export_tenders_to_excel(
 
     headers = [
         "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
-        "Начальная цена", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
+        "Начальная цена", "Валюта", "Дата публикации (МСК)", "Дата окончания подачи заявок (МСК)",
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
         "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
@@ -70,7 +74,7 @@ def export_tenders_to_excel(
         cell.fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(MOSCOW_TZ)
 
     for row in rows:
         raw_data = {}
@@ -92,7 +96,11 @@ def export_tenders_to_excel(
         recommendation = recommendation_names.get(row["recommendation"] or "", row["recommendation"] or "")
         deadline = _parse_datetime(row["deadline"])
         published_at = _parse_datetime(row["published_at"])
-        days_left = "" if deadline is None else max(0, (deadline.date() - now.date()).days)
+        days_left = (
+            ""
+            if deadline is None
+            else max(0, (deadline.astimezone(MOSCOW_TZ).date() - now.date()).days)
+        )
 
         risks = ""
         if row["risks"]:
@@ -184,7 +192,7 @@ def export_tenders_to_excel(
         ("Тендеров в этом прогоне", total), ("Проанализировано AI", analyzed),
         ("AI score >= 70", high_score), ("Рекомендация: участвовать", participate),
         ("Рекомендация: рассмотреть", review), ("Рекомендация: пропустить", skip),
-        ("Дата формирования", datetime.now().strftime("%d.%m.%Y %H:%M")),
+        ("Дата формирования", datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M")),
     ]
     for item in stats_rows:
         stats.append(item)
@@ -213,6 +221,7 @@ def _parse_datetime(value) -> datetime | None:
 
 
 def _excel_datetime(value: datetime | None):
+    """Excel не хранит тайзоны: показываем московское стеночное время."""
     if value is None:
         return None
-    return value.replace(tzinfo=None)
+    return value.astimezone(MOSCOW_TZ).replace(tzinfo=None)

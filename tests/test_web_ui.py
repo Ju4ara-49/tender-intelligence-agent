@@ -2,6 +2,8 @@ from src.models.tender import Tender
 from src.profiles import SearchProfile
 from src.web_ui import profile_from_form, render_form
 
+import pytest
+
 
 def test_web_form_matches_canonical_profile_fields():
     form = {
@@ -53,7 +55,8 @@ def test_web_render_is_russian_and_escapes_user_values():
 
 
 def test_web_form_defaults_match_product_search_defaults():
-    p = profile_from_form({"name": ["Тест"], "keywords": ["подшипники"]})
+    p = profile_from_form({"name": ["Тест"], "keywords": ["подшипники"], "platforms": ["eis"]})
+    assert p.platforms == ["eis"]
     assert p.min_submission_days == 7
     assert p.min_ai_score == 70
     assert p.advance_required is False
@@ -75,3 +78,25 @@ def test_web_form_contains_new_filter_fields():
     assert 'name="customer"' in page
     assert 'name="customer_inn"' in page
     assert 'name="law_type"' in page
+
+
+def test_web_form_rejects_profile_without_platforms():
+    """Regression: пустой список площадок молча сбрасывал фильтр площадок
+    до «все площадки» в run_cycle_for_user (platforms or None)."""
+    form = {
+        "name": ["Без площадок"],
+        "keywords": ["подшипники"],
+        "platforms": [""],
+    }
+    with pytest.raises(ValueError, match="площадк"):
+        profile_from_form(form, "u")
+
+
+def test_web_form_keeps_selected_platforms():
+    form = {
+        "name": ["С площадками"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis", "b2b_center"],
+    }
+    p = profile_from_form(form, "u")
+    assert p.platforms == ["eis", "b2b_center"]

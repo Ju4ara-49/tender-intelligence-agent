@@ -32,10 +32,16 @@ def _int(form, key):
 
 def profile_from_form(form, user_id="web-local"):
     selected = set(_list(form, "platforms"))
+    platforms = [k for k, _ in PLATFORMS if k in selected]
+    if not platforms:
+        # Пустой список площадок в профиле интерпретируется пайплайном как
+        # «ограничение не задано» и молча запускает поиск по всем площадкам
+        # пользователя. Требуем явного выбора, чтобы фильтр не терялся.
+        raise ValueError("Выберите хотя бы одну площадку")
     return SearchProfile(
         user_id=user_id, name=_v(form, "name", "Основной"),
         keywords=_list(form, "keywords"), exclusions=_list(form, "exclusions"),
-        platforms=[k for k, _ in PLATFORMS if k in selected], regions=_list(form, "regions"),
+        platforms=platforms, regions=_list(form, "regions"),
         min_price=_float(form, "min_price"), max_price=_float(form, "max_price"),
         advance_required=_v(form, "advance_required") == "1",
         min_advance_percent=float(_v(form, "min_advance_percent", "0").replace(",", ".")),

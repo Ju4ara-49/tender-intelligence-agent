@@ -76,13 +76,20 @@ def main() -> None:
     headers = [cell.value for cell in ws[1]]
     expected = [
         "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
-        "Начальная цена", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
+        "Начальная цена", "Валюта", "Дата публикации (МСК)", "Дата окончания подачи заявок (МСК)",
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
         "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
         "Risk", "Risk factors", "Lifecycle",
     ]
     assert headers == expected, headers
+    # Даты экспортируются в московском времени (UTC+3), а не в UTC.
+    from datetime import timedelta
+
+    deadline_utc = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    assert ws["I2"].value == (deadline_utc + timedelta(hours=3)).replace(tzinfo=None)
+    published_utc = datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc)
+    assert ws["H2"].value == (published_utc + timedelta(hours=3)).replace(tzinfo=None)
     for obsolete in ("НМЦК", "Дата поиска", "№ поиска", "Статус", "W", "X", "Y", "Комментарий по срокам"):
         assert obsolete not in headers
 
