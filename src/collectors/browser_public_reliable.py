@@ -96,6 +96,24 @@ class ReliableBrowserSearchMixin:
                 f"{self.platform}: browser search failed for {query!r}: {type(exc).__name__}: {exc}"
             ) from exc
 
+        if not html:
+            if search_control_found:
+                raise CollectorUnavailableError(
+                    f"{self.platform}: portal returned empty page after search for {query!r}"
+                )
+            raise CollectorUnavailableError(
+                f"{self.platform}: portal returned empty page for {query!r}"
+            )
+
+        soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
+        if any(x in soup_text for x in (
+            "web application firewall", "временно заблокирован", "пожалуйста подождите",
+            "для работы с сайтом необходимы включенные javascript и cookies",
+        )):
+            raise CollectorUnavailableError(
+                f"{self.platform}: portal returned access/challenge page for {query!r}"
+            )
+
         parsed_results = self._parse_results(html)
         results = [tender for tender in parsed_results if self._tender_matches_query(tender, query)]
         if search_control_found and not parsed_results:

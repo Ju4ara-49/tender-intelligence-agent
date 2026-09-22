@@ -35,7 +35,6 @@ class FabrikantV2Collector(_BrowserTenderCollector):
             "https://soap4.fabrikant.ru/44/catalog/procedure",
         ):
             self.BASE_URL = base_url
-            self._urls = {}
             for term in terms:
                 for tender in self._search_one(term):
                     if since is not None and tender.published_at is not None:
@@ -199,7 +198,7 @@ class FabrikantV2Collector(_BrowserTenderCollector):
     def _procedure_anchor(row, base_host):
         for anchor in row.find_all("a", href=True):
             href = str(anchor.get("href", "")).strip()
-            full = urljoin("https://soap4.fabrikant.ru", href)
+            full = urljoin(f"https://{base_host}/", href)
             if urlparse(full).netloc.lower() == base_host and "/procedure/" in full.lower():
                 return anchor
         return None

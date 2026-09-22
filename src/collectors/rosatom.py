@@ -10,6 +10,7 @@ import logging
 import re
 from urllib.parse import parse_qs, urlparse
 
+from src.collectors.base import CollectorUnavailableError
 from src.collectors.browser_public import _BrowserTenderCollector
 from src.models.tender import Tender
 
@@ -114,7 +115,7 @@ class RosatomCollector(_BrowserTenderCollector):
         body_text = " ".join(soup.stripped_strings).lower()
         if "web application firewall" in body_text or "временно заблокирован" in body_text:
             logger.warning("rosatom: официальный портал вернул страницу WAF; поиск невозможен без обхода защиты")
-            return []
+            raise CollectorUnavailableError("rosatom: WAF challenge page during search")
 
         for anchor in soup.find_all("a", href=True):
             raw_href = str(anchor.get("href", "")).strip()
@@ -295,14 +296,10 @@ class RosatomCollector(_BrowserTenderCollector):
         title_node = soup.find("h1") or soup.find("title")
         title = " ".join(title_node.stripped_strings) if title_node else f"Закупка Росатома {external_id}"
         if "временно заблокирован" in text.lower() or "web application firewall" in text.lower():
-            logger.warning("rosatom: WAF при загрузке деталей %s", external_id)
-            return Tender(
-                platform=self.platform,
-                external_id=external_id,
-                title=title[:1000],
-                url=url,
-                description=text[:10000],
-                raw_data={"source": url, "waf_blocked": True},
+            # Страница CAPTCHA/WAF — это НЕ тендер. Строить из неё фейковый
+            # Tender запрещено: поднимаем недоступность (деталь = failed).
+            raise CollectorUnavailableError(
+                f"rosatom: WAF challenge page for {external_id}"
             )
 
         price = self._extract_price(text)
