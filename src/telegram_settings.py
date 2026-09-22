@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -26,6 +27,50 @@ def _clean_list(value: list[str] | None) -> list[str]:
     return result
 
 
+# Канонические режимы процедуры для контракта SearchProfile/SearchCriteria
+# (docs/TENDERPLAN_SEARCH_RESEARCH_2026-09-19.md, блок «Тип закупки»).
+# 44-ФЗ/223-ФЗ/615-ПП остаются в law_type — не смешиваем семантически разные
+# фильтры. Применение на площадках — зона collectors (Kilo); контракт и
+# persistence фиксируются здесь.
+PROCUREMENT_TYPE_VALUES = ("commercial", "plan_schedule", "bankruptcy_property")
+
+# ОКПД2: двухзначная группа плюс до трёх уточняющих групп, например
+# "01", "01.11", "01.11.12", "01.11.12.110".
+OKPD2_CODE_RE = re.compile(r"^\d{2}(?:\.\d{1,3}){0,3}$")
+
+
+def normalize_okpd2_codes(value: list[str] | None) -> list[str]:
+    """Каноническая нормализация кодов ОКПД2: strip, дедупликация, валидация."""
+    if not value:
+        return []
+    result: list[str] = []
+    for item in value:
+        code = str(item).strip()
+        if not code:
+            continue
+        if not OKPD2_CODE_RE.fullmatch(code):
+            raise ValueError(f"Некорректный код ОКПД2: {code!r}")
+        if code not in result:
+            result.append(code)
+    return result
+
+
+def normalize_procurement_types(value: list[str] | None) -> list[str]:
+    """Каноническая нормализация режимов процедуры (строго из white-list)."""
+    if not value:
+        return []
+    result: list[str] = []
+    for item in value:
+        kind = str(item).strip()
+        if not kind:
+            continue
+        if kind not in PROCUREMENT_TYPE_VALUES:
+            raise ValueError(f"Неизвестный режим процедуры: {kind!r}")
+        if kind not in result:
+            result.append(kind)
+    return result
+
+
 @dataclass
 class TenderCriteria:
     min_price: float | None = None
@@ -44,6 +89,8 @@ class TenderCriteria:
     customer: str | None = None
     customer_inn: str | None = None
     law_type: str | None = None
+    okpd2_codes: list[str] = field(default_factory=list)
+    procurement_types: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Reject contradictory numeric ranges before they reach the search pipeline."""
@@ -93,6 +140,8 @@ class TenderCriteria:
             self.customer_inn = str(self.customer_inn).strip() or None
         if self.law_type is not None:
             self.law_type = str(self.law_type).strip() or None
+        self.okpd2_codes = normalize_okpd2_codes(self.okpd2_codes)
+        self.procurement_types = normalize_procurement_types(self.procurement_types)
 
 
 class CriteriaStore:

@@ -2,6 +2,8 @@ from src.profiles import SearchProfile, SearchProfileStore
 from src.storage.database import TenderDatabase
 from src.telegram_settings import CriteriaStore
 
+import pytest
+
 
 def test_profile_crud_and_user_isolation(tmp_path):
     db = TenderDatabase(tmp_path / "profiles.sqlite3")
@@ -151,6 +153,43 @@ def test_profile_criteria_passes_new_filter_fields(tmp_path):
     assert criteria.customer == "ООО Ромашка"
     assert criteria.customer_inn == "7701234567"
     assert criteria.law_type == "44-ФЗ"
+
+
+def test_profile_store_persists_contract_filters_okpd2_and_procurement_types(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Контрактные фильтры",
+        okpd2_codes=["01.11.12", "26.30"],
+        procurement_types=["plan_schedule", "bankruptcy_property"],
+    ))
+    loaded = store.get("user-a", profile.id)
+    assert loaded.okpd2_codes == ["01.11.12", "26.30"]
+    assert loaded.procurement_types == ["plan_schedule", "bankruptcy_property"]
+
+    updated = store.update("user-a", profile.id, procurement_types=["commercial"], okpd2_codes=[" 01 "])
+    assert updated.procurement_types == ["commercial"]
+    assert updated.okpd2_codes == ["01"]
+
+
+def test_profile_criteria_passes_contract_filters_to_canonical_criteria(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract_criteria.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Контракт", okpd2_codes=["01.11"], procurement_types=["plan_schedule"],
+    ))
+    criteria = profile.criteria()
+    assert criteria.okpd2_codes == ["01.11"]
+    assert criteria.procurement_types == ["plan_schedule"]
+
+
+def test_profile_store_rejects_invalid_contract_filter_values(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract_bad.sqlite3")
+    store = SearchProfileStore(db)
+    with pytest.raises(ValueError, match="ОКПД2"):
+        store.create("user-a", name="bad-okpd2", okpd2_codes=["мусор"])
+    with pytest.raises(ValueError, match="режим"):
+        store.create("user-a", name="bad-procurement", procurement_types=["lunar"])
 
 
 def test_profile_store_backward_compatible_with_old_db(tmp_path):

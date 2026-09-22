@@ -232,3 +232,38 @@ def test_law_type_filter_matches_full_name():
 def test_law_type_filter_empty_string_is_normalized_to_none():
     criteria = TenderCriteria(law_type="  ")
     assert criteria.law_type is None
+
+
+# --- Канонический контракт: ОКПД2 и режимы процедуры (P0 исследования) ---
+
+
+def test_okpd2_codes_normalize_strip_and_deduplicate():
+    criteria = TenderCriteria(okpd2_codes=[" 01.11 ", "01.11", "26.30.1"])
+    assert criteria.okpd2_codes == ["01.11", "26.30.1"]
+
+
+def test_okpd2_codes_reject_invalid_format():
+    with pytest.raises(ValueError, match="ОКПД2"):
+        TenderCriteria(okpd2_codes=["подшипники"])
+
+
+def test_okpd2_codes_accept_full_and_prefix_codes():
+    criteria = TenderCriteria(okpd2_codes=["01", "01.11", "01.11.12", "01.11.12.110"])
+    assert criteria.okpd2_codes == ["01", "01.11", "01.11.12", "01.11.12.110"]
+
+
+def test_procurement_types_accept_known_values_and_deduplicate():
+    criteria = TenderCriteria(procurement_types=["plan_schedule", "bankruptcy_property", "plan_schedule"])
+    assert criteria.procurement_types == ["plan_schedule", "bankruptcy_property"]
+
+
+def test_procurement_types_reject_unknown_values():
+    with pytest.raises(ValueError, match="режим"):
+        TenderCriteria(procurement_types=["lunar_mining"])
+
+
+def test_empty_contract_filters_are_safe_and_constrain_nothing():
+    """UX-принцип исследования: пустой фильтр ничего не ограничивает."""
+    criteria = TenderCriteria()
+    assert criteria.okpd2_codes == []
+    assert criteria.procurement_types == []
