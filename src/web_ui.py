@@ -6,11 +6,28 @@ from urllib.parse import parse_qs, urlparse
 from src.profiles import SearchProfile, SearchProfileStore
 from src.settings import load_settings
 from src.storage.database import TenderDatabase
+from src.telegram_settings import (
+    PROCUREMENT_TYPE_VALUES,
+    normalize_okpd2_codes,
+    normalize_procurement_types,
+)
 
 PLATFORMS = [
     ("eis", "ЕИС"), ("b2b_center", "B2B-Center"), ("rts_tender", "РТС-тендер"),
     ("fabrikant", "Фабрикант"), ("tmk", "ТМК"), ("rosatom", "Росатом"),
 ]
+
+PROCUREMENT_TYPE_LABELS = {
+    "commercial": "Коммерческие закупки",
+    "plan_schedule": "План-график",
+    "bankruptcy_property": "Банкротство / продажа имущества",
+}
+
+KEYWORD_OPERATORS_HELP = (
+    "Операторы ключевых слов: пробел — И; запятая — ИЛИ; «фраза» — точное "
+    "совпадение; основа* — все формы слова; (слово1 слово2)~5 — слова не "
+    "далее 5 слов друг от друга. Обычные слова находят формы автоматически."
+)
 
 def _v(form, key, default=""):
     return (form.get(key, [default])[0] or default).strip()
@@ -55,6 +72,8 @@ def profile_from_form(form, user_id="web-local"):
         customer=_v(form, "customer") or None,
         customer_inn=_v(form, "customer_inn") or None,
         law_type=_v(form, "law_type") or None,
+        okpd2_codes=normalize_okpd2_codes(_list(form, "okpd2_codes")),
+        procurement_types=normalize_procurement_types(_list(form, "procurement_types")),
         document_search=_v(form, "document_search") == "1",
     )
 
@@ -63,7 +82,7 @@ CSS = """\
 *{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--text)}
 .top{height:70px;background:#fff;display:flex}.brand{width:250px;background:var(--navy);color:#fff;font-size:28px;padding:18px 24px}.nav{display:flex}.nav a{padding:24px 38px;color:#52719e;text-decoration:none;font-weight:600;border-right:1px solid #d5dce8}.nav .active{background:#536ba4;color:#fff}
 .layout{display:grid;grid-template-columns:250px 1fr;min-height:calc(100vh - 70px)}.side{background:var(--navy);color:#fff}.notice{background:var(--blue);padding:14px 20px}.side h3{padding:20px;margin:0 0 0;font-size:17px}.item{padding:11px 20px}.selected{background:#41598e}
-.main{padding:28px;max-width:1150px}.title{font-size:29px;margin:0 0 24px}.panel{background:var(--panel);border:1px solid var(--line);padding:20px 18px 24px;margin-bottom:14px}.panel h2{font-size:18px;margin:0 0 18px}.row{display:grid;grid-template-columns:165px 1fr;gap:14px;align-items:center;margin:13px 0}.label{font-weight:600}.input,.textarea{width:100%;border:1px solid #a8b8cf;background:#fff;padding:11px 13px;font-size:15px;border-radius:3px}.textarea{min-height:75px;resize:vertical}.checks{display:flex;gap:18px;flex-wrap:wrap}.check{display:inline-flex;gap:7px;align-items:center}.check input{width:18px;height:18px}.range{display:grid;grid-template-columns:1fr 1fr;gap:12px}.details{border-top:1px solid #cbd5e3;margin-top:15px;padding-top:10px}.details summary{cursor:pointer;font-weight:700;color:#45658f;padding:9px 0}.actions{display:flex;justify-content:flex-end;gap:12px}.btn{border:1px solid #93a8c5;border-radius:4px;padding:12px 28px;background:#fff;color:#526985;text-decoration:none}.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:700}.toast{background:#e9f7e9;border:1px solid #98c998;padding:12px;margin-bottom:15px}
+.main{padding:28px;max-width:1150px}.title{font-size:29px;margin:0 0 24px}.panel{background:var(--panel);border:1px solid var(--line);padding:20px 18px 24px;margin-bottom:14px}.panel h2{font-size:18px;margin:0 0 18px}.row{display:grid;grid-template-columns:165px 1fr;gap:14px;align-items:center;margin:13px 0}.label{font-weight:600}.input,.textarea{width:100%;border:1px solid #a8b8cf;background:#fff;padding:11px 13px;font-size:15px;border-radius:3px}.textarea{min-height:75px;resize:vertical}.checks{display:flex;gap:18px;flex-wrap:wrap}.check{display:inline-flex;gap:7px;align-items:center}.check input{width:18px;height:18px}.range{display:grid;grid-template-columns:1fr 1fr;gap:12px}.details{border-top:1px solid #cbd5e3;margin-top:15px;padding-top:10px}.details summary{cursor:pointer;font-weight:700;color:#45658f;padding:9px 0}.actions{display:flex;justify-content:flex-end;gap:12px}.btn{border:1px solid #93a8c5;border-radius:4px;padding:12px 28px;background:#fff;color:#526985;text-decoration:none}.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:700}.toast{background:#e9f7e9;border:1px solid #98c998;padding:12px;margin-bottom:15px}.hint{font-size:12px;color:#586a83;margin-top:6px;line-height:1.5}
 @media(max-width:800px){.brand{width:170px;font-size:22px}.nav a{padding:24px 10px}.layout{grid-template-columns:170px 1fr}.row{grid-template-columns:1fr}.range{grid-template-columns:1fr}.main{padding:18px}}
 """
 
@@ -75,6 +94,11 @@ def render_form(profile=None, saved=False):
         (" checked" if k in set(p.platforms) else "") + "> " + e(n) + "</label>"
         for k,n in PLATFORMS
     )
+    procurement_checks = "".join(
+        '<label class="check"><input type="checkbox" name="procurement_types" value="' + e(k) + '"' +
+        (" checked" if k in set(p.procurement_types) else "") + "> " + e(PROCUREMENT_TYPE_LABELS[k]) + "</label>"
+        for k in PROCUREMENT_TYPE_VALUES
+    )
     notice = '<div class="toast">Профиль сохранён в общей базе профилей поиска.</div>' if saved else ""
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ТендерПлан — Добавление ключа</title><style>{CSS}</style></head>
 <body><header class="top"><div class="brand">тендерплан</div><nav class="nav"><a class="active" href="/">Ключи и метки</a><a href="#">Пользователи</a><a href="#">Личные настройки</a></nav></header>
@@ -83,6 +107,7 @@ def render_form(profile=None, saved=False):
 <section class="panel"><h2>Поиск в названии контракта, номенклатуре и документации</h2>
 <div class="row"><div class="label">Название ключа</div><input class="input" name="name" required value="{e(p.name)}" placeholder="Например, Оргтехника"></div>
 <div class="row"><div class="label">Ключевые слова</div><textarea class="textarea" name="keywords" placeholder="подшипники, запчасти, оргтехника">{e(', '.join(p.keywords))}</textarea></div>
+<div class="row"><div></div><div class="hint">{e(KEYWORD_OPERATORS_HELP)}</div></div>
 <div class="row"><div class="label">Исключая</div><textarea class="textarea" name="exclusions" placeholder="строительство, ремонт, продукты">{e(', '.join(p.exclusions))}</textarea></div>
 <div class="row"><div></div><label class="check"><input type="checkbox" name="document_search" value="1"{' checked' if p.document_search else ''}> Искать внутри документации</label></div>
 <div class="row"><div class="label">Регион</div><input class="input" name="regions" value="{e(', '.join(p.regions))}" placeholder="Санкт-Петербург, Ленинградская область, Москва"></div></section>
@@ -99,6 +124,12 @@ def render_form(profile=None, saved=False):
 <div class="details"><details open><summary>Размер обеспечения заявки</summary><div class="range"><input class="input" name="min_application_security_percent" value="{e(p.min_application_security_percent)}" placeholder="от, %"><input class="input" name="max_application_security_percent" value="{e(p.max_application_security_percent)}" placeholder="до, %"></div></details>
 <details><summary>Размер обеспечения контракта</summary><div class="range"><input class="input" name="min_contract_security_percent" value="{e(p.min_contract_security_percent)}" placeholder="от, %"><input class="input" name="max_contract_security_percent" value="{e(p.max_contract_security_percent)}" placeholder="до, %"></div></details>
 <details><summary>Минимальный AI-балл</summary><input class="input" name="min_ai_score" value="{e(p.min_ai_score)}" placeholder="0–100"></details></div></section>
+<section class="panel"><h2>Экспертный режим</h2>
+<div class="row"><div class="label">ОКПД2</div><input class="input" name="okpd2_codes" value="{e(', '.join(p.okpd2_codes))}" placeholder="Например, 01.11.12, 26.30"></div>
+<div class="row"><div class="label">Режим процедуры</div><div class="checks">{procurement_checks}</div></div>
+<div class="hint">ОКПД2 и режим процедуры сохраняются в профиле, но пока не ограничивают выдачу: площадки начнут применять их после подключения в зоне collectors. Пустые поля ничего не ограничивают.</div>
+<div class="hint">Уже применяются площадками: ключевые слова и исключения (включая операторы), регионы, площадки, НМЦК, аванс, постоплата, срок до подачи, обеспечение заявки и контракта, заказчик и ИНН, закон, поиск в документации.</div>
+</section>
 <div class="actions"><a class="btn" href="/">Отменить</a><button class="btn primary" type="submit">Добавить новый ключ</button></div></form></main></div></body></html>"""
 
 def serve(settings, host="127.0.0.1", port=8080):

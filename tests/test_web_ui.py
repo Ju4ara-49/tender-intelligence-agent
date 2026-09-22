@@ -100,3 +100,63 @@ def test_web_form_keeps_selected_platforms():
     }
     p = profile_from_form(form, "u")
     assert p.platforms == ["eis", "b2b_center"]
+
+
+def test_web_form_parses_okpd2_and_procurement_types():
+    form = {
+        "name": ["Экспертный"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis"],
+        "okpd2_codes": [" 01.11.12, 26.30, 26.30 "],
+        "procurement_types": ["plan_schedule", "bankruptcy_property"],
+    }
+    p = profile_from_form(form, "u")
+    assert p.okpd2_codes == ["01.11.12", "26.30"]
+    assert p.procurement_types == ["plan_schedule", "bankruptcy_property"]
+
+
+def test_web_form_rejects_invalid_okpd2():
+    form = {
+        "name": ["Плохой ОКПД2"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis"],
+        "okpd2_codes": ["подшипники"],
+    }
+    with pytest.raises(ValueError, match="ОКПД2"):
+        profile_from_form(form, "u")
+
+
+def test_web_form_rejects_unknown_procurement_type():
+    form = {
+        "name": ["Плохой режим"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis"],
+        "procurement_types": ["lunar_mining"],
+    }
+    with pytest.raises(ValueError, match="режим"):
+        profile_from_form(form, "u")
+
+
+def test_web_form_contract_filters_default_to_empty():
+    """Экспертный режим: поля опциональны, пустые не ограничивают поиск."""
+    p = profile_from_form({"name": ["Простой"], "keywords": ["подшипники"], "platforms": ["eis"]})
+    assert p.okpd2_codes == []
+    assert p.procurement_types == []
+
+
+def test_web_render_contains_keyword_operators_help():
+    page = render_form(SearchProfile(platforms=["eis"]))
+    assert "Операторы ключевых слов" in page
+    assert "(слово1 слово2)~5" in page
+
+
+def test_web_render_contains_expert_mode_with_honest_capability_notes():
+    page = render_form(SearchProfile(platforms=["eis"]))
+    assert 'name="okpd2_codes"' in page
+    assert 'name="procurement_types"' in page
+    assert "Экспертный режим" in page
+    # Никаких fake capabilities: контрактные фильтры честно помечены как
+    # «сохраняются, но пока не ограничивают выдачу».
+    assert "пока не ограничивают выдачу" in page
+    # А реально применяемые фильтры перечислены отдельно.
+    assert "Уже применяются площадками" in page
