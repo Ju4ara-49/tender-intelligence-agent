@@ -6,6 +6,9 @@ import re
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
+import requests
+
+from src.collectors.base import CollectorUnavailableError
 from src.collectors.fabrikant_v2 import FabrikantV2Collector
 from src.models.tender import Tender
 
@@ -13,7 +16,133 @@ logger = logging.getLogger(__name__)
 
 
 class FabrikantV3Collector(FabrikantV2Collector):
-    """Fabrikant V2 plus reliable common-field enrichment."""
+    """Fabrikant V2 plus reliable HTTP discovery and metadata enrichment."""
+
+    def _search_one(self, query: str) -> list[Tender]:
+        """Use the public registry over HTTP before falling back to browser code.
+
+        Both Fabrikant registries currently expose server-rendered tables. This
+        avoids requiring Playwright for a search that is already available as
+        ordinary HTML and makes CI/live diagnostics deterministic.
+        """
+        timeout = int(self.config.get("timeout_seconds", 30))
+        params = {"search": query}
+        try:
+            response = requests.get(
+                self.BASE_URL,
+                params=params,
+                timeout=timeout,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/151 Safari/537.36",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.7",
+                },
+            )
+            response.raise_for_status()
+            html = response.text or ""
+            results = self._parse_results(html)
+            if not results and params:
+                # Some registry revisions ignore the search query parameter but
+                # still expose the public listing. Parse it and apply the same
+                # semantic query gate locally.
+                response = requests.get(
+                    self.BASE_URL,
+                    timeout=timeout,
+                    headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "ru-RU,ru;q=0.9"},
+                )
+                response.raise_for_status()
+                results = self._parse_results(response.text or "")
+
+            return [
+                tender
+                for tender in results
+                if self._tender_matches_query(tender, query)
+            ]
+        except requests.RequestException as exc:
+            raise CollectorUnavailableError(
+                f"fabrikant: HTTP registry unavailable for {query!r}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    @classmethod
+    def _tender_matches_query(cls, tender: Tender, query: str) -> bool:
+        words = [w for w in re.findall(r"[\w-]+", str(query).casefold()) if len(w) >= 3]
+        if not words:
+            return True
+        text = cls._norm(" ".join((tender.title or "", tender.description or ""))).casefold()
+        variants = {
+            "подшипник": {"подшипник", "подшипника", "подшипники", "подшипников", "подшипнику", "подшипникам", "подшипником", "подшипниками", "подшипнике", "подшипниках"},
+            "станок": {"станок", "станка", "станки", "станков", "станкам", "станками", "станке", "станком"},
+            "лебедка": {"лебедка", "лебедки", "лебедку", "лебедкой", "лебедок", "лебедкам", "лебедками"},
+        }
+        for word in words:
+            forms = variants.get(word)
+            if forms is None:
+                for canonical, group in variants.items():
+                    if word in group:
+                        forms = group
+                        break
+            if forms is None:
+                if word not in text:
+                    return False
+            elif not any(re.search(rf"(?<![а-яёa-z0-9]){re.escape(form)}(?![а-яёa-z0-9])", text) for form in forms):
+                return False
+        return True
+
+    def search(self, keywords: list[str], since=None) -> list[Tender]:
+        """Search both public registries without losing procedure URL state."""
+        terms = [str(x).strip() for x in keywords if str(x).strip()]
+        if not terms:
+            return []
+
+        merged: dict[str, Tender] = {}
+        self._urls = {}
+        for base_url in (
+            "https://soap2.fabrikant.ru/223/catalog/procedure/published",
+            "https://soap4.fabrikant.ru/44/catalog/procedure",
+        ):
+            self.BASE_URL = base_url
+            for term in terms:
+                for tender in self._search_one(term):
+                    if since is not None and tender.published_at is not None:
+                        published = tender.published_at
+                        if published.tzinfo is None:
+                            published = published.replace(tzinfo=since.tzinfo)
+                        if published < since:
+                            continue
+                    merged[tender.unique_key] = tender
+                    if len(merged) >= self.max_results:
+                        return list(merged.values())[: self.max_results]
+
+        logger.info("fabrikant: найдено %d уникальных процедур", len(merged))
+        return list(merged.values())[: self.max_results]
+
+    @classmethod
+    def _find_registry_header(cls, table):
+        """Accept current 223-FZ header wording as well as legacy wording."""
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"], recursive=False)
+            headers = [cls._norm(" ".join(c.stripped_strings)) for c in cells]
+            lowered = [x.lower() for x in headers]
+            has_notice = any("извещ" in x or ("№" in x and "номер" in x) for x in lowered)
+            has_name = any("наимен" in x for x in lowered)
+            has_customer = any("заказчик" in x for x in lowered)
+            if has_notice and has_name and has_customer:
+                return headers, row
+        return None
+
+    @classmethod
+    def _header_index(cls, headers: list[str], names: tuple[str, ...]) -> int | None:
+        """Prefer exact/header-prefix matches; never map 'Заказчик' to 'Регион заказчика'."""
+        normalized = [cls._norm(str(x)).lower().rstrip(":") for x in headers]
+        wanted_names = [cls._norm(name).lower().rstrip(":") for name in names]
+        for wanted in wanted_names:
+            for idx, header in enumerate(normalized):
+                if header == wanted:
+                    return idx
+        for wanted in wanted_names:
+            for idx, header in enumerate(normalized):
+                if wanted and wanted in header:
+                    return idx
+        return None
 
     def _parse_results(self, html: str) -> list[Tender]:
         results = super()._parse_results(html)
@@ -24,8 +153,8 @@ class FabrikantV3Collector(FabrikantV2Collector):
             headers = row.get("headers") or []
             values = row.get("values") or []
             names = (
-                "Регион", "Регион заказчика", "Регион поставки", "Место поставки",
-                "Место нахождения", "Адрес поставки",
+                "Регион заказчика", "Регион поставки", "Место поставки",
+                "Место нахождения", "Адрес поставки", "Регион",
             )
             region = self._value_by_header(headers, values, names)
             if region and not tender.region:
@@ -41,15 +170,7 @@ class FabrikantV3Collector(FabrikantV2Collector):
 
     @staticmethod
     def _procedure_anchor(row, base_host):
-        """Resolve procedure links against the active Fabrikant host.
-
-        Fabrikant uses separate `soap2` and `soap4` hosts for 223-FZ and
-        44-FZ. The V2 parser previously hard-coded `soap4` when resolving a
-        relative href, which caused relative 223-FZ procedure links to be
-        rejected before the rich registry-row parser could run. Keep the
-        active host supplied by V2 so both registries retain their table
-        metadata (customer, price, dates, etc.).
-        """
+        """Resolve procedure links against the active Fabrikant host."""
         base_url = f"https://{base_host}/"
         for anchor in row.find_all("a", href=True):
             href = str(anchor.get("href", "")).strip()
@@ -58,16 +179,6 @@ class FabrikantV3Collector(FabrikantV2Collector):
             full = urljoin(base_url, href)
             if urlparse(full).netloc.lower() == base_host.lower() and "/procedure/" in full.lower():
                 return anchor
-        return None
-
-    @classmethod
-    def _header_index(cls, headers: list[str], names: tuple[str, ...]) -> int | None:
-        normalized = [cls._norm(str(x)).lower().rstrip(":") for x in headers]
-        for name in names:
-            wanted = cls._norm(name).lower().rstrip(":")
-            for idx, header in enumerate(normalized):
-                if wanted == header or wanted in header or header in wanted:
-                    return idx
         return None
 
     @classmethod
@@ -93,11 +204,6 @@ class FabrikantV3Collector(FabrikantV2Collector):
                 raw = detailed.raw_data if isinstance(detailed.raw_data, dict) else {}
                 raw["published_at_source"] = "detail_text"
                 detailed.raw_data = raw
-                # __post_init__'s UTC normalization already ran at
-                # construction time and does not re-fire on attribute
-                # assignment, so a naive Moscow-local datetime set here
-                # would otherwise stay naive/un-normalized on the Tender
-                # instance. Explicitly re-normalize after the assignment.
                 detailed.to_utc()
         if not detailed.region:
             region = self._extract_region_from_text(text)
@@ -107,9 +213,6 @@ class FabrikantV3Collector(FabrikantV2Collector):
                 raw["region_source"] = "detail_text"
                 detailed.raw_data = raw
 
-        # Common commercial terms are often present in the procedure text but
-        # were previously discarded. Fill the unified Tender fields so Telegram
-        # criteria can operate consistently with the browser collector.
         if detailed.advance_percent is None:
             detailed.advance_percent = self._extract_percent(
                 text, ("Аванс", "Предоплата", "Размер аванса", "Авансовый платеж")
@@ -143,14 +246,13 @@ class FabrikantV3Collector(FabrikantV2Collector):
 
     @classmethod
     def _extract_publication_date(cls, text: str) -> datetime | None:
-        """Prefer explicit publication date; otherwise use application start date."""
         normalized = cls._norm(text)
         month = r"января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря"
         patterns = (
             rf"(?:дата публикации|дата размещения|опубликовано|размещено)\D{{0,80}}(\d{{1,2}}\s+(?:{month})\s+20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?)",
             r"(?:дата публикации|дата размещения|опубликовано|размещено)\D{0,80}(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)",
             rf"(\d{{1,2}}\s+(?:{month})\s+20\d{{2}}(?:\s+\d{{1,2}}:\d{{2}})?)\s*[•|-]?\s*начало(?: приема| подачи)?",
-            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)\s*[•|-]?\s*начало(?: приема|подачи)?",
+            r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2}(?:\s+\d{1,2}:\d{2})?)\s*[•|-]?\s*начало(?:приема|подачи)?",
         )
         for pattern in patterns:
             match = re.search(pattern, normalized, re.I)
