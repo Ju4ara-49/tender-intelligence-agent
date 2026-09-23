@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging
 import re
+from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
@@ -162,12 +163,49 @@ class _BrowserTenderCollector(BaseCollector):
             seen.add(external_id); self._urls[external_id]=href; results.append(Tender(platform=self.platform,external_id=external_id,title=title[:1000],url=href,description=title,raw_data={"source":self.BASE_URL}))
         return results
     def _parse_detail(self,html:str,external_id:str,url:str)->Tender:
-        soup=BeautifulSoup(html,"html.parser"); title_node=soup.find("h1") or soup.find("title"); title=" ".join(title_node.stripped_strings) if title_node else f"Процедура {external_id}"; text=" ".join(soup.stripped_strings); price=self._extract_price(text); deadline=self._extract_date(text); published=self._extract_datetime(text,("Дата публикации","Дата размещения","Опубликовано","Размещено")); start=self._extract_datetime(text,("Дата начала","Начало приема","Начало подачи")); end=deadline or self._extract_datetime(text,("Дата окончания","Окончание приема","Окончание подачи")); customer=self._extract_labeled_value(text,("Заказчик","Организатор","Организация-заказчик")); region=self._extract_labeled_value(text,("Регион поставки","Место поставки","Место выполнения","Регион")); law=self._extract_labeled_value(text,("Закон","Вид закона","Федеральный закон","Тип закупки")); advance=self._extract_percent(text,("Аванс","Предоплата","Размер аванса")); post=self._extract_days(text,("Отсрочка платежа","Срок оплаты","Условия оплаты","Постоплата")); app=self._extract_percent(text,("Обеспечение заявки","Обеспечение предложения")); contract=self._extract_percent(text,("Обеспечение исполнения","Обеспечение контракта","Обеспечение договора")); raw={"source":url,"published_at":published.isoformat() if published else None,"start_date":start.isoformat() if start else None,"end_date":end.isoformat() if end else None}
+        soup=BeautifulSoup(html,"html.parser"); title_node=soup.find("h1") or soup.find("title"); title=" ".join(title_node.stripped_strings) if title_node else f"Процедура {external_id}"; text=" ".join(soup.stripped_strings); price=self._extract_price(text); deadline=self._extract_date(text); published=self._extract_datetime(text,("Дата публикации","Дата размещения","Опубликовано","Размещено")); start=self._extract_datetime(text,("Дата начала","Начало приема","Начало подачи")); end=deadline or self._extract_datetime(text,("Дата окончания","Окончание приема","Окончание подачи")); customer=self._extract_labeled_value(text,("Заказчик","Организатор","Организация-заказчик")); region=self._extract_labeled_value(text,("Регион поставки","Место поставки","Место выполнения","Регион")); law=self._extract_labeled_value(text,("Закон","Вид закона","Федеральный закон","Тип закупки")); advance=self._extract_percent(text,("Аванс","Предоплата","Размер аванса")); post=self._extract_days(text,("Отсрочка платежа","Срок оплаты","Условия оплаты","Постоплата")); app=self._extract_percent(text,("Обеспечение заявки","Обеспечение предложения")); contract=self._extract_percent(text,("Обеспечение исполнения","Обеспечение контракта","Обеспечение договора")); documents=self._extract_documents(soup,url); raw={"source":url,"published_at":published.isoformat() if published else None,"start_date":start.isoformat() if start else None,"end_date":end.isoformat() if end else None}
+        if documents: raw["documents"]=documents
         if advance is not None:raw["advance_payment"]={"percent":advance}
         if post is not None:raw["postpayment"]={"days":post}
         if app is not None:raw["application_security"]={"percent":app}
         if contract is not None:raw["contract_security"]={"percent":contract}
-        return Tender(platform=self.platform,external_id=external_id,title=title[:1000],url=url,description=text[:10000],price=price,deadline=end,published_at=published,start_date=start,end_date=end,region=region,customer=customer,law_type=law,advance_required=advance is not None and advance>0,advance_percent=advance,postpayment_days=post,application_security_percent=app,contract_security_percent=contract,raw_data=raw)
+        return Tender(platform=self.platform,external_id=external_id,title=title[:1000],url=url,description=text[:10000],price=price,deadline=end,published_at=published,start_date=start,end_date=end,region=region,customer=customer,law_type=law,advance_required=advance is not None and advance>0,advance_percent=advance,postpayment_days=post,application_security_percent=app,contract_security_percent=contract,documents=documents,raw_data=raw)
+
+    @staticmethod
+    def _extract_documents(soup: BeautifulSoup, base_url: str) -> list[dict[str, str]]:
+        """Extract explicit downloadable tender attachments from rendered detail HTML."""
+        documents: list[dict[str, str]] = []
+        seen: set[str] = set()
+        extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".rar")
+        hints = ("документ", "вложен", "приложен", "скачать", "download", "attachment", "file")
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
+            absolute = urljoin(base_url, href)
+            parsed = urlparse(absolute)
+            if parsed.scheme not in ("http", "https"):
+                continue
+            label = " ".join(anchor.stripped_strings).strip()
+            haystack = f"{absolute} {label}".casefold()
+            if not (any(h in haystack for h in hints) or any(ext in parsed.path.casefold() for ext in extensions)):
+                continue
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            filename = Path(parsed.path).name or label or "document"
+            item = {"url": absolute, "filename": filename[:500]}
+            lowered = filename.casefold()
+            for ext, mime in (
+                (".pdf", "application/pdf"), (".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+                (".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                (".csv", "text/csv"), (".zip", "application/zip"),
+            ):
+                if lowered.endswith(ext):
+                    item["content_type"] = mime
+                    break
+            documents.append(item)
+        return documents
     @staticmethod
     def _extract_labeled_value(text:str,labels:tuple[str,...])->str:
         lp="|".join(re.escape(x) for x in labels); m=re.search(rf"(?:{lp})\s*[:\-]?\s*(.+?)(?=\s+(?:Заказчик|Организатор|Регион|Место|Дата|Срок|Цена|НМЦ|Обеспечение|Аванс|Оплата)\b|$)",text,re.I); return m.group(1).strip(" ;,\t")[:1000] if m else ""

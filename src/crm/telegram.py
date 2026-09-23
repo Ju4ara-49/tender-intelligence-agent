@@ -23,16 +23,33 @@ _STATUS_NAMES = {
     "won": "Победа",
     "lost": "Проигрыш",
     "skipped": "Пропускаем",
+    "expired": "Просрочен",
+    "archived": "В архиве",
 }
 _STATUS_COMMANDS = {name.casefold(): key for key, name in _STATUS_NAMES.items()}
 _ID_RE = re.compile(r"^[1-9]\d*$")
 
 
-def _board(bot: Any) -> TenderBoard:
-    board = getattr(bot, "crm_board", None)
-    if board is None:
-        board = TenderBoard(bot.orchestrator.db)
+def _board(bot: Any, chat_id: str | int | None = None) -> TenderBoard:
+    """Return a CRM board isolated to the current Telegram user."""
+    user_id = str(chat_id).strip() if chat_id is not None else ""
+    legacy = getattr(bot, "crm_board", None)
+    if legacy is not None and not hasattr(bot, "crm_boards"):
+        # Backward-compatible fake/embedded bot surface.
+        return legacy
+    if isinstance(legacy, TenderBoard) and getattr(bot, "_crm_board_user_id", "") == user_id:
+        return legacy
+
+    boards = getattr(bot, "crm_boards", None)
+    if boards is None:
+        boards = {}
+        bot.crm_boards = boards
+    if user_id not in boards:
+        boards[user_id] = TenderBoard(bot.orchestrator.db, user_id=user_id)
+    board = boards[user_id]
+    if hasattr(bot, "crm_board") and getattr(bot, "crm_board", None) is None:
         bot.crm_board = board
+        bot._crm_board_user_id = user_id
     return board
 
 
@@ -58,8 +75,8 @@ def _status_keyboard(tender_id: int, current: str) -> dict:
     return {"inline_keyboard": rows}
 
 
-def _render_entry(bot: Any, tender_id: int) -> str:
-    entry = _board(bot).entry(tender_id)
+def _render_entry(bot: Any, tender_id: int, chat_id: str) -> str:
+    entry = _board(bot, chat_id).entry(tender_id)
     return (
         f"<b>CRM тендера #{entry.tender_id}</b>\n\n"
         f"Статус: <b>{html.escape(_STATUS_NAMES.get(entry.status, entry.status))}</b>\n"
@@ -87,9 +104,9 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
             bot._send(chat_id, "ID тендера должен быть положительным целым числом.", bot._keyboard())
             return True
         try:
-            board = _board(bot)
+            board = _board(bot, chat_id)
             entry = board.entry(tender_id)
-            bot._send(chat_id, _render_entry(bot, tender_id), _status_keyboard(tender_id, entry.status))
+            bot._send(chat_id, _render_entry(bot, tender_id, chat_id), _status_keyboard(tender_id, entry.status))
         except ValueError as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
         return True
@@ -104,7 +121,7 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
             bot._send(chat_id, "Некорректный ID или статус.", bot._keyboard())
             return True
         try:
-            new_status = _board(bot).set_status(tender_id, status)
+            new_status = _board(bot, chat_id).set_status(tender_id, status)
             bot._send(chat_id, f"Статус тендера #{tender_id}: <b>{html.escape(_STATUS_NAMES[new_status])}</b>", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
@@ -120,7 +137,7 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
             bot._send(chat_id, "Некорректный ID или ответственный.", bot._keyboard())
             return True
         try:
-            _board(bot).assign(tender_id, assignee)
+            _board(bot, chat_id).assign(tender_id, assignee)
             bot._send(chat_id, f"Ответственный для #{tender_id} назначен: <b>{html.escape(assignee)}</b>", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
@@ -136,7 +153,7 @@ def handle_message(bot: Any, chat_id: str, text: str) -> bool:
             bot._send(chat_id, "Некорректный ID или метка.", bot._keyboard())
             return True
         try:
-            _board(bot).add_label(tender_id, label)
+            _board(bot, chat_id).add_label(tender_id, label)
             bot._send(chat_id, f"Метка добавлена к тендеру #{tender_id}: <b>{html.escape(label)}</b>", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
@@ -164,7 +181,7 @@ def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
         try:
             # The button is an explicit user command to participate. It is
             # intentionally allowed to jump from the initial "new" state.
-            new_status = _board(bot).set_status(tender_id, "participating", force=True)
+            new_status = _board(bot, chat_id).set_status(tender_id, "participating", force=True)
             bot._send(chat_id, f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.", bot._keyboard())
         except (ValueError, TypeError) as exc:
             bot._send(chat_id, html.escape(str(exc)), bot._keyboard())
@@ -178,7 +195,7 @@ def handle_callback(bot: Any, chat_id: str, data: str) -> bool:
     if tender_id is None or status is None:
         return False
     try:
-        new_status = _board(bot).set_status(tender_id, status)
+        new_status = _board(bot, chat_id).set_status(tender_id, status)
         bot._send(chat_id, f"Статус тендера #{tender_id} изменён на <b>{html.escape(_STATUS_NAMES[new_status])}</b>.", bot._keyboard())
     except (ValueError, TypeError) as exc:
         bot._send(chat_id, html.escape(str(exc)), bot._keyboard())

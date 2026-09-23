@@ -49,6 +49,7 @@ class NotificationDeliveryState:
             "postpayment_days": tender.postpayment_days,
             "application_security_percent": tender.application_security_percent,
             "contract_security_percent": tender.contract_security_percent,
+            "documents": tender.documents,
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

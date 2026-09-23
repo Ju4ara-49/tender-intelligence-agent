@@ -103,3 +103,19 @@ def test_crm_commands_validate_tender_id_and_unknown_tender():
 
     assert handle_message(bot, "42", "/tender 999") is True
     assert "Tender not found" in bot.sent[-1][1]
+
+
+def test_telegram_crm_state_isolated_by_chat_id():
+    db = _db_with_tender()
+    bot = _Bot(db)
+
+    assert handle_message(bot, "42", "/crm_status 1 Проверить") is True
+    assert bot.crm_board.get_status(1) == "reviewing"
+
+    assert handle_message(bot, "43", "/tender 1") is True
+    assert "Новый" in bot.sent[-1][1]
+
+    assert handle_callback(bot, "43", "crm:status:1:reviewing") is True
+    assert handle_callback(bot, "43", "crm:status:1:participating") is True
+    assert bot.crm_board.get_status(1) == "reviewing"
+    assert bot.crm_boards["43"].get_status(1) == "participating"

@@ -118,3 +118,16 @@ def test_excel_export_uses_post_filter_result_ids_not_diagnostic_persistence_ids
     assert "export_tender_ids.append(tender_id)" in source
     assert "tender_ids=export_tender_ids" in source
     assert "tender_ids=current_run_tender_ids" not in source
+
+def test_notification_dedup_does_not_skip_ai_or_lifecycle_progression():
+    source = Path(Orchestrator.__module__.replace(".", "/") + ".py").read_text(encoding="utf-8")
+    analyze_pos = source.index("analysis = self.analyzer.analyze(tender)")
+    dedup_pos = source.index(
+        'if self.notification_state.was_notified(tender, recipient_key=recipient_key):',
+        analyze_pos,
+    )
+    lifecycle_pos = source.index(
+        "self._advance_lifecycle(tender, TenderLifecycleStatus.RELEVANT)",
+        analyze_pos,
+    )
+    assert analyze_pos < lifecycle_pos < dedup_pos
