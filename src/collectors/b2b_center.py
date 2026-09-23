@@ -211,14 +211,6 @@ class B2BCenterCollector(BaseCollector):
                 )
                 return None
 
-            title = self._extract_detail_title(
-                soup,
-                external_id,
-            )
-
-            if not title:
-                title = f"Тендер № {external_id}"
-
             # B2B-Center: detail-page values are stored in
             # dedicated table rows. Prefer structured HTML
             # over regex extraction from the whole page text.
