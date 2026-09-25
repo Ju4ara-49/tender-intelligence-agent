@@ -146,7 +146,7 @@ def main() -> int:
         print(
             f'{item["platform"]} | {item["keyword"]} | '
             f'{item["status"]} | {item["count"]} | {item["elapsed_seconds"]}s | '
-            f'contract={"✓" if sc.get("passed") else "✗"} | '
+            f'contract={"PASS" if sc.get("passed") else "FAIL"} | '
             f'details={dt.get("passed",0)}/{dt.get("probed",0)}'
         )
         for sample in item["samples"][:3]:
