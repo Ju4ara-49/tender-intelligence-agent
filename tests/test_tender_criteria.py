@@ -93,6 +93,26 @@ def test_region_filter_matches_one_value_in_multi_region_tender():
 def test_empty_region_filter_values_do_not_reject_tender():
     assert Orchestrator._passes_regions(_tender(region="Москва"), ["", "  "]) is True
 
+def test_okpd2_filter_matches_requested_parent_code():
+    criteria = TenderCriteria(okpd2_codes=["01.11"])
+    assert Orchestrator._passes_criteria(
+        _tender(okpd2_codes=["01.11.12.110"]), criteria
+    ) == (True, "")
+
+def test_okpd2_and_procurement_filters_reject_missing_values():
+    criteria = TenderCriteria(okpd2_codes=["01.11"], procurement_types=["commercial"])
+    ok, reason = Orchestrator._passes_criteria(
+        _tender(okpd2_codes=[], procurement_type="commercial"), criteria
+    )
+    assert ok is False
+    assert reason == "okpd2_codes"
+
+    ok, reason = Orchestrator._passes_criteria(
+        _tender(okpd2_codes=["01.11.12"], procurement_type="plan_schedule"), criteria
+    )
+    assert ok is False
+    assert reason == "procurement_type"
+
 
 
 def test_criteria_rejects_contradictory_price_range():

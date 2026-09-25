@@ -57,7 +57,7 @@ def test_pdf_docx_and_xlsx_extraction(tmp_path: Path):
     writer.add_blank_page(width=72, height=72)
     pdf = BytesIO()
     writer.write(pdf)
-    text, status = ingestor._extract(pdf.getvalue(), "application/pdf", "spec.pdf")
+    text, status, _diagnostics = ingestor._extract(pdf.getvalue(), "application/pdf", "spec.pdf")
     assert status == DocumentExtractionStatus.EXTRACTED
     assert text == ""
 
@@ -78,7 +78,7 @@ def test_pdf_docx_and_xlsx_extraction(tmp_path: Path):
     original_reader = document_ingestor_module.PdfReader
     document_ingestor_module.PdfReader = _Reader
     try:
-        text, status = ingestor._extract(b"pdf", "application/pdf", "spec.pdf")
+        text, status, _diagnostics = ingestor._extract(b"pdf", "application/pdf", "spec.pdf")
     finally:
         document_ingestor_module.PdfReader = original_reader
     assert status == DocumentExtractionStatus.EXTRACTED
@@ -88,7 +88,7 @@ def test_pdf_docx_and_xlsx_extraction(tmp_path: Path):
     docx = BytesIO()
     with zipfile.ZipFile(docx, "w") as archive:
         archive.writestr("word/document.xml", document_xml)
-    text, status = ingestor._extract(docx.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "spec.docx")
+    text, status, _diagnostics = ingestor._extract(docx.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "spec.docx")
     assert status == DocumentExtractionStatus.EXTRACTED
     assert "Contract requirements" in text
 
@@ -98,7 +98,7 @@ def test_pdf_docx_and_xlsx_extraction(tmp_path: Path):
     sheet["B1"] = "10 pcs"
     xlsx = BytesIO()
     workbook.save(xlsx)
-    text, status = ingestor._extract(
+    text, status, _diagnostics = ingestor._extract(
         xlsx.getvalue(),
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "items.xlsx",

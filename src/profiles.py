@@ -68,6 +68,7 @@ class SearchProfile:
             law_type=self.law_type,
             okpd2_codes=list(self.okpd2_codes),
             procurement_types=list(self.procurement_types),
+            document_search=self.document_search,
         )
 
 
@@ -406,6 +407,9 @@ class SearchProfileStore:
                 customer=criteria.customer,
                 customer_inn=criteria.customer_inn,
                 law_type=criteria.law_type,
+                okpd2_codes=list(criteria.okpd2_codes),
+                procurement_types=list(criteria.procurement_types),
+                document_search=bool(criteria.document_search),
             ),
         )
 

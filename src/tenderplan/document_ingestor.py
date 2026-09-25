@@ -63,7 +63,7 @@ class TenderDocumentIngestor:
         if latest is not None and latest.sha256 == digest:
             return DocumentIngestResult(document=latest, downloaded=False)
 
-        text, status = self._extract(content, detected_type, url)
+        text, status, diagnostics = self._extract(content, detected_type, url)
         document = self.store.save(
             tender_key=tender_key,
             url=url,
@@ -72,31 +72,51 @@ class TenderDocumentIngestor:
             sha256=digest,
             extraction_status=status,
             extracted_text=text,
+            diagnostics=diagnostics,
             etag=etag,
             last_modified=last_modified,
         )
         return DocumentIngestResult(document=document, downloaded=True)
 
-    @staticmethod
-    def _extract(content: bytes, content_type: str, url: str) -> tuple[str, str]:
+    def _ocr_text(self, content: bytes, content_type: str) -> str | None:
+        """OCR для сканированных PDF. Архитектурная точка расширения.
+
+        В окружении без локального OCR-движка (pytesseract + tesseract или аналог)
+        возвращает ``None``: для сканированного PDF это даёт статус
+        ``unsupported`` с диагностикой, а не подмена пустого результата на
+        ``extracted``. Для реального OCR подкласс переопределяет метод и
+        возвращает извлечённый текст.
+        """
+        return None
+
+    def _extract(self, content: bytes, content_type: str, url: str) -> tuple[str, str, str]:
         lowered = content_type.lower()
         path = urlparse(url).path.lower()
         if "html" in lowered or path.endswith((".html", ".htm")):
             soup = BeautifulSoup(content, "lxml")
-            return soup.get_text(" ", strip=True), DocumentExtractionStatus.EXTRACTED
+            return soup.get_text(" ", strip=True), DocumentExtractionStatus.EXTRACTED, ""
         if "text/" in lowered or path.endswith((".txt", ".csv", ".xml", ".json")):
-            return content.decode("utf-8", errors="replace").strip(), DocumentExtractionStatus.EXTRACTED
+            return content.decode("utf-8", errors="replace").strip(), DocumentExtractionStatus.EXTRACTED, ""
         if "pdf" in lowered or path.endswith(".pdf"):
             try:
                 reader = PdfReader(BytesIO(content))
-                text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
-                return text, DocumentExtractionStatus.EXTRACTED
-            except Exception:
-                return "", DocumentExtractionStatus.FAILED
-        if (
-            "wordprocessingml" in lowered
-            or path.endswith(".docx")
-        ):
+                pages = list(reader.pages)
+                text = "\n".join(page.extract_text() or "" for page in pages).strip()
+                if not text:
+                    scanned = False
+                    try:
+                        scanned = any(page.images for page in pages)
+                    except Exception:
+                        scanned = False
+                    if scanned:
+                        ocr = self._ocr_text(content, content_type)
+                        if ocr:
+                            return ocr.strip(), DocumentExtractionStatus.EXTRACTED, ""
+                        return "", DocumentExtractionStatus.UNSUPPORTED, "scanned PDF: no text layer (raster images); OCR engine unavailable"
+                return text, DocumentExtractionStatus.EXTRACTED, ""
+            except Exception as exc:
+                return "", DocumentExtractionStatus.FAILED, f"pdf extraction failed: {type(exc).__name__}: {exc}"
+        if "wordprocessingml" in lowered or path.endswith(".docx"):
             try:
                 with zipfile.ZipFile(BytesIO(content)) as archive:
                     xml = archive.read("word/document.xml")
@@ -106,13 +126,12 @@ class TenderDocumentIngestor:
                     for node in root.iter()
                     if node.tag.endswith("}t") and node.text and node.text.strip()
                 )
-                return text, DocumentExtractionStatus.EXTRACTED
-            except Exception:
-                return "", DocumentExtractionStatus.FAILED
-        if (
-            "spreadsheetml" in lowered
-            or path.endswith(".xlsx")
-        ):
+                return text, DocumentExtractionStatus.EXTRACTED, ""
+            except Exception as exc:
+                return "", DocumentExtractionStatus.FAILED, f"docx extraction failed: {type(exc).__name__}: {exc}"
+        if "msword" in lowered or (path.endswith(".doc") and not path.endswith(".docx")):
+            return "", DocumentExtractionStatus.UNSUPPORTED, "DOC/OLE binary format not supported; requires an external converter"
+        if "spreadsheetml" in lowered or path.endswith(".xlsx"):
             try:
                 workbook = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
                 parts = []
@@ -120,7 +139,7 @@ class TenderDocumentIngestor:
                     for row in sheet.iter_rows(values_only=True):
                         parts.extend(str(value).strip() for value in row if value is not None and str(value).strip())
                 workbook.close()
-                return " ".join(parts), DocumentExtractionStatus.EXTRACTED
-            except Exception:
-                return "", DocumentExtractionStatus.FAILED
-        return "", DocumentExtractionStatus.PENDING
+                return " ".join(parts), DocumentExtractionStatus.EXTRACTED, ""
+            except Exception as exc:
+                return "", DocumentExtractionStatus.FAILED, f"xlsx extraction failed: {type(exc).__name__}: {exc}"
+        return "", DocumentExtractionStatus.PENDING, "unrecognized content type; no extractor matched"

@@ -10,6 +10,7 @@ import httpx
 from src.crm.telegram import handle_callback as handle_crm_callback
 from src.crm.telegram import handle_message as handle_crm_message
 from src.orchestrator import Orchestrator
+from src.security_redaction import redact_secrets
 from src.settings import AppSettings
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,10 @@ class TelegramBot:
             response.raise_for_status()
             return response.json()
 
+    def _safe_exc(self, exc: BaseException) -> str:
+        """Строковое представление исключения без Telegram-токена."""
+        return redact_secrets(str(exc), (self.bot_token,) if self.bot_token else None)
+
     def _send(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict | None:
         try:
             params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
@@ -81,14 +86,14 @@ class TelegramBot:
                 params["reply_markup"] = reply_markup
             return self._call("sendMessage", request_timeout=10.0, **params)
         except httpx.HTTPError as exc:
-            logger.error("Telegram-бот: ошибка отправки chat_id=%s: %s", chat_id, exc)
+            logger.error("Telegram-бот: ошибка отправки chat_id=%s: %s", chat_id, self._safe_exc(exc))
             return None
 
     def _answer_callback(self, callback_query_id: str) -> None:
         try:
             self._call("answerCallbackQuery", request_timeout=10.0, callback_query_id=callback_query_id)
         except httpx.HTTPError as exc:
-            logger.error("Telegram-бот: ошибка callback: %s", exc)
+            logger.error("Telegram-бот: ошибка callback: %s", self._safe_exc(exc))
 
     @staticmethod
     def _keyboard() -> dict:

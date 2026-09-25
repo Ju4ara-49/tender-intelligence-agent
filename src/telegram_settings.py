@@ -91,6 +91,7 @@ class TenderCriteria:
     law_type: str | None = None
     okpd2_codes: list[str] = field(default_factory=list)
     procurement_types: list[str] = field(default_factory=list)
+    document_search: bool = False
 
     def __post_init__(self) -> None:
         """Reject contradictory numeric ranges before they reach the search pipeline."""
@@ -195,12 +196,21 @@ class CriteriaStore:
                     customer TEXT,
                     customer_inn TEXT,
                     law_type TEXT,
+                    okpd2_codes TEXT NOT NULL DEFAULT '[]',
+                    procurement_types TEXT NOT NULL DEFAULT '[]',
+                    document_search INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL
                  )
                  """
             )
             columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({self.USERS_TABLE})").fetchall()}
-            for column, definition in (("exclude_keywords", "TEXT NOT NULL DEFAULT '[]'"), ("regions", "TEXT NOT NULL DEFAULT '[]'")):
+            for column, definition in (
+                ("exclude_keywords", "TEXT NOT NULL DEFAULT '[]'"),
+                ("regions", "TEXT NOT NULL DEFAULT '[]'"),
+                ("okpd2_codes", "TEXT NOT NULL DEFAULT '[]'"),
+                ("procurement_types", "TEXT NOT NULL DEFAULT '[]'"),
+                ("document_search", "INTEGER NOT NULL DEFAULT 0"),
+            ):
                 if column not in columns:
                     conn.execute(f"ALTER TABLE {self.USERS_TABLE} ADD COLUMN {column} {definition}")
             old_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tender_settings'").fetchone()
@@ -214,8 +224,9 @@ class CriteriaStore:
                             max_postpayment_days, min_submission_days, min_application_security_percent,
                             max_application_security_percent, min_contract_security_percent,
                             max_contract_security_percent, min_ai_score, keywords, exclude_keywords,
-                            regions, enabled_platforms, customer, customer_inn, law_type, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            regions, enabled_platforms, customer, customer_inn, law_type,
+                            okpd2_codes, procurement_types, document_search, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             self.DEFAULT_USER_ID, old_row["min_price"], old_row["max_price"], old_row["advance_required"],
@@ -223,7 +234,8 @@ class CriteriaStore:
                             old_row["min_application_security_percent"], old_row["max_application_security_percent"],
                             old_row["min_contract_security_percent"], old_row["max_contract_security_percent"],
                             old_row["min_ai_score"], old_row["keywords"], "[]", "[]",
-                            json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False), None, None, None, old_row["updated_at"],
+                            json.dumps(SUPPORTED_PLATFORMS, ensure_ascii=False), None, None, None,
+                            "[]", "[]", 0, old_row["updated_at"],
                         ),
                     )
 
@@ -246,8 +258,9 @@ class CriteriaStore:
                         max_postpayment_days, min_submission_days, min_application_security_percent,
                         max_application_security_percent, min_contract_security_percent,
                         max_contract_security_percent, min_ai_score, keywords, exclude_keywords,
-                        regions, enabled_platforms, customer, customer_inn, law_type, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        regions, enabled_platforms, customer, customer_inn, law_type,
+                        okpd2_codes, procurement_types, document_search, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id, source["min_price"], source["max_price"], source["advance_required"], source["min_advance_percent"],
@@ -260,6 +273,9 @@ class CriteriaStore:
                         source["customer"] if source["customer"] is not None else None,
                         source["customer_inn"] if source["customer_inn"] is not None else None,
                         source["law_type"] if source["law_type"] is not None else None,
+                        source["okpd2_codes"] if source["okpd2_codes"] is not None else "[]",
+                        source["procurement_types"] if source["procurement_types"] is not None else "[]",
+                        int(bool(source["document_search"])),
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
@@ -268,6 +284,17 @@ class CriteriaStore:
         normalized = self._current_user_id.get() if user_id is None else self.normalize_user_id(user_id)
         self._ensure_user(normalized)
         return normalized
+
+    def _sync_default_profile(self, user_id: str, **values) -> None:
+        """Keep legacy Telegram controls aligned with the canonical profile."""
+        from src.profiles import SearchProfileStore
+
+        store = SearchProfileStore(self.db)
+        profiles = store.list(user_id)
+        if not profiles:
+            return
+        profile = next((item for item in profiles if item.name == "Основной"), profiles[0])
+        store.update(user_id, int(profile.id), **values)
 
     def get(self, user_id: str | int | None = None) -> TenderCriteria:
         user_id = self._user_id_and_ensure(user_id)
@@ -283,6 +310,9 @@ class CriteriaStore:
             max_contract_security_percent=row["max_contract_security_percent"], min_ai_score=int(row["min_ai_score"]),
             exclude_keywords=self._loads(row["exclude_keywords"]), regions=self._loads(row["regions"]),
             customer=row["customer"], customer_inn=row["customer_inn"], law_type=row["law_type"],
+            okpd2_codes=normalize_okpd2_codes(self._loads(row["okpd2_codes"])),
+            procurement_types=normalize_procurement_types(self._loads(row["procurement_types"])),
+            document_search=bool(row["document_search"]),
         )
 
     @staticmethod
@@ -296,7 +326,7 @@ class CriteriaStore:
         return _clean_list(data) if isinstance(data, list) else []
 
     def update(self, user_id: str | int | None = None, **values) -> None:
-        allowed = {"min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days", "min_submission_days", "min_application_security_percent", "max_application_security_percent", "min_contract_security_percent", "max_contract_security_percent", "min_ai_score", "customer", "customer_inn", "law_type"}
+        allowed = {"min_price", "max_price", "advance_required", "min_advance_percent", "max_postpayment_days", "min_submission_days", "min_application_security_percent", "max_application_security_percent", "min_contract_security_percent", "max_contract_security_percent", "min_ai_score", "customer", "customer_inn", "law_type", "okpd2_codes", "procurement_types", "document_search"}
         values = {key: value for key, value in values.items() if key in allowed}
         if not values:
             return
@@ -316,13 +346,32 @@ class CriteriaStore:
             "min_ai_score": current.min_ai_score,
             "exclude_keywords": current.exclude_keywords,
             "regions": current.regions,
+            "okpd2_codes": current.okpd2_codes,
+            "procurement_types": current.procurement_types,
+            "document_search": current.document_search,
         }
         candidate.update(values)
         TenderCriteria(**candidate)
-        values["updated_at"] = datetime.now(timezone.utc).isoformat()
-        fields = ", ".join(f"{key} = ?" for key in values)
+        db_values = dict(values)
+        if "okpd2_codes" in db_values:
+            db_values["okpd2_codes"] = json.dumps(
+                normalize_okpd2_codes(db_values["okpd2_codes"]),
+                ensure_ascii=False,
+            )
+        if "procurement_types" in db_values:
+            db_values["procurement_types"] = json.dumps(
+                normalize_procurement_types(db_values["procurement_types"]),
+                ensure_ascii=False,
+            )
+        if "document_search" in db_values:
+            db_values["document_search"] = int(bool(db_values["document_search"]))
+        db_values["updated_at"] = datetime.now(timezone.utc).isoformat()
+        fields = ", ".join(f"{key} = ?" for key in db_values)
         with self.db._connect() as conn:
-            conn.execute(f"UPDATE {self.USERS_TABLE} SET {fields} WHERE user_id = ?", (*values.values(), user_id))
+            conn.execute(f"UPDATE {self.USERS_TABLE} SET {fields} WHERE user_id = ?", (*db_values.values(), user_id))
+        profile_values = {"exclusions" if key == "exclude_keywords" else key: value for key, value in values.items() if key != "updated_at"}
+        if profile_values:
+            self._sync_default_profile(user_id, **profile_values)
 
     def get_keywords(self, user_id: str | int | None = None) -> list[str] | None:
         user_id = self._user_id_and_ensure(user_id)
@@ -336,6 +385,7 @@ class CriteriaStore:
         user_id = self._user_id_and_ensure(user_id)
         with self.db._connect() as conn:
             conn.execute(f"UPDATE {self.USERS_TABLE} SET keywords = ?, updated_at = ? WHERE user_id = ?", (json.dumps(_clean_list(keywords), ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id))
+        self._sync_default_profile(user_id, keywords=_clean_list(keywords))
 
     def get_exclude_keywords(self, user_id: str | int | None = None) -> list[str]:
         user_id = self._user_id_and_ensure(user_id)
@@ -347,6 +397,7 @@ class CriteriaStore:
         user_id = self._user_id_and_ensure(user_id)
         with self.db._connect() as conn:
             conn.execute(f"UPDATE {self.USERS_TABLE} SET exclude_keywords = ?, updated_at = ? WHERE user_id = ?", (json.dumps(_clean_list(keywords), ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id))
+        self._sync_default_profile(user_id, exclusions=_clean_list(keywords))
 
     def get_regions(self, user_id: str | int | None = None) -> list[str]:
         user_id = self._user_id_and_ensure(user_id)
@@ -358,6 +409,7 @@ class CriteriaStore:
         user_id = self._user_id_and_ensure(user_id)
         with self.db._connect() as conn:
             conn.execute(f"UPDATE {self.USERS_TABLE} SET regions = ?, updated_at = ? WHERE user_id = ?", (json.dumps(_clean_list(regions), ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id))
+        self._sync_default_profile(user_id, regions=_clean_list(regions))
 
     def get_enabled_platforms(self, user_id: str | int | None = None) -> list[str]:
         user_id = self._user_id_and_ensure(user_id)
@@ -390,3 +442,4 @@ class CriteriaStore:
         clean = [x for x in dict.fromkeys(str(x).strip() for x in platforms) if x in SUPPORTED_PLATFORMS]
         with self.db._connect() as conn:
             conn.execute(f"UPDATE {self.USERS_TABLE} SET enabled_platforms = ?, updated_at = ? WHERE user_id = ?", (json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), user_id))
+        self._sync_default_profile(user_id, platforms=clean)

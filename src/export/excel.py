@@ -37,7 +37,8 @@ def export_tenders_to_excel(
                 SELECT
                     t.id, t.platform, t.external_id, t.title, t.url, t.description,
                     t.price, t.currency, t.deadline, t.published_at, t.region,
-                    t.customer, t.law_type, t.raw_data, a.relevance_score,
+                    t.customer, t.law_type, t.okpd2_codes, t.procurement_type,
+                    t.raw_data, a.relevance_score,
                     a.summary, a.recommendation, a.risks, a.deadline_note,
                     a.is_stub, a.analyzed_at
                 FROM tenders t
@@ -65,7 +66,7 @@ def export_tenders_to_excel(
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
         "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
-        "Risk", "Risk factors", "Lifecycle",
+        "Risk", "Risk factors", "Lifecycle", "ОКПД2", "Режим процедуры",
     ]
     ws.append(headers)
 
@@ -85,6 +86,11 @@ def export_tenders_to_excel(
             raw_data = {}
 
         procurement_method = raw_data.get("procurement_method", "")
+        try:
+            okpd2_codes = "; ".join(json.loads(row["okpd2_codes"] or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            okpd2_codes = str(row["okpd2_codes"] or "")
+        procurement_type = str(row["procurement_type"] or "")
         platform_names = {
             "eis": "ЕИС", "b2b_center": "B2B-Center", "fabrikant": "Фабрикант",
             "fabricant": "Фабрикант", "rts_tender": "РТС-тендер", "tmk": "ТМК", "rosatom": "Росатом",
@@ -138,6 +144,7 @@ def export_tenders_to_excel(
             task.priority.value if task else "",
             task.responsible if task else "",
             task.notes if task else "", risk_level, risk_factors, lifecycle_value,
+            okpd2_codes, procurement_type,
         ])
 
     # Q = Ссылка: делаем URL настоящей гиперссылкой Excel.
@@ -154,6 +161,7 @@ def export_tenders_to_excel(
         1: 14, 2: 22, 3: 55, 4: 32, 5: 18, 6: 20, 7: 8, 8: 14, 9: 24,
         10: 20, 11: 8, 12: 30, 13: 10, 14: 18, 15: 45, 16: 35, 17: 55,
         18: 20, 19: 18, 20: 18, 21: 22, 22: 40, 23: 12, 24: 35, 25: 16,
+        26: 18, 27: 22,
     }
     for column, width in widths.items():
         ws.column_dimensions[get_column_letter(column)].width = width

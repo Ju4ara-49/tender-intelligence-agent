@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import httpx
 
 from src.models.tender import Tender, TenderAnalysis
+from src.security_redaction import redact_secrets
 from src.tenderplan import TenderTaskStore
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,8 @@ class TelegramNotifier:
             logger.info("Telegram: сообщение отправлено в chat_id=%s", target_chat_id)
             return True
         except (httpx.HTTPError, ValueError) as exc:
-            logger.error("Telegram: ошибка отправки в chat_id=%s: %s", target_chat_id, exc)
+            safe_exc = redact_secrets(str(exc), (self.bot_token,) if self.bot_token else None)
+            logger.error("Telegram: ошибка отправки в chat_id=%s: %s", target_chat_id, safe_exc)
             return False
 
     @classmethod

@@ -13,4 +13,6 @@ license = {file = "LICENSE"}
 # Exclude backup artifacts from discovery: `backups/search_ux_*` mirrors test
 # filenames (e.g. test_search_profiles.py) and collides under the default
 # prepend import mode, surfacing as 4 collection errors on a bare `pytest -q`.
-addopts = "--ignore=backups"
+# Doctest text files default to `test*.txt`, which collides with runtime and
+# test output artifacts. Keep doctest collection on documentation files only.
+addopts = "--ignore=backups --doctest-glob=*.rst"

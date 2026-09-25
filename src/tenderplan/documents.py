@@ -13,6 +13,8 @@ class DocumentExtractionStatus:
     PENDING = "pending"
     EXTRACTED = "extracted"
     FAILED = "failed"
+    UNSUPPORTED = "unsupported"
+    PARTIAL = "partial"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +29,7 @@ class TenderDocument:
     downloaded_at: datetime | None = None
     extraction_status: str = DocumentExtractionStatus.PENDING
     extracted_text: str = ""
+    diagnostics: str = ""
     created_at: datetime | None = None
     etag: str = ""
     last_modified: str = ""
@@ -79,6 +82,7 @@ class TenderDocumentStore:
                     downloaded_at TEXT,
                     extraction_status TEXT NOT NULL DEFAULT 'pending',
                     extracted_text TEXT NOT NULL DEFAULT '',
+                    diagnostics TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     etag TEXT NOT NULL DEFAULT '',
                     last_modified TEXT NOT NULL DEFAULT '',
@@ -87,7 +91,7 @@ class TenderDocumentStore:
                 )
                 """
             )
-            for column in ("etag", "last_modified"):
+            for column in ("etag", "last_modified", "diagnostics"):
                 try:
                     conn.execute(f"ALTER TABLE tender_documents ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
                 except sqlite3.OperationalError as exc:
@@ -139,9 +143,10 @@ class TenderDocumentStore:
             downloaded_at=TenderDocumentStore._parse(row["downloaded_at"]),
             extraction_status=str(row["extraction_status"]),
             extracted_text=str(row["extracted_text"]),
+            diagnostics=str(row["diagnostics"]),
             created_at=TenderDocumentStore._parse(row["created_at"]),
-            etag=str(row["etag"] or ""),
-            last_modified=str(row["last_modified"] or ""),
+            etag=str(row["etag"]),
+            last_modified=str(row["last_modified"]),
         )
 
     def latest(self, tender_key: str, url: str) -> TenderDocument | None:
@@ -164,6 +169,7 @@ class TenderDocumentStore:
         downloaded_at: datetime | None = None,
         extraction_status: str = DocumentExtractionStatus.PENDING,
         extracted_text: str = "",
+        diagnostics: str = "",
         etag: str = "",
         last_modified: str = "",
     ) -> TenderDocument:
@@ -191,8 +197,9 @@ class TenderDocumentStore:
                 """
                 INSERT INTO tender_documents
                     (document_id, tender_key, url, filename, content_type, sha256,
-                     version, downloaded_at, extraction_status, extracted_text, created_at, etag, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     version, downloaded_at, extraction_status, extracted_text,
+                     diagnostics, created_at, etag, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -205,6 +212,7 @@ class TenderDocumentStore:
                     self._iso(downloaded_at or now),
                     str(extraction_status),
                     str(extracted_text or ""),
+                    str(diagnostics or ""),
                     now.isoformat(),
                     str(etag or ""),
                     str(last_modified or ""),

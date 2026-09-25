@@ -154,7 +154,7 @@ def test_excel_export_uses_post_filter_result_ids_not_diagnostic_persistence_ids
 
 def test_notification_dedup_does_not_skip_ai_or_lifecycle_progression():
     source = Path(Orchestrator.__module__.replace(".", "/") + ".py").read_text(encoding="utf-8")
-    analyze_pos = source.index("analysis = self.analyzer.analyze(tender)")
+    analyze_pos = source.index("analysis = self.analyzer.analyze(")
     dedup_pos = source.index(
         'if self.notification_state.was_notified(tender, recipient_key=recipient_key):',
         analyze_pos,
@@ -164,3 +164,297 @@ def test_notification_dedup_does_not_skip_ai_or_lifecycle_progression():
         analyze_pos,
     )
     assert analyze_pos < lifecycle_pos < dedup_pos
+
+
+def test_search_profile_deterministic_end_to_end_to_excel(monkeypatch, tmp_path):
+    from openpyxl import load_workbook
+
+    from src.models.tender import TenderAnalysis
+    from src.profiles import SearchProfileStore
+    from src.settings import AppSettings
+    from src.tenderplan import TenderLifecycleStatus, application_task_id
+
+    class FakeCollector:
+        platform = "eis"
+        deadline = datetime(2030, 1, 20, 12, 0, tzinfo=timezone.utc)
+
+        def __init__(self):
+            self.price = 100000.0
+
+        def search(self, keywords, since=None):
+            return [Tender(
+                platform=self.platform,
+                external_id="E2E-1",
+                title="Поставка подшипников",
+                url="https://example.test/e2e-1",
+                description="Подшипники для оборудования",
+            )]
+
+        def get_details(self, external_id):
+            return Tender(
+                platform=self.platform,
+                external_id=external_id,
+                title="Поставка подшипников",
+                url="https://example.test/e2e-1",
+                description="Подшипники для оборудования",
+                price=self.price,
+                deadline=self.deadline,
+                region="Москва",
+                customer="ООО Е2Е",
+                customer_inn="7701234567",
+                law_type="44-ФЗ",
+                advance_required=True,
+                advance_percent=20,
+                postpayment_days=15,
+                application_security_percent=2,
+                contract_security_percent=10,
+                okpd2_codes=["26.30.11"],
+                procurement_type="commercial",
+            )
+
+    class FakeAnalyzer:
+        def analyze(self, tender, *, search_documents=True):
+            return TenderAnalysis(85, "Подходит", "participate")
+
+    class FakeNotifier:
+        def __init__(self):
+            self.sent = []
+
+        def send_tender_alert(self, tender, analysis, chat_id=None):
+            self.sent.append((tender.unique_key, chat_id))
+            return True
+
+    db_path = tmp_path / "e2e.db"
+    output_dir = tmp_path / "output"
+    settings = AppSettings(
+        config={
+            "storage": {"database_path": str(db_path)},
+            "export": {"output_dir": str(output_dir)},
+            "filters": {"min_text_length": 1},
+            "search": {"platform_workers": 1},
+            "notifications": {"telegram": {"dry_run_when_no_token": True}},
+        },
+        keywords={"include": ["подшипники"]},
+    )
+    collector = FakeCollector()
+    monkeypatch.setattr("src.orchestrator.get_enabled_collectors", lambda config, enabled_platforms=None: [collector])
+
+    orchestrator = Orchestrator(settings)
+    orchestrator.analyzer = FakeAnalyzer()
+    notifier = FakeNotifier()
+    orchestrator.notifier = notifier
+    SearchProfileStore(orchestrator.db).create(
+        "user-e2e",
+        name="Е2Е профиль",
+        keywords=["подшипники"],
+        platforms=["eis"],
+        regions=["Москва"],
+        min_price=50000,
+        max_price=200000,
+        advance_required=True,
+        min_advance_percent=10,
+        max_postpayment_days=30,
+        min_submission_days=7,
+        max_application_security_percent=5,
+        max_contract_security_percent=20,
+        okpd2_codes=["26.30"],
+        procurement_types=["commercial"],
+    )
+
+    first = orchestrator.run_cycle_for_user("user-e2e")
+    assert first[0]["new"] == 1
+    assert first[0]["analyzed"] == 1
+    assert first[0]["notified"] == 1
+    assert orchestrator.lifecycle_store.get("eis:E2E-1") is TenderLifecycleStatus.SHORTLISTED
+    assert orchestrator.task_store.get(application_task_id("eis:E2E-1", "user-e2e"), user_id="user-e2e") is not None
+    first_excel = sorted(output_dir.glob("search_*.xlsx"))[-1]
+    first_sheet = load_workbook(first_excel)["Тендеры"]
+    assert first_sheet.max_row == 2
+    assert first_sheet["C2"].value == "Поставка подшипников"
+
+    second = orchestrator.run_cycle_for_user("user-e2e")
+    assert second[0]["new"] == 0
+    assert second[0]["skipped_duplicate"] == 1
+    assert len(notifier.sent) == 1
+
+    collector.price = 120000.0
+    third = orchestrator.run_cycle_for_user("user-e2e")
+    assert third[0]["new"] == 0
+    assert third[0]["notified"] == 1
+    assert len(notifier.sent) == 2
+    assert orchestrator.db.get_tender("eis:E2E-1").price == 120000.0
+    tender_id = orchestrator.db.get_tender_id("eis:E2E-1")
+    assert len(orchestrator.db.get_tender_history(tender_id)) == 2
+
+
+class _FakeDocument:
+    """Minimal stand-in for a TenderDocument ingest result."""
+
+    def __init__(self, url: str, text: str, status: str):
+        import hashlib
+
+        self.url = url
+        self.extracted_text = text
+        self.extraction_status = status
+        self.version = 1
+        self.sha256 = hashlib.sha256(url.encode()).hexdigest()
+        self.diagnostics = ""
+
+
+class _FakeIngestResult:
+    def __init__(self, document: _FakeDocument, downloaded: bool = True):
+        self.document = document
+        self.downloaded = downloaded
+
+
+class _FakeDocumentIngestor:
+    """Deterministic document ingestor: URL ending in '#fail' -> failed extraction."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def ingest(self, *, tender_key: str, url: str, filename: str = "", content_type: str = ""):
+        self.calls.append(url)
+        if url.endswith("#fail"):
+            return _FakeIngestResult(_FakeDocument(url, "", "failed"))
+        text = f"Техническое задание: поставка подшипников SKF для {filename or url}"
+        return _FakeIngestResult(_FakeDocument(url, text, "extracted"))
+
+
+class _DocumentCollector:
+    """Discovery title has NO keyword; the keyword lives only in documents."""
+
+    platform = "eis"
+
+    def __init__(self, documents: list[dict[str, str]]):
+        self.documents = documents
+
+    def search(self, keywords, since=None):
+        return [Tender(
+            platform=self.platform,
+            external_id="DOC-1",
+            title="Закупка оборудования для цеха",
+            url="https://example.test/doc-1",
+        )]
+
+    def get_details(self, external_id: str) -> Tender:
+        return Tender(
+            platform=self.platform,
+            external_id=external_id,
+            title="Закупка оборудования для цеха",
+            url="https://example.test/doc-1",
+            description="Подробное описание потребности",
+            price=300000.0,
+            deadline=datetime(2030, 1, 20, 12, 0, tzinfo=timezone.utc),
+            region="Москва",
+            customer="ООО Документ",
+            documents=list(self.documents),
+        )
+
+
+def _run_document_cycle(monkeypatch, tmp_path, documents, search_documents=True):
+    from src.models.tender import TenderAnalysis
+    from src.profiles import SearchProfileStore
+    from src.settings import AppSettings
+
+    class FakeAnalyzer:
+        def analyze(self, tender, *, search_documents=True):
+            return TenderAnalysis(90, "Подшипники в документе", "participate")
+
+    class FakeNotifier:
+        def __init__(self):
+            self.sent = []
+
+        def send_tender_alert(self, tender, analysis, chat_id=None):
+            self.sent.append(tender.unique_key)
+            return True
+
+    settings = AppSettings(
+        config={
+            "storage": {"database_path": str(tmp_path / "doc.db")},
+            "export": {"output_dir": str(tmp_path / "out")},
+            "filters": {"min_text_length": 1},
+            "search": {"platform_workers": 1},
+            "notifications": {"telegram": {"dry_run_when_no_token": True}},
+        },
+        keywords={"include": ["подшипник"]},
+    )
+    collector = _DocumentCollector(documents)
+    ingestor = _FakeDocumentIngestor()
+    monkeypatch.setattr(
+        "src.orchestrator.get_enabled_collectors",
+        lambda config, enabled_platforms=None: [collector],
+    )
+    orchestrator = Orchestrator(settings)
+    orchestrator.document_ingestor = ingestor
+    orchestrator.analyzer = FakeAnalyzer()
+    notifier = FakeNotifier()
+    orchestrator.notifier = notifier
+    SearchProfileStore(orchestrator.db).create(
+        "user-doc",
+        name="Документный профиль",
+        keywords=["подшипник"],
+        platforms=["eis"],
+        document_search=search_documents,
+        max_application_security_percent=None,
+        max_contract_security_percent=None,
+    )
+    result = orchestrator.run_cycle_for_user("user-doc")
+    return orchestrator, result[0], notifier, ingestor
+
+
+def test_document_search_finds_keyword_only_in_document(monkeypatch, tmp_path):
+    """Keyword exists only in an extracted document -> tender is found and indexed."""
+    documents = [{"name": "tz.pdf", "url": "https://example.test/tz.pdf"}]
+    orchestrator, stats, notifier, ingestor = _run_document_cycle(monkeypatch, tmp_path, documents)
+
+    assert stats["found"] == 1
+    assert stats["new"] == 1
+    assert stats["notified"] == 1
+    assert stats["analyzed"] == 1
+    assert ingestor.calls == ["https://example.test/tz.pdf"]
+    stored = orchestrator.db.get_tender("eis:DOC-1")
+    assert "подшипник" in stored.full_text
+
+    second = orchestrator.run_cycle_for_user("user-doc")
+    assert second[0]["skipped_duplicate"] == 1
+    assert second[0]["notified"] == 0
+    assert len(notifier.sent) == 1
+
+
+def test_document_search_off_does_not_match_document_keyword(monkeypatch, tmp_path):
+    """With document_search=False the same tender must NOT match."""
+    documents = [{"name": "tz.pdf", "url": "https://example.test/tz.pdf"}]
+    _, stats, _, _ = _run_document_cycle(monkeypatch, tmp_path, documents, search_documents=False)
+    assert stats["filtered"] == 0
+    assert stats["keyword_excluded"] == 1
+
+
+def test_failed_document_is_not_claimed_as_indexed(monkeypatch, tmp_path):
+    """A failed extraction provides no text; only the good document is searchable."""
+    documents = [
+        {"name": "tz.pdf", "url": "https://example.test/tz.pdf#fail"},
+        {"name": "spec.pdf", "url": "https://example.test/spec.pdf"},
+    ]
+    orchestrator, stats, _, _ = _run_document_cycle(monkeypatch, tmp_path, documents)
+
+    assert stats["documents_discovered"] == 2
+    stored = orchestrator.db.get_tender("eis:DOC-1")
+    assert "spec.pdf" in stored.raw_data.get("document_contents", "")
+    assert "#fail" not in stored.raw_data.get("document_contents", "")
+    versions = stored.raw_data.get("document_versions", [])
+    failed = [v for v in versions if v["extraction_status"] == "failed"]
+    assert len(failed) == 1
+    assert failed[0]["url"] == "https://example.test/tz.pdf#fail"
+
+
+def test_tender_without_documents_still_passes_pipeline(monkeypatch, tmp_path):
+    """No documents: keyword never matches -> no save-notification, no ingest calls."""
+    orchestrator, stats, notifier, ingestor = _run_document_cycle(monkeypatch, tmp_path, [])
+    assert stats["documents_discovered"] == 0
+    assert ingestor.calls == []
+    assert notifier.sent == []
+    # Keyword "подшипник" is absent everywhere -> strict filter excludes the tender.
+    assert stats["filtered"] == 0
+    assert stats["keyword_excluded"] == 1
+    assert stats["notified"] == 0

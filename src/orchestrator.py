@@ -118,6 +118,7 @@ class Orchestrator:
         for field_name in (
             "title", "description", "price", "currency", "start_date", "end_date",
             "deadline", "published_at", "region", "customer", "customer_inn", "law_type",
+            "okpd2_codes", "procurement_type",
             "advance_percent", "postpayment_days", "application_security_percent",
             "contract_security_percent", "url",
         ):
@@ -188,17 +189,28 @@ class Orchestrator:
                         "version": document.version,
                         "sha256": document.sha256,
                         "extraction_status": document.extraction_status,
+                        "diagnostics": document.diagnostics,
                     }
                 )
                 if document.extracted_text:
                     extracted_texts.append(document.extracted_text)
             except Exception as exc:
                 failed += 1
+                reason = f"{type(exc).__name__}: {exc}"
                 logger.warning(
                     "TenderPlan: document ingestion failed for %s (%s): %s",
                     tender.unique_key,
                     url,
                     exc,
+                )
+                versions.append(
+                    {
+                        "url": url,
+                        "version": 0,
+                        "sha256": "",
+                        "extraction_status": "failed",
+                        "diagnostics": str(reason)[:1000],
+                    }
                 )
         if extracted_texts:
             tender.raw_data["document_contents"] = "\n".join(extracted_texts)
@@ -335,6 +347,16 @@ class Orchestrator:
             return False, "customer_inn"
         if criteria.law_type and not Orchestrator._matches_law_type(tender.law_type, criteria.law_type):
             return False, "law_type"
+        if criteria.okpd2_codes:
+            tender_codes = {str(code).strip() for code in tender.okpd2_codes if str(code).strip()}
+            if not any(
+                actual == requested or actual.startswith(f"{requested}.")
+                for actual in tender_codes
+                for requested in criteria.okpd2_codes
+            ):
+                return False, "okpd2_codes"
+        if criteria.procurement_types and tender.procurement_type not in criteria.procurement_types:
+            return False, "procurement_type"
         return True, ""
 
     @staticmethod
@@ -681,7 +703,10 @@ class Orchestrator:
             # notified tender must still be re-analyzed so persisted AI/lifecycle
             # state can reflect title/price/deadline/document changes.
             try:
-                analysis = self.analyzer.analyze(tender)
+                analysis = self.analyzer.analyze(
+                    tender,
+                    search_documents=search_documents,
+                )
             except Exception as exc:
                 stats["ai_failed"] += 1
                 logger.exception("AI: ошибка анализа %s: %s", tender.unique_key, exc)

@@ -85,6 +85,20 @@ def test_tender_round_trip_restores_normalized_contract(tmp_path):
     assert restored.detail_status == tender.detail_status
     assert db.get_tender_id(tender.unique_key) == tender_id
 
+def test_tender_round_trip_persists_contract_classification(tmp_path):
+    db = TenderDatabase(tmp_path / "contract-fields.sqlite3")
+    tender = _tender(external_id="contract-1")
+    tender.okpd2_codes = ["01.11.12"]
+    tender.procurement_type = "commercial"
+    tender._persist_normalized_fields()
+
+    db.save_tender(tender)
+    restored = db.get_tender(tender.unique_key)
+
+    assert restored is not None
+    assert restored.okpd2_codes == ["01.11.12"]
+    assert restored.procurement_type == "commercial"
+
 
 def test_tender_history_records_creation_and_real_change(tmp_path):
     db = TenderDatabase(tmp_path / "test.sqlite3")

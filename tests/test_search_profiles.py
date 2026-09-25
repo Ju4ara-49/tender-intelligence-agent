@@ -46,6 +46,40 @@ def test_default_profile_migrates_real_criteria(tmp_path):
     assert profile.min_ai_score == 85
 
 
+def test_default_profile_copies_contract_criteria(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract_default.sqlite3")
+    criteria = CriteriaStore(db)
+    criteria.update(
+        "user-a",
+        okpd2_codes=["01.11"],
+        procurement_types=["bankruptcy_property"],
+        document_search=True,
+    )
+
+    profile = SearchProfileStore(db).ensure_default_profile("user-a", criteria)
+
+    assert profile.okpd2_codes == ["01.11"]
+    assert profile.procurement_types == ["bankruptcy_property"]
+    assert profile.document_search is True
+
+
+def test_legacy_criteria_controls_sync_existing_default_profile(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_legacy_sync.sqlite3")
+    criteria = CriteriaStore(db)
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(name="Основной", keywords=["старое"]))
+
+    criteria.set_keywords("user-a", ["новое"])
+    criteria.update("user-a", min_price=100000, min_submission_days=9)
+    criteria.set_regions("user-a", ["Москва"])
+
+    loaded = store.get("user-a", profile.id)
+    assert loaded.keywords == ["новое"]
+    assert loaded.min_price == 100000
+    assert loaded.min_submission_days == 9
+    assert loaded.regions == ["Москва"]
+
+
 def test_profile_stats_are_derived_from_recorded_runs(tmp_path):
     db = TenderDatabase(tmp_path / "profiles.sqlite3")
     store = SearchProfileStore(db)

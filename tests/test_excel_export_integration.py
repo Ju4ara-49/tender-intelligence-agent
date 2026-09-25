@@ -2,6 +2,9 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openpyxl import load_workbook
 
@@ -39,6 +42,8 @@ def main() -> None:
         region="Москва",
         customer="Тестовый заказчик",
         law_type="223-ФЗ",
+        okpd2_codes=["01.11.12"],
+        procurement_type="commercial",
         raw_data={"procurement_method": "Запрос предложений"},
     )
     tender_id = db.save_tender(tender)
@@ -80,7 +85,7 @@ def main() -> None:
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
         "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
-        "Risk", "Risk factors", "Lifecycle",
+        "Risk", "Risk factors", "Lifecycle", "ОКПД2", "Режим процедуры",
     ]
     assert headers == expected, headers
     # Даты экспортируются в московском времени (UTC+3), а не в UTC.
@@ -100,6 +105,8 @@ def main() -> None:
     assert ws["T2"].value == "high"
     assert ws["U2"].value == "Иван"
     assert ws["Y2"].value == "shortlisted"
+    assert ws["Z2"].value == "01.11.12"
+    assert ws["AA2"].value == "commercial"
     hyperlink = ws["Q2"].hyperlink
     assert hyperlink is not None
     assert hyperlink.target == "https://example.com/tender/GHA-TEST-001"
