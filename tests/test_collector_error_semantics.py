@@ -174,7 +174,7 @@ def test_browser_search_one_waf_raises_unavailable(monkeypatch):
 
     monkeypatch.setattr(collector, "timeout_ms", 5000)
     monkeypatch.setattr(collector, "max_results", 100)
-    monkeypatch.setattr(collector, "BASE_URL", "https://223.rts-tender.ru/")
+    monkeypatch.setattr(collector, "BASE_URL", "https://www.rts-tender.ru/")
     monkeypatch.setattr(collector, "_goto", lambda *a, **kw: None)
     monkeypatch.setattr(collector, "_perform_search", lambda *a, **kw: True)
     monkeypatch.setattr(collector, "_dismiss_consent", lambda *a, **kw: None)

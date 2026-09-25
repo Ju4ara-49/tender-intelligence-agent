@@ -42,9 +42,9 @@ class BrowserPublicParserTests(unittest.TestCase):
           <a href="/files/terms.pdf">Дубликат</a>
         </body></html>
         """
-        tender = RtsTenderCollector()._parse_detail(html, "1234567", "https://223.rts-tender.ru/procedure/1234567/")
+        tender = RtsTenderCollector()._parse_detail(html, "1234567", "https://www.rts-tender.ru/procedure/1234567/")
         self.assertEqual(len(tender.documents), 2)
-        self.assertEqual(tender.documents[0]["url"], "https://223.rts-tender.ru/files/terms.pdf")
+        self.assertEqual(tender.documents[0]["url"], "https://www.rts-tender.ru/files/terms.pdf")
         self.assertEqual(tender.documents[0]["content_type"], "application/pdf")
         self.assertEqual(tender.raw_data["documents"], tender.documents)
 
