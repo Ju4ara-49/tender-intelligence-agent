@@ -248,6 +248,6 @@ class _BrowserTenderCollector(BaseCollector):
         except ValueError:return None
 
 class RtsTenderCollector(_BrowserTenderCollector):
-    platform="rts_tender"; BASE_URL="https://223.rts-tender.ru/"; SEARCH_HINTS=("Поиск","Поиск закупок","Закупки"); LINK_HINTS=("/poisk/","/procedure","/tender","zakup")
+    platform="rts_tender"; BASE_URL="https://www.rts-tender.ru/"; SEARCH_HINTS=("Поиск","Поиск закупок","Закупки"); LINK_HINTS=("/poisk/","/procedure","/tender","zakup")
 class TmkCollector(_BrowserTenderCollector):
     platform="tmk"; BASE_URL="https://stock.tmk-group.com/auction/"; SEARCH_HINTS=("Применить","Поиск","Найти"); LINK_HINTS=("/auction/","stock.tmk-group.com")
