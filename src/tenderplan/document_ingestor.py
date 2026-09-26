@@ -28,9 +28,26 @@ class DocumentIngestResult:
 class TenderDocumentIngestor:
     """Small deterministic document ingestor; unchanged bytes are never re-saved."""
 
-    def __init__(self, store: TenderDocumentStore, timeout: float = 30.0) -> None:
+    DEFAULT_MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
+    DEFAULT_MAX_ARCHIVE_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+    DEFAULT_MAX_EXTRACTED_TEXT_BYTES = 10 * 1024 * 1024
+
+    def __init__(
+        self,
+        store: TenderDocumentStore,
+        timeout: float = 30.0,
+        *,
+        max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES,
+        max_archive_uncompressed_bytes: int = DEFAULT_MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+        max_extracted_text_bytes: int = DEFAULT_MAX_EXTRACTED_TEXT_BYTES,
+    ) -> None:
         self.store = store
         self.timeout = timeout
+        self.max_download_bytes = int(max_download_bytes)
+        self.max_archive_uncompressed_bytes = int(max_archive_uncompressed_bytes)
+        self.max_extracted_text_bytes = int(max_extracted_text_bytes)
+        if min(self.max_download_bytes, self.max_archive_uncompressed_bytes, self.max_extracted_text_bytes) <= 0:
+            raise ValueError("document ingestion limits must be positive")
 
     def ingest(
         self,
@@ -50,7 +67,20 @@ class TenderDocumentIngestor:
         request = Request(url, headers=headers)
         try:
             with urlopen(request, timeout=self.timeout) as response:
-                content = response.read()
+                declared_length = response.headers.get("Content-Length")
+                if declared_length and int(declared_length) > self.max_download_bytes:
+                    raise ValueError(f"document exceeds download limit ({self.max_download_bytes} bytes)")
+                chunks: list[bytes] = []
+                total = 0
+                while True:
+                    chunk = response.read(min(1024 * 1024, self.max_download_bytes - total + 1))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > self.max_download_bytes:
+                        raise ValueError(f"document exceeds download limit ({self.max_download_bytes} bytes)")
+                    chunks.append(chunk)
+                content = b"".join(chunks)
                 detected_type = (response.headers.get("Content-Type") or content_type or "").split(";", 1)[0].strip()
                 etag = response.headers.get("ETag", "")
                 last_modified = response.headers.get("Last-Modified", "")
@@ -89,14 +119,20 @@ class TenderDocumentIngestor:
         """
         return None
 
+    def _bounded_text(self, text: str) -> str:
+        raw = text.encode("utf-8", errors="replace")
+        if len(raw) <= self.max_extracted_text_bytes:
+            return text
+        return raw[:self.max_extracted_text_bytes].decode("utf-8", errors="ignore")
+
     def _extract(self, content: bytes, content_type: str, url: str) -> tuple[str, str, str]:
         lowered = content_type.lower()
         path = urlparse(url).path.lower()
         if "html" in lowered or path.endswith((".html", ".htm")):
             soup = BeautifulSoup(content, "lxml")
-            return soup.get_text(" ", strip=True), DocumentExtractionStatus.EXTRACTED, ""
+            return self._bounded_text(soup.get_text(" ", strip=True)), DocumentExtractionStatus.EXTRACTED, ""
         if "text/" in lowered or path.endswith((".txt", ".csv", ".xml", ".json")):
-            return content.decode("utf-8", errors="replace").strip(), DocumentExtractionStatus.EXTRACTED, ""
+            return self._bounded_text(content.decode("utf-8", errors="replace").strip()), DocumentExtractionStatus.EXTRACTED, ""
         if "pdf" in lowered or path.endswith(".pdf"):
             try:
                 reader = PdfReader(BytesIO(content))
@@ -113,12 +149,15 @@ class TenderDocumentIngestor:
                         if ocr:
                             return ocr.strip(), DocumentExtractionStatus.EXTRACTED, ""
                         return "", DocumentExtractionStatus.UNSUPPORTED, "scanned PDF: no text layer (raster images); OCR engine unavailable"
-                return text, DocumentExtractionStatus.EXTRACTED, ""
+                return self._bounded_text(text), DocumentExtractionStatus.EXTRACTED, ""
             except Exception as exc:
                 return "", DocumentExtractionStatus.FAILED, f"pdf extraction failed: {type(exc).__name__}: {exc}"
         if "wordprocessingml" in lowered or path.endswith(".docx"):
             try:
                 with zipfile.ZipFile(BytesIO(content)) as archive:
+                    info = archive.getinfo("word/document.xml")
+                    if info.file_size > self.max_archive_uncompressed_bytes:
+                        return "", DocumentExtractionStatus.FAILED, "docx XML exceeds archive extraction limit"
                     xml = archive.read("word/document.xml")
                 root = ET.fromstring(xml)
                 text = " ".join(
