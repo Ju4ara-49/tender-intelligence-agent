@@ -128,6 +128,8 @@ class TelegramNotifier:
         price_str = "не указан"
         if tender.price is not None:
             price_str = f"{tender.price:,.0f} {tender.currency}".replace(",", " ")
+        start_str = tender.start_date.strftime("%d.%m.%Y") if tender.start_date else "не указана"
+        end_str = tender.end_date.strftime("%d.%m.%Y") if tender.end_date else "не указана"
         deadline_str = tender.deadline.strftime("%d.%m.%Y") if tender.deadline else "не указан"
         risks = ""
         if analysis.risks:
@@ -153,7 +155,10 @@ class TelegramNotifier:
             f"{emoji} <b>Новый тендер ({score}/100)</b>\n\n"
             f"🏷️ <b>Площадка:</b> {platform}\n"
             f"📋 {title}\n"
-            f"💰 {price_str} | ⏰ до {deadline_str}\n"
+            f"💰 {price_str}\n"
+            f"📅 <b>Дата начала:</b> {start_str}\n"
+            f"📅 <b>Дата окончания:</b> {end_str}\n"
+            f"⏰ <b>Срок подачи:</b> {deadline_str}\n"
             f"🏢 {customer}\n\n"
             f"📝 {summary}\n{risks}\n"
             f"💡 <b>Рекомендация:</b> {rec}{stub_note}\n\n"
