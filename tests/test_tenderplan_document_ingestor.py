@@ -152,3 +152,46 @@ def test_ingestor_rejects_oversized_docx_xml(tmp_path: Path):
     assert text == ""
     assert status == "failed"
     assert "archive extraction limit" in diagnostics
+
+
+def test_ingestor_bounds_xlsx_extraction(tmp_path: Path):
+    from io import BytesIO
+    import openpyxl
+
+    payload = BytesIO()
+    workbook = openpyxl.Workbook()
+    workbook.active["A1"] = "x" * 100
+    workbook.save(payload)
+    workbook.close()
+
+    store = TenderDocumentStore(tmp_path / "xlsx-limit.db")
+    ingestor = TenderDocumentIngestor(store, max_extracted_text_bytes=20)
+    text, status, diagnostics = ingestor._extract(
+        payload.getvalue(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "http://example.test/a.xlsx",
+    )
+    assert len(text.encode("utf-8")) <= 20
+    assert status == "partial"
+    assert "truncated" in diagnostics
+
+
+def test_ingestor_rejects_docx_archive_with_large_total_uncompressed_size(tmp_path: Path):
+    from io import BytesIO
+    import zipfile
+
+    payload = BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("word/document.xml", "<w:document><w:t>ok</w:t></w:document>")
+        archive.writestr("word/large.bin", b"x" * 100)
+
+    store = TenderDocumentStore(tmp_path / "docx-total-limit.db")
+    ingestor = TenderDocumentIngestor(store, max_archive_uncompressed_bytes=64)
+    text, status, diagnostics = ingestor._extract(
+        payload.getvalue(),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "http://example.test/a.docx",
+    )
+    assert text == ""
+    assert status == "failed"
+    assert "archive exceeds extraction limit" in diagnostics
