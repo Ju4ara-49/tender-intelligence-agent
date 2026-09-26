@@ -385,7 +385,7 @@ class TenderBoard:
         with self.db._connect() as conn:
             if self._scoped:
                 rows = conn.execute(
-                    f"SELECT t.id, t.title, t.url, t.deadline, t.price, t.customer, COALESCE(b.assignee, '') AS assignee, COALESCE(b.updated_at, '') AS updated_at FROM tenders AS t LEFT JOIN {table} AS b ON b.tender_id = t.id AND b.user_id = ? WHERE COALESCE(b.status, 'new') = ? ORDER BY t.deadline IS NULL, t.deadline ASC, t.id ASC",
+                    f"SELECT t.id, t.title, t.url, t.deadline, t.price, t.customer, b.assignee, b.updated_at FROM tenders AS t JOIN {table} AS b ON b.tender_id = t.id AND b.user_id = ? WHERE b.status = ? ORDER BY t.deadline IS NULL, t.deadline ASC, t.id ASC",
                     (self.user_id, status),
                 ).fetchall()
             else:
@@ -440,8 +440,8 @@ class TenderBoard:
         with self.db._connect() as conn:
             if self._scoped:
                 rows = conn.execute(
-                    f"SELECT t.id FROM tenders AS t LEFT JOIN {table} AS b ON b.tender_id = t.id AND b.user_id = ? "
-                    f"WHERE COALESCE(b.status, 'new') IN ({placeholders}) AND t.deadline IS NOT NULL AND t.deadline < ?",
+                    f"SELECT t.id FROM tenders AS t JOIN {table} AS b ON b.tender_id = t.id AND b.user_id = ? "
+                    f"WHERE b.status IN ({placeholders}) AND t.deadline IS NOT NULL AND t.deadline < ?",
                     (self.user_id, *candidates, moment.isoformat()),
                 ).fetchall()
             else:
