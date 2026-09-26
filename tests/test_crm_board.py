@@ -225,3 +225,27 @@ def test_scoped_crm_history_isolated_by_user():
     assert len(second.history(1)) == 1
     assert first.history(1)[0]["new_value"] == STATUS_REVIEWING
     assert second.history(1)[0]["new_value"] == STATUS_REVIEWING
+
+
+def test_scoped_list_by_status_does_not_expose_global_tenders():
+    db = _db_with_tender()
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_NEW)
+
+    assert [row["id"] for row in first.list_by_status(STATUS_NEW)] == [1]
+    assert second.list_by_status(STATUS_NEW) == []
+
+
+def test_scoped_expire_overdue_does_not_create_cards_for_unrelated_tenders():
+    overdue = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    db = _db_with_tender(overdue)
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_NEW)
+
+    assert first.expire_overdue() == [1]
+    assert second.expire_overdue() == []
+    assert second.get_status(1) == STATUS_NEW
