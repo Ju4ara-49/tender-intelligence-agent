@@ -76,7 +76,11 @@ class _BrowserTenderCollector(BaseCollector):
         try:results=tenderguru_search(platform=self.platform,keyword=query,timeout=min(max(self.timeout_ms//1000,10),20),max_results=self.max_results)
         except Exception as exc:raise CollectorUnavailableError(f"{self.platform}: fallback failed: {exc}") from exc
         if not results:raise CollectorUnavailableError(f"{self.platform}: fallback returned no results for {query!r}")
-        return [t for t in results if self._tender_matches_query(t,query)]
+        verified = [t for t in results if self._tender_matches_query(t,query)]
+        for tender in verified:
+            if tender.external_id and tender.url:
+                self._urls[str(tender.external_id)] = tender.url
+        return verified
     @classmethod
     def _tender_matches_query(cls,tender:Tender,query:str)->bool:
         q=cls._normalize_search_text(query)

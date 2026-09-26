@@ -13,3 +13,20 @@ def test_reliable_rts_uses_public_fallback_on_antiddos_503(monkeypatch):
     monkeypatch.setattr(collector, "_goto", lambda *args, **kwargs: response)
     assert collector._search_one("podshipniki") == ["fallback-result"]
     fake_browser.close.assert_called_once()
+
+
+def test_rts_fallback_registers_detail_url(monkeypatch):
+    from src.models.tender import Tender
+
+    collector = ReliableRtsTenderCollector({})
+    fallback = Tender(
+        platform="rts_tender",
+        external_id="97017007",
+        title="Подшипники",
+        url="https://www.tenderguru.ru/tender/97017007",
+        description="Подшипники",
+    )
+    monkeypatch.setattr("src.collectors.browser_public.tenderguru_search", lambda **kwargs: [fallback])
+
+    assert collector._tenderguru_fallback("подшипники", RuntimeError("503")) == [fallback]
+    assert collector._urls["97017007"] == "https://www.tenderguru.ru/tender/97017007"
