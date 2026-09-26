@@ -101,3 +101,54 @@ def test_ingestor_uses_conditional_request_for_unchanged_document(tmp_path: Path
     finally:
         httpd.shutdown()
         thread.join(timeout=2)
+
+
+def test_ingestor_rejects_download_above_configured_limit(tmp_path: Path):
+    class LargeHandler(BaseHTTPRequestHandler):
+        payload = b"x" * 64
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(self.payload)))
+            self.end_headers()
+            self.wfile.write(self.payload)
+
+        def log_message(self, format, *args):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), LargeHandler)
+    thread = Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        store = TenderDocumentStore(tmp_path / "limit.db")
+        ingestor = TenderDocumentIngestor(store, max_download_bytes=32)
+        with pytest.raises(ValueError, match="download limit"):
+            ingestor.ingest(tender_key="eis:large", url=f"http://127.0.0.1:{httpd.server_port}/large.txt")
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=2)
+
+
+def test_ingestor_bounds_extracted_text(tmp_path: Path):
+    store = TenderDocumentStore(tmp_path / "text-limit.db")
+    ingestor = TenderDocumentIngestor(store, max_extracted_text_bytes=20)
+    text, status, _ = ingestor._extract(b"abcdefghijklmnopqrstuvwxyz", "text/plain", "http://example.test/a.txt")
+    assert status == "extracted"
+    assert len(text.encode("utf-8")) <= 20
+
+
+def test_ingestor_rejects_oversized_docx_xml(tmp_path: Path):
+    import zipfile
+    from io import BytesIO
+
+    payload = BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("word/document.xml", "<w:document>" + ("x" * 100) + "</w:document>")
+
+    store = TenderDocumentStore(tmp_path / "docx-limit.db")
+    ingestor = TenderDocumentIngestor(store, max_archive_uncompressed_bytes=32)
+    text, status, diagnostics = ingestor._extract(payload.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "http://example.test/a.docx")
+    assert text == ""
+    assert status == "failed"
+    assert "archive extraction limit" in diagnostics
