@@ -7,6 +7,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from html import unescape
+from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.parse import urljoin
 
@@ -14,7 +15,7 @@ import requests
 import truststore
 from bs4 import BeautifulSoup
 
-from src.collectors.base import BaseCollector
+from src.collectors.base import BaseCollector, CollectorUnavailableError
 from src.models.tender import Tender
 
 
@@ -27,6 +28,8 @@ truststore.inject_into_ssl()
 
 BASE_URL = "https://zakupki.gov.ru"
 SEARCH_URL = f"{BASE_URL}/epz/order/extendedsearch/results.html"
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 class EisZakupkiCollector(BaseCollector):
@@ -99,11 +102,20 @@ class EisZakupkiCollector(BaseCollector):
                 - timedelta(days=self.lookback_days)
             )
 
+        # Error semantics: если ВСЕ ключевые слова упёрлись в недоступность
+        # площадки (HTTP 403/5xx, timeout, CAPTCHA), это НЕ пустой результат
+        # поиска — сигнал UNAVAILABLE. Только реальный пустой ответ ЕИС
+        # является EMPTY.
+        failures: list[Exception] = []
+        attempted = 0
+
         for keyword in keywords:
             keyword = self._clean_text(keyword)
 
             if not keyword:
                 continue
+
+            attempted += 1
 
             logger.info(
                 "ЕИС: поиск по ключевому слову: %s",
@@ -120,7 +132,9 @@ class EisZakupkiCollector(BaseCollector):
                     if tender.external_id:
                         results[tender.unique_key] = tender
 
-            except Exception:
+            except Exception as exc:
+                failures.append(exc)
+
                 logger.exception(
                     "ЕИС: ошибка поиска по ключевому слову %s",
                     keyword,
@@ -128,6 +142,12 @@ class EisZakupkiCollector(BaseCollector):
 
             if self.request_delay_seconds > 0:
                 time.sleep(self.request_delay_seconds)
+
+        if attempted and not results and len(failures) == attempted:
+            raise CollectorUnavailableError(
+                f"eis: search unavailable for all {attempted} keyword(s): "
+                + "; ".join(f"{type(exc).__name__}: {exc}" for exc in failures[:3])
+            ) from failures[0]
 
         logger.info(
             "ЕИС: итог поиска: %s уникальных закупок",
@@ -207,7 +227,7 @@ class EisZakupkiCollector(BaseCollector):
                     "ЕИС: HTTP ошибка получения деталей %s",
                     external_id,
                 )
-                return None
+                continue
 
             except Exception as exc:
                 last_error = exc
@@ -216,7 +236,7 @@ class EisZakupkiCollector(BaseCollector):
                     "ЕИС: ошибка получения деталей %s",
                     external_id,
                 )
-                return None
+                continue
 
         logger.warning(
             "ЕИС: не удалось получить детали %s | error=%s",
@@ -271,18 +291,29 @@ class EisZakupkiCollector(BaseCollector):
                     params=params,
                 )
 
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "ЕИС: HTTP ошибка page=%s keyword=%s",
                     page,
                     keyword,
                 )
+                if page == 1 and not results:
+                    # Nothing parsed at all: это недоступность площадки,
+                    # а не пустой результат поиска.
+                    raise CollectorUnavailableError(
+                        f"eis: search page unavailable for {keyword!r}: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
                 break
 
             if self._has_captcha(response.text):
                 logger.warning(
                     "ЕИС: обнаружена CAPTCHA, поиск остановлен",
                 )
+                if page == 1 and not results:
+                    raise CollectorUnavailableError(
+                        f"eis: captcha/challenge page for {keyword!r}"
+                    )
                 break
 
             soup = BeautifulSoup(
@@ -531,6 +562,8 @@ class EisZakupkiCollector(BaseCollector):
             text
         )
 
+        customer_inn = self._extract_customer_inn(text)
+
         logger.debug(
             "ЕИС: parsed external_id=%s | title=%s | "
             "price=%s | customer=%s",
@@ -554,6 +587,7 @@ class EisZakupkiCollector(BaseCollector):
             published_at=published_at,
             region=region,
             customer=customer,
+            customer_inn=customer_inn,
             law_type=law_type,
             raw_data={
                 "keyword": keyword,
@@ -621,6 +655,8 @@ class EisZakupkiCollector(BaseCollector):
             customer = self._extract_customer_from_text(
                 text
             )
+
+        customer_inn = self._extract_customer_inn(text)
 
         price = self._extract_detail_price(
             text
@@ -704,6 +740,7 @@ class EisZakupkiCollector(BaseCollector):
             text
         )
         commercial = self._extract_commercial_conditions(text)
+        documents = self._extract_documents(soup, url)
 
         return Tender(
             platform=self.platform,
@@ -719,12 +756,14 @@ class EisZakupkiCollector(BaseCollector):
             published_at=published_at,
             region=region,
             customer=customer,
+            customer_inn=customer_inn,
             law_type=law_type,
             advance_required=bool(commercial["advance_required"]),
             advance_percent=commercial["advance_percent"],
             postpayment_days=commercial["postpayment_days"],
             application_security_percent=commercial["application_security_percent"],
             contract_security_percent=commercial["contract_security_percent"],
+            documents=documents,
             raw_data={
                 "details_loaded": True,
                 "source_url": url,
@@ -733,6 +772,28 @@ class EisZakupkiCollector(BaseCollector):
                 "commercial_conditions": commercial,
             },
         )
+
+    @staticmethod
+    def _extract_documents(soup: BeautifulSoup, page_url: str) -> list[dict[str, str]]:
+        """Extract downloadable procurement attachments from the EIS detail page."""
+        documents: list[dict[str, str]] = []
+        seen: set[str] = set()
+        extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".rar")
+        hints = ("документ", "документы", "вложен", "вложения", "приложен", "приложения", "скачать", "download", "attachment", "file", "файл", "файлы")
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
+            absolute = urljoin(page_url, href)
+            label = EisZakupkiCollector._clean_text(anchor.get_text(" ", strip=True))
+            haystack = f"{absolute} {label}".lower()
+            if not absolute.lower().endswith(extensions) and not any(h in haystack for h in hints):
+                continue
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            documents.append({"url": absolute, "filename": label or absolute.rsplit("/", 1)[-1]})
+        return documents
 
     # ==================================================================
     # REGISTRATION NUMBER
@@ -1442,6 +1503,12 @@ class EisZakupkiCollector(BaseCollector):
 
         return ""
 
+    @staticmethod
+    def _extract_customer_inn(text: str) -> str:
+        """Extract a customer INN from the EIS detail text."""
+        match = re.search(r"(?:ИНН|ИНН\s+заказчика)\s*[:№]?\s*(\d{10,12})\b", str(text or ""), re.IGNORECASE)
+        return match.group(1) if match else ""
+
     # ==================================================================
     # PRICE
     # ==================================================================
@@ -1853,9 +1920,7 @@ class EisZakupkiCollector(BaseCollector):
                     "%d.%m.%Y %H:%M",
                 )
 
-                return dt.replace(
-                    tzinfo=timezone.utc
-                )
+                return dt.replace(tzinfo=MOSCOW_TZ).astimezone(timezone.utc)
 
             except ValueError:
                 continue
@@ -1891,9 +1956,7 @@ class EisZakupkiCollector(BaseCollector):
                     "%d.%m.%Y %H:%M",
                 )
 
-                return dt.replace(
-                    tzinfo=timezone.utc
-                )
+                return dt.replace(tzinfo=MOSCOW_TZ).astimezone(timezone.utc)
 
             except ValueError:
                 continue
@@ -2227,8 +2290,8 @@ class EisZakupkiCollector(BaseCollector):
 
         if value.tzinfo is None:
             return value.replace(
-                tzinfo=timezone.utc
-            )
+                tzinfo=MOSCOW_TZ
+            ).astimezone(timezone.utc)
 
         return value.astimezone(
             timezone.utc

@@ -19,6 +19,17 @@ from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
 from src.telegram_settings import CriteriaStore, TenderCriteria
 from src.export.excel import export_tenders_to_excel
+from src.risk import RiskEngine
+from src.tenderplan import (
+    TenderLifecycleStatus,
+    TenderLifecycleStore,
+    TenderTaskStore,
+    application_task_id,
+    ensure_application_task,
+    task_priority_for_deadline,
+    TenderDocumentIngestor,
+    TenderDocumentStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +43,13 @@ class Orchestrator:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.db = TenderDatabase(settings.database_path)
+        self.task_store = TenderTaskStore(settings.database_path)
+        self.lifecycle_store = TenderLifecycleStore(settings.database_path)
+        self.document_ingestor = TenderDocumentIngestor(TenderDocumentStore(settings.database_path))
         self.notification_state = NotificationDeliveryState(self.db)
         self.criteria_store = CriteriaStore(self.db)
         self.profile_store = SearchProfileStore(self.db)
+        self.risk_engine = RiskEngine()
         self.analyzer = TenderAnalyzer(
             model=settings.ai_model,
             ai_context=settings.ai_context,
@@ -52,6 +67,7 @@ class Orchestrator:
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
             dry_run_when_no_token=settings.telegram_dry_run,
+            task_store=self.task_store,
         )
         self.email_notifier = EmailNotifier(
             enabled=settings.email_enabled,
@@ -102,6 +118,7 @@ class Orchestrator:
         for field_name in (
             "title", "description", "price", "currency", "start_date", "end_date",
             "deadline", "published_at", "region", "customer", "customer_inn", "law_type",
+            "okpd2_codes", "procurement_type",
             "advance_percent", "postpayment_days", "application_security_percent",
             "contract_security_percent", "url",
         ):
@@ -142,6 +159,65 @@ class Orchestrator:
         if diagnostics:
             tender.raw_data["detail_diagnostics"] = diagnostics[:4000]
         return self._normalize_tender_datetimes(tender)
+
+    def _ingest_tender_documents(self, tender: Tender) -> tuple[int, int, int]:
+        """Download and version declared tender documents; never fail the tender itself."""
+        if not tender.documents:
+            return 0, 0, 0
+        discovered = downloaded = failed = 0
+        extracted_texts: list[str] = []
+        versions: list[dict[str, object]] = []
+        for item in tender.documents:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or item.get("href") or item.get("link") or "").strip()
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            discovered += 1
+            try:
+                result = self.document_ingestor.ingest(
+                    tender_key=tender.unique_key,
+                    url=url,
+                    filename=str(item.get("name") or item.get("filename") or "").strip(),
+                    content_type=str(item.get("content_type") or item.get("mime_type") or "").strip(),
+                )
+                downloaded += int(result.downloaded)
+                document = result.document
+                versions.append(
+                    {
+                        "url": document.url,
+                        "version": document.version,
+                        "sha256": document.sha256,
+                        "extraction_status": document.extraction_status,
+                        "diagnostics": document.diagnostics,
+                    }
+                )
+                if document.extracted_text:
+                    extracted_texts.append(document.extracted_text)
+            except Exception as exc:
+                failed += 1
+                reason = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "TenderPlan: document ingestion failed for %s (%s): %s",
+                    tender.unique_key,
+                    url,
+                    exc,
+                )
+                versions.append(
+                    {
+                        "url": url,
+                        "version": 0,
+                        "sha256": "",
+                        "extraction_status": "failed",
+                        "diagnostics": str(reason)[:1000],
+                    }
+                )
+        if extracted_texts:
+            tender.raw_data["document_contents"] = "\n".join(extracted_texts)
+            tender.raw_data["document_search_text"] = tender.raw_data["document_contents"]
+        if versions:
+            tender.raw_data["document_versions"] = versions
+        return discovered, downloaded, failed
 
     def _enrich_tender(self, collector, tender: Tender) -> tuple[Tender, bool]:
         get_details = getattr(collector, "get_details", None)
@@ -190,8 +266,11 @@ class Orchestrator:
             config = collector.config if hasattr(collector, "config") else {}
             lookback_days = int(config.get("lookback_days", 3))
             since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-            found = collector.search(keywords=keywords, since=since) or []
+            # Clear before the call so a collector-reported degraded state
+            # (for example the EIS public fallback) is not erased afterwards by
+            # a blanket "success" reset.
             setattr(collector, "_last_search_error", "")
+            found = collector.search(keywords=keywords, since=since) or []
             logger.info(
                 "Discovery: platform=%s keywords=%d raw=%d",
                 platform,
@@ -262,6 +341,22 @@ class Orchestrator:
                 return False, "min_submission_days"
         elif criteria.min_submission_days:
             return False, "deadline_missing"
+        if criteria.customer and not Orchestrator._matches_field(tender.customer, criteria.customer):
+            return False, "customer"
+        if criteria.customer_inn and not Orchestrator._matches_inn(tender.customer_inn, criteria.customer_inn):
+            return False, "customer_inn"
+        if criteria.law_type and not Orchestrator._matches_law_type(tender.law_type, criteria.law_type):
+            return False, "law_type"
+        if criteria.okpd2_codes:
+            tender_codes = {str(code).strip() for code in tender.okpd2_codes if str(code).strip()}
+            if not any(
+                actual == requested or actual.startswith(f"{requested}.")
+                for actual in tender_codes
+                for requested in criteria.okpd2_codes
+            ):
+                return False, "okpd2_codes"
+        if criteria.procurement_types and tender.procurement_type not in criteria.procurement_types:
+            return False, "procurement_type"
         return True, ""
 
     @staticmethod
@@ -281,6 +376,46 @@ class Orchestrator:
         text = re.sub(r"\s+", " ", text)
         return text.strip(" .,:;")
 
+    @staticmethod
+    def _normalize_text(value: str | None) -> str:
+        if value is None:
+            return ""
+        return re.sub(r"\s+", " ", str(value).strip().casefold().replace("ё", "е")).strip()
+
+    @classmethod
+    def _matches_field(cls, actual: str | None, expected: str) -> bool:
+        """Case-insensitive contains match for free-text fields like customer."""
+        if not actual:
+            return False
+        expected_norm = cls._normalize_text(expected)
+        if not expected_norm:
+            return True
+        actual_norm = cls._normalize_text(actual)
+        return expected_norm in actual_norm
+
+    @classmethod
+    def _matches_inn(cls, actual: str | None, expected: str) -> bool:
+        """INN is exact match ignoring internal spaces/dashes."""
+        if not actual:
+            return False
+        expected_norm = re.sub(r"[\s-]+", "", str(expected).strip())
+        actual_norm = re.sub(r"[\s-]+", "", str(actual).strip())
+        return bool(expected_norm) and actual_norm == expected_norm
+
+    @classmethod
+    def _matches_law_type(cls, actual: str | None, expected: str) -> bool:
+        """Match law_type: accept shorthand like '44' matching '44-ФЗ'."""
+        if not actual:
+            return False
+        expected_norm = cls._normalize_text(expected)
+        actual_norm = cls._normalize_text(actual)
+        if expected_norm in actual_norm:
+            return True
+        # Allow shorthand: "44" matches "44-фз"
+        if expected_norm.isdigit():
+            return bool(re.search(rf"\b{expected_norm}\b", actual_norm))
+        return False
+
     @classmethod
     def _passes_regions(cls, tender: Tender, regions: list[str] | None) -> bool:
         if not regions:
@@ -299,6 +434,102 @@ class Orchestrator:
         }
         return bool(tender_regions & requested)
 
+    def _ensure_tenderplan_task(self, tender: Tender, *, user_id: str | int | None = None) -> None:
+        """Persist the application task only after the shortlist gate.
+        
+        Existing tasks are always synchronized/preserved. A new application task
+        must not appear while a tender is merely DISCOVERED or RELEVANT.
+        """
+        try:
+            task_id = application_task_id(tender.unique_key, user_id)
+            owner = "" if user_id is None else str(user_id).strip()
+            existing = self.task_store.get(task_id, user_id=owner if user_id is not None else None)
+            current = self.lifecycle_store.get(tender.unique_key)
+            if existing is None and current not in {
+                TenderLifecycleStatus.SHORTLISTED,
+                TenderLifecycleStatus.ASSIGNED,
+                TenderLifecycleStatus.PREPARING,
+                TenderLifecycleStatus.SUBMITTED,
+                TenderLifecycleStatus.AUCTION,
+                TenderLifecycleStatus.WON,
+                TenderLifecycleStatus.LOST,
+            }:
+                logger.debug(
+                    "TenderPlan: application task deferred until shortlist for %s (state=%s)",
+                    tender.unique_key,
+                    current.value if current is not None else None,
+                )
+                return
+            ensure_application_task(
+                self.task_store,
+                tender_key=tender.unique_key,
+                tender_title=tender.title,
+                user_id=user_id,
+                deadline=tender.deadline,
+                priority=task_priority_for_deadline(tender.deadline),
+            )
+        except Exception:
+            logger.exception("TenderPlan: failed to create task for %s", tender.unique_key)
+
+    def _expire_lifecycle_if_needed(self, tender: Tender, *, now: datetime | None = None) -> bool:
+        """Move an open pre-submission lifecycle to EXPIRED when its deadline has passed."""
+        deadline = self._normalize_datetime(tender.deadline)
+        if deadline is None:
+            return False
+        current = self._normalize_datetime(now) if now is not None else datetime.now(timezone.utc)
+        if deadline >= current:
+            return False
+        current_state = self.lifecycle_store.get(tender.unique_key)
+        if current_state is None or current_state in {
+            TenderLifecycleStatus.SUBMITTED,
+            TenderLifecycleStatus.AUCTION,
+            TenderLifecycleStatus.WON,
+            TenderLifecycleStatus.LOST,
+            TenderLifecycleStatus.REJECTED,
+            TenderLifecycleStatus.CANCELLED,
+            TenderLifecycleStatus.EXPIRED,
+            TenderLifecycleStatus.ARCHIVED,
+        }:
+            return False
+        self._advance_lifecycle(tender, TenderLifecycleStatus.EXPIRED)
+        return self.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.EXPIRED
+
+    def _advance_lifecycle(self, tender: Tender, target: TenderLifecycleStatus) -> None:
+        """Advance lifecycle only when the explicit state machine permits it."""
+        current: TenderLifecycleStatus | None = None
+        try:
+            current = self.lifecycle_store.get(tender.unique_key)
+            if current is not None and current is not target:
+                from src.tenderplan.lifecycle import can_transition
+
+                if can_transition(current, target):
+                    self.lifecycle_store.set(tender.unique_key, target)
+        except Exception:
+            logger.exception(
+                "TenderPlan: failed to advance lifecycle %s -> %s for %s",
+                current.value if current is not None else None,
+                target.value,
+                tender.unique_key,
+            )
+
+    def _notify_and_record(
+        self,
+        tender: Tender,
+        analysis: object,
+        *,
+        chat_id: str | None,
+        recipient_key: str,
+    ) -> bool:
+        """Send notification and record delivery without affecting persistence."""
+        try:
+            sent = self.notifier.send_tender_alert(tender, analysis, chat_id=chat_id)
+        except Exception:
+            logger.exception("Telegram: notification failed for %s", tender.unique_key)
+            return False
+        if sent:
+            self.notification_state.mark_notified(tender, recipient_key=recipient_key)
+        return bool(sent)
+
     def run_cycle(
         self,
         user_id: str | int | None = None,
@@ -309,6 +540,7 @@ class Orchestrator:
         regions: list[str] | None = None,
         notification_recipient_key: str | None = None,
         notification_chat_id: str | None = None,
+        search_documents: bool = True,
     ) -> dict[str, int]:
         search_number = self._get_next_search_number()
         stats = {
@@ -329,6 +561,10 @@ class Orchestrator:
             "saved": 0,
             "ai_failed": 0,
             "platform_errors": 0,
+            "documents_discovered": 0,
+            "documents_downloaded": 0,
+            "documents_failed": 0,
+            "risk_assessed": 0,
         }
         self.clear_stop_request()
         self.last_run_results = []
@@ -351,7 +587,9 @@ class Orchestrator:
             if notification_chat_id
             else (str(user_id).strip() if user_id is not None and str(user_id).strip() else None)
         )
-        self.keyword_filter = KeywordFilter(include=search_keywords, exclude=exclusions, min_text_length=min_text)
+        self.keyword_filter = KeywordFilter(
+            include=search_keywords, exclude=exclusions, min_text_length=min_text, search_documents=search_documents,
+        )
         collectors = get_enabled_collectors(self.settings.config, enabled_platforms=enabled_platforms)
         if not collectors:
             logger.warning("Нет включённых сборщиков. Проверьте config.yaml и настройки площадок.")
@@ -402,13 +640,31 @@ class Orchestrator:
             if self.stop_requested:
                 break
             enriched, detail_loaded = self._enrich_tender(collector, tender)
+            discovered_docs, downloaded_docs, failed_docs = self._ingest_tender_documents(enriched)
+            stats["documents_discovered"] += discovered_docs
+            stats["documents_downloaded"] += downloaded_docs
+            stats["documents_failed"] += failed_docs
+            if discovered_docs:
+                enriched._enrich_commercial_terms()
+                enriched._persist_normalized_fields()
             detail_status = str(getattr(enriched, "detail_status", "partial") or "partial").lower()
             stats["details_loaded"] += int(detail_status == "success" and detail_loaded)
             stats["details_partial"] += int(detail_status == "partial")
             stats["details_failed"] += int(detail_status == "failed")
+            try:
+                risk = self.risk_engine.assess(enriched)
+                enriched.raw_data["risk_assessment"] = risk.to_dict()
+                stats["risk_assessed"] += 1
+            except Exception:
+                logger.exception("Risk Engine: failed for %s", enriched.unique_key)
             enriched_pairs.append((collector, enriched))
             existing = self.db.exists(enriched.unique_key)
             self.db.save_tender(enriched)
+            try:
+                self.lifecycle_store.ensure(enriched.unique_key)
+                self._expire_lifecycle_if_needed(enriched)
+            except Exception:
+                logger.exception("TenderPlan: failed to persist lifecycle for %s", enriched.unique_key)
             stats["saved"] += 1
             if not existing:
                 stats["new"] += 1
@@ -427,6 +683,8 @@ class Orchestrator:
         for collector, tender in strict_pairs:
             if self.stop_requested:
                 break
+            if self.lifecycle_store.get(tender.unique_key) is TenderLifecycleStatus.EXPIRED:
+                continue
             if not self._passes_regions(tender, selected_regions):
                 stats["excluded_by_region"] += 1
                 continue
@@ -441,11 +699,14 @@ class Orchestrator:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
                 continue
             export_tender_ids.append(tender_id)
-            if self.notification_state.was_notified(tender, recipient_key=recipient_key):
-                stats["skipped_duplicate"] += 1
-                continue
+            # Notification deduplication is a delivery concern only. A previously
+            # notified tender must still be re-analyzed so persisted AI/lifecycle
+            # state can reflect title/price/deadline/document changes.
             try:
-                analysis = self.analyzer.analyze(tender)
+                analysis = self.analyzer.analyze(
+                    tender,
+                    search_documents=search_documents,
+                )
             except Exception as exc:
                 stats["ai_failed"] += 1
                 logger.exception("AI: ошибка анализа %s: %s", tender.unique_key, exc)
@@ -454,11 +715,21 @@ class Orchestrator:
             stats["analyzed"] += 1
             if analysis.relevance_score < criteria.min_ai_score:
                 continue
+            self._advance_lifecycle(tender, TenderLifecycleStatus.RELEVANT)
+            self._advance_lifecycle(tender, TenderLifecycleStatus.SHORTLISTED)
+            # TenderPlan task is a downstream action: create it only after the
+            # deterministic gate and AI relevance gate have moved the tender to
+            # SHORTLISTED. It remains independent from Telegram delivery.
+            self._ensure_tenderplan_task(tender, user_id=user_id)
             if self.notification_state.was_notified(tender, recipient_key=recipient_key):
                 stats["skipped_duplicate"] += 1
                 continue
-            if self.notifier.send_tender_alert(tender, analysis, chat_id=target_chat_id):
-                self.notification_state.mark_notified(tender, recipient_key=recipient_key)
+            if self._notify_and_record(
+                tender,
+                analysis,
+                chat_id=target_chat_id,
+                recipient_key=recipient_key,
+            ):
                 stats["notified"] += 1
 
         try:
@@ -471,6 +742,7 @@ class Orchestrator:
                 excel_path,
                 tender_ids=export_tender_ids,
                 search_number=search_number,
+                user_id=user_id,
             )
             logger.info("Excel: создан новый файл текущего прогона: %s", export_path)
             self.email_notifier.send_excel(export_path, search_number)
@@ -500,6 +772,7 @@ class Orchestrator:
                 regions=profile.regions,
                 notification_recipient_key=f"user:{user_id}",
                 notification_chat_id=user_id,
+                search_documents=profile.document_search,
             )
             self.profile_store.record_run(
                 user_id,

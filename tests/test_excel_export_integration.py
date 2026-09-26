@@ -2,12 +2,22 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openpyxl import load_workbook
 
 from src.export.excel import export_tenders_to_excel
 from src.models.tender import Tender, TenderAnalysis
 from src.storage.database import TenderDatabase
+from src.tenderplan import (
+    TaskPriority,
+    TenderLifecycleStatus,
+    TenderLifecycleStore,
+    TenderTaskStore,
+    ensure_application_task,
+)
 
 
 def main() -> None:
@@ -32,6 +42,8 @@ def main() -> None:
         region="Москва",
         customer="Тестовый заказчик",
         law_type="223-ФЗ",
+        okpd2_codes=["01.11.12"],
+        procurement_type="commercial",
         raw_data={"procurement_method": "Запрос предложений"},
     )
     tender_id = db.save_tender(tender)
@@ -46,6 +58,21 @@ def main() -> None:
             is_stub=False,
         ),
     )
+    lifecycle_store = TenderLifecycleStore(db_path)
+    lifecycle_store.ensure(tender.unique_key)
+    lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.RELEVANT)
+    lifecycle_store.set(tender.unique_key, TenderLifecycleStatus.SHORTLISTED)
+    task_store = TenderTaskStore(db_path)
+    task = ensure_application_task(
+        task_store,
+        tender_key=tender.unique_key,
+        tender_title=tender.title,
+        deadline=tender.deadline,
+        priority=TaskPriority.HIGH,
+    )
+    task.responsible = "Иван"
+    task.start()
+    task_store.save(task)
 
     export_tenders_to_excel(db, output, tender_ids=[tender_id])
     wb = load_workbook(output)
@@ -54,16 +81,32 @@ def main() -> None:
     headers = [cell.value for cell in ws[1]]
     expected = [
         "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
-        "Начальная цена", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
+        "Начальная цена", "Валюта", "Дата публикации (МСК)", "Дата окончания подачи заявок (МСК)",
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
+        "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
+        "Risk", "Risk factors", "Lifecycle", "ОКПД2", "Режим процедуры",
     ]
     assert headers == expected, headers
+    # Даты экспортируются в московском времени (UTC+3), а не в UTC.
+    from datetime import timedelta
+
+    deadline_utc = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    assert ws["I2"].value == (deadline_utc + timedelta(hours=3)).replace(tzinfo=None)
+    published_utc = datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc)
+    assert ws["H2"].value == (published_utc + timedelta(hours=3)).replace(tzinfo=None)
     for obsolete in ("НМЦК", "Дата поиска", "№ поиска", "Статус", "W", "X", "Y", "Комментарий по срокам"):
         assert obsolete not in headers
 
     assert ws["F2"].value == 125000.0
     assert ws["L2"].value == "Запрос предложений"
+    assert ws["R2"].value == "Подать заявку"
+    assert ws["S2"].value == "in_progress"
+    assert ws["T2"].value == "high"
+    assert ws["U2"].value == "Иван"
+    assert ws["Y2"].value == "shortlisted"
+    assert ws["Z2"].value == "01.11.12"
+    assert ws["AA2"].value == "commercial"
     hyperlink = ws["Q2"].hyperlink
     assert hyperlink is not None
     assert hyperlink.target == "https://example.com/tender/GHA-TEST-001"
@@ -77,6 +120,7 @@ def main() -> None:
     print(f"Clickable tender link: {hyperlink.target}")
     print(f"Initial price: {ws['F2'].value}")
     print(f"Procurement method: {ws['L2'].value}")
+    print(f"TenderPlan task: {ws['R2'].value} / {ws['S2'].value}")
     print("Excel schema checks: PASS")
     print("Excel filter arrows: DISABLED")
 

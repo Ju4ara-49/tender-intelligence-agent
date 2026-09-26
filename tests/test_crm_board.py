@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 from src.storage import (
+    STATUS_ARCHIVED,
     STATUS_DOCS,
     STATUS_LOST,
     STATUS_NEW,
     STATUS_PARTICIPATING,
     STATUS_REVIEWING,
+    STATUS_SKIPPED,
     STATUS_WON,
     InvalidStatusTransition,
     TenderBoard,
@@ -53,7 +55,33 @@ def test_force_transition_and_terminal_return_path():
         board.set_status(1, STATUS_REVIEWING)
 
     board.set_status(1, STATUS_LOST, force=True)
-    assert board.set_status(1, STATUS_REVIEWING) == STATUS_REVIEWING
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING)
+
+
+def test_terminal_status_lost_cannot_revert_to_reviewing():
+    board = TenderBoard(_db_with_tender())
+    board.set_status(1, STATUS_LOST, force=True)
+    assert board.get_status(1) == STATUS_LOST
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING)
+
+
+def test_terminal_status_skipped_cannot_revert_to_reviewing():
+    board = TenderBoard(_db_with_tender())
+    board.set_status(1, STATUS_REVIEWING)
+    board.set_status(1, STATUS_SKIPPED)
+    assert board.get_status(1) == STATUS_SKIPPED
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING)
+
+
+def test_terminal_state_archived_is_only_allowed_return():
+    board = TenderBoard(_db_with_tender())
+    board.set_status(1, STATUS_WON, force=True)
+    with pytest.raises(InvalidStatusTransition):
+        board.set_status(1, STATUS_REVIEWING, force=False)
+    assert board.set_status(1, STATUS_ARCHIVED, force=True) == STATUS_ARCHIVED
 
 
 def test_assignment_and_labels_are_idempotent():
@@ -157,3 +185,67 @@ def test_legacy_label_schema_is_migrated_without_case_duplicates(tmp_path):
     assert board.labels(1) == ["Участвуем"]
     board.add_label(1, "УЧАСТВУЕМ")
     assert board.labels(1) == ["Участвуем"]
+
+
+def test_crm_board_isolates_status_assignment_and_labels_between_users():
+    db = _db_with_tender()
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_REVIEWING)
+    first.assign(1, "Иван")
+    first.add_label(1, "Юристу")
+
+    assert first.get_status(1) == STATUS_REVIEWING
+    assert first.entry(1).assignee == "Иван"
+    assert first.labels(1) == ["Юристу"]
+
+    assert second.get_status(1) == STATUS_NEW
+    assert second.entry(1).assignee == ""
+    assert second.labels(1) == []
+
+    second.set_status(1, STATUS_PARTICIPATING)
+    second.add_label(1, "Закупки")
+
+    assert first.get_status(1) == STATUS_REVIEWING
+    assert first.labels(1) == ["Юристу"]
+    assert second.get_status(1) == STATUS_PARTICIPATING
+    assert second.labels(1) == ["Закупки"]
+
+
+def test_scoped_crm_history_isolated_by_user():
+    db = _db_with_tender()
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_REVIEWING)
+    second.set_status(1, STATUS_REVIEWING)
+
+    assert len(first.history(1)) == 1
+    assert len(second.history(1)) == 1
+    assert first.history(1)[0]["new_value"] == STATUS_REVIEWING
+    assert second.history(1)[0]["new_value"] == STATUS_REVIEWING
+
+
+def test_scoped_list_by_status_does_not_expose_global_tenders():
+    db = _db_with_tender()
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_NEW)
+
+    assert [row["id"] for row in first.list_by_status(STATUS_NEW)] == [1]
+    assert second.list_by_status(STATUS_NEW) == []
+
+
+def test_scoped_expire_overdue_does_not_create_cards_for_unrelated_tenders():
+    overdue = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    db = _db_with_tender(overdue)
+    first = TenderBoard(db, user_id="user-a")
+    second = TenderBoard(db, user_id="user-b")
+
+    first.set_status(1, STATUS_NEW)
+
+    assert first.expire_overdue() == [1]
+    assert second.expire_overdue() == []
+    assert second.get_status(1) == STATUS_NEW

@@ -1,3 +1,5 @@
+import pytest
+
 from src.models.tender import Tender
 from src.storage.database import TenderDatabase
 from src.storage.notification_delivery import NotificationDeliveryState
@@ -53,6 +55,83 @@ def test_description_change_creates_a_new_notification_event(tmp_path):
             FROM notification_events
             WHERE tender_id = ? AND recipient_key = ? AND channel = 'telegram'
             """,
+            (tender_id, "chat-a"),
+        ).fetchone()["count"]
+    assert count == 2
+
+
+def test_document_order_does_not_change_in_memory_notification_fingerprint(tmp_path):
+    db = TenderDatabase(tmp_path / "doc-order-memory.db")
+    tender = Tender(
+        platform="test",
+        external_id="doc-order-memory-1",
+        title="Закупка оборудования",
+        url="https://example.test/doc-order-memory-1",
+        documents=[
+            {"url": "https://example.test/b.pdf", "name": "B"},
+            {"url": "https://example.test/a.pdf", "name": "A"},
+        ],
+    )
+    state = NotificationDeliveryState(db)
+
+    first = state.event_key(tender)
+    tender.documents = list(reversed(tender.documents))
+    second = state.event_key(tender)
+
+    assert first == second
+
+
+def test_document_order_does_not_change_persisted_notification_fingerprint(tmp_path):
+    db = TenderDatabase(tmp_path / "doc-order-row.db")
+    tender = Tender(
+        platform="test",
+        external_id="doc-order-row-1",
+        title="Закупка оборудования",
+        url="https://example.test/doc-order-row-1",
+        documents=[
+            {"url": "https://example.test/b.pdf", "name": "B"},
+            {"url": "https://example.test/a.pdf", "name": "A"},
+        ],
+    )
+    tender_id = db.save_tender(tender)
+
+    first = db._current_notification_event_key(tender.unique_key)[1]
+    tender.documents = list(reversed(tender.documents))
+    db.save_tender(tender)
+    second = db._current_notification_event_key(tender.unique_key)[1]
+
+    assert first == second
+    assert db.was_notified(tender.unique_key, recipient_key="chat-a") is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("okpd2_codes", ["26.30.11"]), ("procurement_type", "commercial")],
+)
+def test_contract_classification_change_creates_new_notification_event(tmp_path, field, value):
+    db = TenderDatabase(tmp_path / f"{field}.db")
+    tender = Tender(
+        platform="test",
+        external_id=f"{field}-1",
+        title="Поставка оборудования",
+        url=f"https://example.test/{field}-1",
+        price=100000,
+    )
+    tender_id = db.save_tender(tender)
+    state = NotificationDeliveryState(db)
+    state.mark_notified(tender, recipient_key="chat-a")
+    first_key = state.event_key(tender)
+
+    setattr(tender, field, value)
+    tender._persist_normalized_fields()
+    db.save_tender(tender)
+
+    assert state.event_key(tender) != first_key
+    assert state.was_notified(tender, recipient_key="chat-a") is False
+    state.mark_notified(tender, recipient_key="chat-a")
+    with db._connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS count FROM notification_events WHERE tender_id = ? AND recipient_key = ?",
             (tender_id, "chat-a"),
         ).fetchone()["count"]
     assert count == 2

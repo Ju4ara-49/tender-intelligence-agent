@@ -9,6 +9,40 @@ from src.ai.analyzer import OllamaModelNotFoundError, OllamaResponseError, Tende
 from src.models.tender import Tender
 
 
+class _NoNetworkGuard:
+    """Block every outbound HTTP call during import of a module under test.
+
+    Regression guard for test_ai_score.py: it used to call live Ollama at
+    import time, which made `pytest -q` hang for 120+ seconds and fail with
+    a collection error whenever Ollama was unavailable (including CI).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def __enter__(self):
+        self._patchers = [
+            patch("requests.post", side_effect=self._blocked("requests.post")),
+            patch("requests.get", side_effect=self._blocked("requests.get")),
+            patch("requests.request", side_effect=self._blocked("requests.request")),
+            patch("httpx.Client", side_effect=self._blocked("httpx.Client")),
+        ]
+        for patcher in self._patchers:
+            patcher.start()
+        return self
+
+    def _blocked(self, name: str):
+        def _raise(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            raise AssertionError(f"Сетевой вызов {name} при импорте модуля запрещён")
+        return _raise
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        for patcher in self._patchers:
+            patcher.stop()
+
+
+
 def _make_tender() -> Tender:
     return Tender(
         platform="eis",
@@ -162,6 +196,30 @@ class TenderAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis.relevance_score, 100)
         self.assertEqual(analysis.recommendation, "review")
         self.assertEqual(analysis.risks, ["Есть риск"])
+
+
+    def test_ai_score_script_import_has_no_side_effects_or_network(self) -> None:
+        """Regression: import test_ai_score.py must not call Ollama or execute analysis.
+
+        The module used to run analyzer.analyze() at import time, breaking
+        `pytest -q` collection with a 120-second timeout whenever Ollama was
+        unreachable. The manual smoke entry point must stay behind
+        `if __name__ == "__main__":`.
+        """
+        import importlib
+
+        import test_ai_score
+
+        with _NoNetworkGuard() as guard:
+            importlib.reload(test_ai_score)
+
+        self.assertEqual(guard.calls, [], "Импорт test_ai_score.py не должен выполнять сетевых вызовов")
+        # Import must not leave module-level analysis results behind.
+        self.assertFalse(hasattr(test_ai_score, "result"))
+        self.assertFalse(hasattr(test_ai_score, "analyzer"))
+        self.assertFalse(hasattr(test_ai_score, "tender"))
+        # The smoke entry point exists for manual runs only.
+        self.assertTrue(callable(getattr(test_ai_score, "_main", None)))
 
 
 if __name__ == "__main__":

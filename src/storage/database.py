@@ -66,6 +66,8 @@ class TenderDatabase:
                     customer TEXT DEFAULT '',
                     customer_inn TEXT DEFAULT '',
                     law_type TEXT DEFAULT '',
+                    okpd2_codes TEXT NOT NULL DEFAULT '[]',
+                    procurement_type TEXT DEFAULT '',
                     detail_status TEXT NOT NULL DEFAULT 'partial',
                     detail_diagnostics TEXT DEFAULT '',
                     raw_data TEXT DEFAULT '{}',
@@ -141,6 +143,8 @@ class TenderDatabase:
             "start_date": "TEXT",
             "end_date": "TEXT",
             "customer_inn": "TEXT NOT NULL DEFAULT ''",
+            "okpd2_codes": "TEXT NOT NULL DEFAULT '[]'",
+            "procurement_type": "TEXT DEFAULT ''",
             "detail_status": "TEXT NOT NULL DEFAULT 'partial'",
             "detail_diagnostics": "TEXT DEFAULT ''",
         }
@@ -238,12 +242,26 @@ class TenderDatabase:
             "customer": value("customer"),
             "customer_inn": value("customer_inn") or normalized.get("customer_inn", ""),
             "law_type": value("law_type"),
+            "okpd2_codes": normalized.get("okpd2_codes", raw_data.get("okpd2_codes", [])),
+            "procurement_type": value("procurement_type") or normalized.get("procurement_type", ""),
             "advance_required": normalized.get("advance_required", False),
             "advance_percent": normalized.get("advance_percent"),
             "postpayment_days": normalized.get("postpayment_days"),
             "application_security_percent": normalized.get("application_security_percent"),
             "contract_security_percent": normalized.get("contract_security_percent"),
+            "documents": normalized.get("documents", raw_data.get("documents", [])),
         }
+        if isinstance(state["documents"], (list, tuple)):
+            state["documents"] = sorted(
+                state["documents"],
+                key=lambda item: json.dumps(
+                    item,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            )
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -284,10 +302,77 @@ class TenderDatabase:
             row = conn.execute("SELECT 1 FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return row is not None
 
+    @staticmethod
+    def _row_to_tender(row: sqlite3.Row) -> Tender:
+        """Reconstruct the canonical Tender model from persisted SQLite state."""
+        def parse_datetime(value):
+            if not value:
+                return None
+            return datetime.fromisoformat(str(value))
+
+        raw_data = {}
+        raw_value = row["raw_data"]
+        if raw_value:
+            try:
+                parsed = json.loads(raw_value)
+                if isinstance(parsed, dict):
+                    raw_data = parsed
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("Invalid tender raw_data for id=%s; using empty object", row["id"])
+
+        normalized = raw_data.get("_normalized") if isinstance(raw_data, dict) else {}
+        if not isinstance(normalized, dict):
+            normalized = {}
+
+        return Tender(
+            platform=row["platform"],
+            external_id=row["external_id"],
+            title=row["title"],
+            url=row["url"],
+            description=row["description"] or "",
+            price=row["price"],
+            currency=row["currency"] or "RUB",
+            start_date=parse_datetime(row["start_date"]),
+            end_date=parse_datetime(row["end_date"]),
+            published_at=parse_datetime(row["published_at"]),
+            deadline=parse_datetime(row["deadline"]),
+            region=row["region"] or "",
+            customer=row["customer"] or "",
+            customer_inn=row["customer_inn"] or normalized.get("customer_inn", ""),
+            law_type=row["law_type"] or "",
+            okpd2_codes=normalized.get("okpd2_codes", raw_data.get("okpd2_codes", [])),
+            procurement_type=row["procurement_type"] or normalized.get("procurement_type", ""),
+            detail_status=row["detail_status"] or "partial",
+            detail_diagnostics=row["detail_diagnostics"] or "",
+            advance_required=normalized.get("advance_required", False),
+            advance_percent=normalized.get("advance_percent"),
+            postpayment_days=normalized.get("postpayment_days"),
+            application_security_percent=normalized.get("application_security_percent"),
+            contract_security_percent=normalized.get("contract_security_percent"),
+            documents=normalized.get("documents", raw_data.get("documents", [])),
+            field_sources=normalized.get("field_sources", raw_data.get("field_sources", {})),
+            raw_data=raw_data,
+        )
+
+    def get_tender(self, unique_key: str) -> Tender | None:
+        """Load a persisted tender through the same canonical Tender contract."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tenders WHERE unique_key = ?",
+                (unique_key,),
+            ).fetchone()
+        return self._row_to_tender(row) if row is not None else None
+
     def get_tender_id(self, unique_key: str) -> int | None:
         with self._connect() as conn:
             row = conn.execute("SELECT id FROM tenders WHERE unique_key = ?", (unique_key,)).fetchone()
         return int(row["id"]) if row is not None else None
+
+    def get_tender_by_id(self, tender_id: int) -> Tender | None:
+        """Load one persisted tender by primary key through the canonical model."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM tenders WHERE id = ?", (int(tender_id),)).fetchone()
+        return self._row_to_tender(row) if row is not None else None
 
     def _current_notification_event_key(self, unique_key: str) -> tuple[int, str] | None:
         with self._connect() as conn:
@@ -343,6 +428,8 @@ class TenderDatabase:
             "customer": tender.customer,
             "customer_inn": tender.customer_inn,
             "law_type": tender.law_type,
+            "okpd2_codes": list(tender.okpd2_codes),
+            "procurement_type": tender.procurement_type,
             "detail_status": tender.detail_status,
             "detail_diagnostics": tender.detail_diagnostics,
             "raw_data": tender.raw_data,
@@ -354,6 +441,7 @@ class TenderDatabase:
         tracked_fields = (
             "title", "url", "description", "price", "currency", "start_date", "end_date",
             "deadline", "published_at", "region", "customer", "customer_inn", "law_type",
+            "okpd2_codes", "procurement_type",
             "raw_data",
         )
         with self._connect() as conn:
@@ -363,9 +451,10 @@ class TenderDatabase:
                 INSERT INTO tenders (
                     platform, external_id, unique_key, title, url, description,
                     price, currency, start_date, end_date, deadline, published_at,
-                    region, customer, customer_inn, law_type, detail_status, detail_diagnostics,
+                    region, customer, customer_inn, law_type, okpd2_codes, procurement_type,
+                    detail_status, detail_diagnostics,
                     raw_data, first_seen_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(unique_key) DO UPDATE SET
                     platform = excluded.platform,
                     external_id = excluded.external_id,
@@ -382,6 +471,8 @@ class TenderDatabase:
                     customer = excluded.customer,
                     customer_inn = excluded.customer_inn,
                     law_type = excluded.law_type,
+                    okpd2_codes = excluded.okpd2_codes,
+                    procurement_type = excluded.procurement_type,
                     detail_status = excluded.detail_status,
                     detail_diagnostics = excluded.detail_diagnostics,
                     raw_data = excluded.raw_data,
@@ -395,6 +486,7 @@ class TenderDatabase:
                     tender.deadline.isoformat() if tender.deadline else None,
                     tender.published_at.isoformat() if tender.published_at else None,
                     tender.region, tender.customer, tender.customer_inn, tender.law_type,
+                    json.dumps(tender.okpd2_codes, ensure_ascii=False), tender.procurement_type,
                     tender.detail_status, tender.detail_diagnostics,
                     json.dumps(tender.raw_data, ensure_ascii=False), now, now,
                 ),
@@ -415,6 +507,7 @@ class TenderDatabase:
                     "deadline": previous["deadline"], "published_at": previous["published_at"],
                     "region": previous["region"], "customer": previous["customer"],
                     "customer_inn": previous["customer_inn"], "law_type": previous["law_type"],
+                    "okpd2_codes": previous["okpd2_codes"], "procurement_type": previous["procurement_type"],
                     "raw_data": previous["raw_data"],
                 }
                 current_values = {
@@ -424,6 +517,8 @@ class TenderDatabase:
                     "deadline": snapshot["deadline"], "published_at": snapshot["published_at"],
                     "region": snapshot["region"], "customer": snapshot["customer"],
                     "customer_inn": snapshot["customer_inn"], "law_type": snapshot["law_type"],
+                    "okpd2_codes": json.dumps(snapshot["okpd2_codes"], ensure_ascii=False),
+                    "procurement_type": snapshot["procurement_type"],
                     "raw_data": json.dumps(snapshot["raw_data"], ensure_ascii=False),
                 }
                 changed_fields = [field for field in tracked_fields if previous_values[field] != current_values[field]]

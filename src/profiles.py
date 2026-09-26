@@ -7,7 +7,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 from src.storage.database import TenderDatabase
-from src.telegram_settings import CriteriaStore, TenderCriteria
+from src.telegram_settings import (
+    CriteriaStore,
+    TenderCriteria,
+    normalize_okpd2_codes,
+    normalize_procurement_types,
+)
 
 
 @dataclass
@@ -30,6 +35,15 @@ class SearchProfile:
     min_contract_security_percent: float = 0.0
     max_contract_security_percent: float | None = None
     min_ai_score: int = 70
+    customer: str | None = None
+    customer_inn: str | None = None
+    law_type: str | None = None
+    # Контрактные фильтры (docs/TENDERPLAN_SEARCH_RESEARCH_2026-09-19.md):
+    # сохраняются и валидируются, но площадками пока не применяются — зона
+    # collectors (Kilo) подключит их позже. UI не выдаёт их за работающие.
+    okpd2_codes: list[str] = field(default_factory=list)
+    procurement_types: list[str] = field(default_factory=list)
+    document_search: bool = False
     enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
@@ -49,6 +63,12 @@ class SearchProfile:
             min_ai_score=self.min_ai_score,
             exclude_keywords=list(self.exclusions),
             regions=list(self.regions),
+            customer=self.customer,
+            customer_inn=self.customer_inn,
+            law_type=self.law_type,
+            okpd2_codes=list(self.okpd2_codes),
+            procurement_types=list(self.procurement_types),
+            document_search=self.document_search,
         )
 
 
@@ -103,6 +123,12 @@ class SearchProfileStore:
                     min_contract_security_percent REAL NOT NULL DEFAULT 0,
                     max_contract_security_percent REAL,
                     min_ai_score INTEGER NOT NULL DEFAULT 70,
+                    customer TEXT,
+                    customer_inn TEXT,
+                    law_type TEXT,
+                    okpd2_codes TEXT NOT NULL DEFAULT '[]',
+                    procurement_types TEXT NOT NULL DEFAULT '[]',
+                    document_search INTEGER NOT NULL DEFAULT 0,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -149,6 +175,12 @@ class SearchProfileStore:
                 "min_contract_security_percent": "REAL NOT NULL DEFAULT 0",
                 "max_contract_security_percent": "REAL",
                 "min_ai_score": "INTEGER NOT NULL DEFAULT 70",
+                "customer": "TEXT",
+                "customer_inn": "TEXT",
+                "law_type": "TEXT",
+                "okpd2_codes": "TEXT NOT NULL DEFAULT '[]'",
+                "procurement_types": "TEXT NOT NULL DEFAULT '[]'",
+                "document_search": "INTEGER NOT NULL DEFAULT 0",
                 "enabled": "INTEGER NOT NULL DEFAULT 1",
                 "created_at": "TEXT NOT NULL DEFAULT ''",
                 "updated_at": "TEXT NOT NULL DEFAULT ''",
@@ -185,6 +217,9 @@ class SearchProfileStore:
             max_application_security_percent=row["max_application_security_percent"],
             min_contract_security_percent=float(row["min_contract_security_percent"]),
             max_contract_security_percent=row["max_contract_security_percent"], min_ai_score=int(row["min_ai_score"]),
+            customer=row["customer"], customer_inn=row["customer_inn"], law_type=row["law_type"],
+            okpd2_codes=cls._loads(row["okpd2_codes"]), procurement_types=cls._loads(row["procurement_types"]),
+            document_search=bool(row["document_search"]),
             enabled=bool(row["enabled"]), created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
@@ -213,6 +248,10 @@ class SearchProfileStore:
             raise ValueError("min_submission_days должен быть неотрицательным")
         if not 0 <= profile.min_ai_score <= 100:
             raise ValueError("min_ai_score должен быть от 0 до 100")
+        # Каноническая нормализация контрактных фильтров (валидация формата
+        # ОКПД2 и white-list режимов процедуры выполняется в telegram_settings).
+        profile.okpd2_codes = normalize_okpd2_codes(profile.okpd2_codes)
+        profile.procurement_types = normalize_procurement_types(profile.procurement_types)
 
     def create(self, user_id: str | int, profile: SearchProfile | None = None, **values) -> SearchProfile:
         user_id = str(user_id).strip()
@@ -233,7 +272,8 @@ class SearchProfileStore:
             "user_id", "name", "keywords", "exclusions", "platforms", "regions", "min_price", "max_price",
             "advance_required", "min_advance_percent", "max_postpayment_days", "min_submission_days",
             "min_application_security_percent", "max_application_security_percent", "min_contract_security_percent",
-            "max_contract_security_percent", "min_ai_score", "enabled", "created_at", "updated_at",
+            "max_contract_security_percent", "min_ai_score", "customer", "customer_inn", "law_type",
+            "okpd2_codes", "procurement_types", "document_search", "enabled", "created_at", "updated_at",
         )
         values_tuple = (
             profile.user_id, profile.name.strip(), self._json(profile.keywords), self._json(profile.exclusions),
@@ -241,7 +281,9 @@ class SearchProfileStore:
             int(profile.advance_required), profile.min_advance_percent, profile.max_postpayment_days,
             profile.min_submission_days, profile.min_application_security_percent, profile.max_application_security_percent,
             profile.min_contract_security_percent, profile.max_contract_security_percent, profile.min_ai_score,
-            int(profile.enabled), profile.created_at, profile.updated_at,
+            profile.customer, profile.customer_inn, profile.law_type,
+            self._json(profile.okpd2_codes), self._json(profile.procurement_types),
+            int(profile.document_search), int(profile.enabled), profile.created_at, profile.updated_at,
         )
         with self.db._connect() as conn:
             cursor = conn.execute(
@@ -280,6 +322,15 @@ class SearchProfileStore:
             values["name"] = str(values["name"]).strip()
         for key in {"keywords", "exclusions", "platforms", "regions"} & values.keys():
             values[key] = self._json(values[key])
+        # Контрактные фильтры: в SQL уходит JSON, а в candidate для валидации —
+        # нормализованные списки (не закодированные строки).
+        normalized_contract: dict[str, list[str]] = {}
+        if "okpd2_codes" in values:
+            normalized_contract["okpd2_codes"] = normalize_okpd2_codes(values["okpd2_codes"])
+            values["okpd2_codes"] = self._json(normalized_contract["okpd2_codes"])
+        if "procurement_types" in values:
+            normalized_contract["procurement_types"] = normalize_procurement_types(values["procurement_types"])
+            values["procurement_types"] = self._json(normalized_contract["procurement_types"])
         for key in {"advance_required", "enabled"} & values.keys():
             values[key] = int(bool(values[key]))
 
@@ -288,7 +339,7 @@ class SearchProfileStore:
             raise KeyError(profile_id)
         for key, value in values.items():
             if hasattr(candidate, key):
-                setattr(candidate, key, value)
+                setattr(candidate, key, normalized_contract.get(key, value))
         self._validate_values(candidate)
         values.pop("updated_at", None)
         values["updated_at"] = self._now()
@@ -353,6 +404,12 @@ class SearchProfileStore:
                 min_contract_security_percent=criteria.min_contract_security_percent,
                 max_contract_security_percent=criteria.max_contract_security_percent,
                 min_ai_score=criteria.min_ai_score,
+                customer=criteria.customer,
+                customer_inn=criteria.customer_inn,
+                law_type=criteria.law_type,
+                okpd2_codes=list(criteria.okpd2_codes),
+                procurement_types=list(criteria.procurement_types),
+                document_search=bool(criteria.document_search),
             ),
         )
 

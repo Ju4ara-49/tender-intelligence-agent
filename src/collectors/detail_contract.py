@@ -8,6 +8,8 @@ from src.models.tender import Tender
 
 _DETAIL_STATUSES = {"success", "partial", "failed"}
 _INN_RE = re.compile(r"(?<!\d)(?:\d{10}|\d{12})(?!\d)")
+_OKPD2_RE = re.compile(r"\b\d{2}(?:\.\d{1,3}){0,3}\b")
+_PROCUREMENT_TYPES = {"commercial", "plan_schedule", "bankruptcy_property"}
 
 
 def _normalize_inn(value: object) -> str:
@@ -56,6 +58,53 @@ def _extract_inn(tender: Tender) -> str:
     return ""
 
 
+def _detail_text(tender: Tender) -> str:
+    raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
+    parts = [tender.title, tender.description]
+    for key in ("details", "search_text", "document_text", "document_contents"):
+        parts.append(str(raw.get(key) or ""))
+    return " ".join(part for part in parts if part).strip()
+
+
+def _extract_okpd2_codes(tender: Tender) -> list[str]:
+    raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
+    explicit = raw.get("okpd2_codes")
+    if isinstance(explicit, (list, tuple, set)):
+        values = [str(item).strip() for item in explicit if str(item).strip()]
+        if values:
+            return list(dict.fromkeys(values))
+
+    text = _detail_text(tender)
+    codes: list[str] = []
+    marker = re.compile(r"(?:код\s+)?окпд\s*2?\s*[:№-]?\s*([^;|]{0,120})", re.I)
+    for match in marker.finditer(text):
+        segment = match.group(1)
+        for code_match in _OKPD2_RE.finditer(segment):
+            code = code_match.group(0)
+            remainder = segment[code_match.end():].lstrip()
+            if "." not in code and remainder and remainder[0].isdigit():
+                continue
+            if code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _classify_procurement_type(tender: Tender) -> str:
+    raw = tender.raw_data if isinstance(tender.raw_data, dict) else {}
+    explicit = str(raw.get("procurement_type") or tender.procurement_type or "").strip()
+    if explicit in _PROCUREMENT_TYPES:
+        return explicit
+
+    text = _detail_text(tender).casefold().replace("ё", "е")
+    if re.search(r"\bплан[\s-]+график\b", text):
+        return "plan_schedule"
+    if re.search(r"\bбанкрот\w*\b|\bреализац\w*\s+имуществ\w*\b|\bпродаж\w*\s+имуществ\w*\b", text):
+        return "bankruptcy_property"
+    if re.search(r"\bкоммерческ\w*\s+(?:закупк\w*|тендер\w*|торг\w*)\b", text):
+        return "commercial"
+    return ""
+
+
 def enforce_detail_contract(collector) -> None:
     """Wrap one collector's get_details with the common STEP-25 contract.
 
@@ -90,6 +139,9 @@ def enforce_detail_contract(collector) -> None:
                 raw.get("detail_diagnostics") or "Площадка вернула блокировку/WAF/CAPTCHA"
             )[:4000]
         else:
+            if not tender.okpd2_codes:
+                tender.okpd2_codes = _extract_okpd2_codes(tender)
+            tender.procurement_type = _classify_procurement_type(tender)
             tender.customer_inn = _extract_inn(tender)
             missing = []
             if not str(tender.title or "").strip():

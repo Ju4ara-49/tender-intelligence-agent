@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
 from src.models.tender import Tender, TenderAnalysis
+from src.security_redaction import redact_secrets
+from src.tenderplan import TenderTaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +30,17 @@ class TelegramNotifier:
         "rosatom": "Росатом",
     }
 
-    def __init__(self, bot_token: str = "", chat_id: str = "", dry_run_when_no_token: bool = True) -> None:
+    def __init__(
+        self,
+        bot_token: str = "",
+        chat_id: str = "",
+        dry_run_when_no_token: bool = True,
+        task_store: TenderTaskStore | None = None,
+    ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.dry_run_when_no_token = dry_run_when_no_token
+        self.task_store = task_store
 
     @property
     def is_configured(self) -> bool:
@@ -98,7 +108,8 @@ class TelegramNotifier:
             logger.info("Telegram: сообщение отправлено в chat_id=%s", target_chat_id)
             return True
         except (httpx.HTTPError, ValueError) as exc:
-            logger.error("Telegram: ошибка отправки в chat_id=%s: %s", target_chat_id, exc)
+            safe_exc = redact_secrets(str(exc), (self.bot_token,) if self.bot_token else None)
+            logger.error("Telegram: ошибка отправки в chat_id=%s: %s", target_chat_id, safe_exc)
             return False
 
     @classmethod
@@ -117,11 +128,25 @@ class TelegramNotifier:
         price_str = "не указан"
         if tender.price is not None:
             price_str = f"{tender.price:,.0f} {tender.currency}".replace(",", " ")
+        start_str = tender.start_date.strftime("%d.%m.%Y") if tender.start_date else "не указана"
+        end_str = tender.end_date.strftime("%d.%m.%Y") if tender.end_date else "не указана"
         deadline_str = tender.deadline.strftime("%d.%m.%Y") if tender.deadline else "не указан"
         risks = ""
         if analysis.risks:
             safe_risks = [html.escape(str(r)) for r in analysis.risks[:3]]
-            risks = "\n⚠️ <b>Риски:</b> " + "; ".join(safe_risks)
+            risks = "\n⚠️ <b>Риски AI:</b> " + "; ".join(safe_risks)
+        risk_assessment = tender.raw_data.get("risk_assessment") if isinstance(tender.raw_data, dict) else {}
+        if isinstance(risk_assessment, dict) and risk_assessment.get("level"):
+            level = html.escape(str(risk_assessment["level"]))
+            factor_codes = [
+                html.escape(str(item.get("code")))
+                for item in risk_assessment.get("factors", [])
+                if isinstance(item, dict) and item.get("code")
+            ]
+            deterministic = f"\n🛡️ <b>Risk Engine:</b> {level}"
+            if factor_codes:
+                deterministic += " — " + ", ".join(factor_codes[:4])
+            risks += deterministic
         stub_note = "\n<i>(ИИ-заглушка — используется вместо локального Ollama)</i>" if analysis.is_stub else ""
         rec_map = {"participate": "Участвовать", "skip": "Пропустить", "review": "На проверку"}
         rec = html.escape(str(rec_map.get(analysis.recommendation, analysis.recommendation or "")))
@@ -130,7 +155,10 @@ class TelegramNotifier:
             f"{emoji} <b>Новый тендер ({score}/100)</b>\n\n"
             f"🏷️ <b>Площадка:</b> {platform}\n"
             f"📋 {title}\n"
-            f"💰 {price_str} | ⏰ до {deadline_str}\n"
+            f"💰 {price_str}\n"
+            f"📅 <b>Дата начала:</b> {start_str}\n"
+            f"📅 <b>Дата окончания:</b> {end_str}\n"
+            f"⏰ <b>Срок подачи:</b> {deadline_str}\n"
             f"🏢 {customer}\n\n"
             f"📝 {summary}\n{risks}\n"
             f"💡 <b>Рекомендация:</b> {rec}{stub_note}\n\n"

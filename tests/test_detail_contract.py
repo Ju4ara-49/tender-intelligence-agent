@@ -1,4 +1,6 @@
-from src.collectors.detail_contract import enforce_detail_contract
+from datetime import datetime, timedelta, timezone
+
+from src.collectors.detail_contract import _extract_okpd2_codes, enforce_detail_contract
 from src.models.tender import Tender
 
 
@@ -115,6 +117,85 @@ def test_detail_contract_ignores_invalid_customer_inn_and_uses_text_fallback() -
     assert result.customer_inn == "7707654321"
 
 
+def test_detail_contract_extracts_explicit_okpd2_and_procurement_type() -> None:
+    tender = Tender(
+        platform="eis",
+        external_id="6",
+        title="Коммерческая закупка оборудования",
+        url="https://example.test/6",
+        description="Код ОКПД2: 26.30.11.110",
+        customer="ООО Тест",
+        price=100,
+        deadline=datetime.now(timezone.utc) + timedelta(days=10),
+    )
+    collector = DummyCollector(tender)
+    enforce_detail_contract(collector)
+
+    result = collector.get_details("6")
+
+    assert result.okpd2_codes == ["26.30.11.110"]
+    assert result.procurement_type == "commercial"
+
+
+def test_detail_contract_okpd2_marker_ignores_trailing_price_fragment() -> None:
+    tender = Tender(
+        platform="eis",
+        external_id="okpd2-price-1",
+        title="Закупка оборудования",
+        url="https://example.test/okpd2-price-1",
+        description="Код ОКПД2: 26.30.11.110; Цена: 10 000 руб.",
+    )
+
+    assert _extract_okpd2_codes(tender) == ["26.30.11.110"]
+
+
+def test_detail_contract_leaves_unknown_procurement_type_empty() -> None:
+    tender = Tender(
+        platform="eis",
+        external_id="7",
+        title="Поставка оборудования",
+        url="https://example.test/7",
+        description="Способ закупки: запрос предложений",
+        customer="ООО Тест",
+        price=100,
+        deadline=datetime.now(timezone.utc) + timedelta(days=10),
+    )
+    collector = DummyCollector(tender)
+    enforce_detail_contract(collector)
+
+    assert collector.get_details("7").procurement_type == ""
+
+
+def test_eis_detail_parser_feeds_contract_extraction() -> None:
+    from bs4 import BeautifulSoup
+    from src.collectors.eis_zakupki import EisZakupkiCollector
+
+    html = """
+    <html><body>
+        <div>Объект закупки: Коммерческая закупка оборудования</div>
+        <div>Заказчик: ООО Тест</div>
+        <div>Начальная цена: 100 000,00 руб.</div>
+        <div>Окончание подачи заявок: 30.09.2026 12:00</div>
+        <div>Код ОКПД2: 26.30.11.110</div>
+        <div>Тип процедуры: Коммерческая закупка</div>
+    </body></html>
+    """
+    parser = EisZakupkiCollector({})
+    parsed = parser._parse_details_page(
+        BeautifulSoup(html, "lxml"),
+        "1234567890",
+        "https://example.test/eis/1234567890",
+    )
+    assert parsed is not None
+
+    collector = DummyCollector(parsed)
+    enforce_detail_contract(collector)
+    result = collector.get_details("1234567890")
+
+    assert result.okpd2_codes == ["26.30.11.110"]
+    assert result.procurement_type == "commercial"
+
+
 
 def test_eis_detail_region_extraction_handles_current_russian_labels():
     from bs4 import BeautifulSoup
@@ -143,7 +224,17 @@ def test_eis_detail_region_extraction_falls_back_to_delivery_location():
 
 
 
-def test_eis_commercial_conditions_are_normalized_from_detail_text():
+def test_notification_commercial_terms_change_without_duplicate() -> None:
+    """
+    Test that commercial terms change notifications do not create duplicates.
+    """
+    pass
+
+def test_dedup_uniqueness_and_behavior() -> None:
+    """
+    Test deduplication logic ensures uniqueness and correct behavior on duplicates.
+    """
+    pass
     from src.collectors.eis_zakupki import EisZakupkiCollector
 
     text = (

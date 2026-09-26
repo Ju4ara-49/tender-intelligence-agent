@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from src.crm.telegram import handle_callback
@@ -12,9 +13,14 @@ from src.notifications.telegram import TelegramNotifier
 class _FakeBoard:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, bool]] = []
+        self._status = "new"
+
+    def get_status(self, tender_id: int) -> str:
+        return self._status
 
     def set_status(self, tender_id: int, status: str, *, force: bool = False):
         self.calls.append((tender_id, status, force))
+        self._status = status
         return status
 
 
@@ -77,8 +83,22 @@ class TelegramNotificationCrmTests(unittest.TestCase):
         bot = _FakeBot()
         handled = handle_callback(bot, "777", "crm:participate:eis:12345")
         self.assertTrue(handled)
-        self.assertEqual(bot.crm_board.calls, [(42, "participating", True)])
+        self.assertEqual(bot.crm_board.calls, [(42, "participating", False)])
         self.assertIn("Статус тендера #42 изменён", bot.sent[-1][1])
+
+    def test_notification_shows_start_end_and_deadline_dates(self) -> None:
+        tender = self._tender()
+        tender.start_date = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        tender.end_date = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        tender.deadline = datetime(2026, 9, 15, tzinfo=timezone.utc)
+        analysis = TenderAnalysis(relevance_score=90, summary="Подходит", recommendation="participate")
+        text = TelegramNotifier.format_message(tender, analysis)
+        self.assertIn("Дата начала:", text)
+        self.assertIn("01.09.2026", text)
+        self.assertIn("Дата окончания:", text)
+        self.assertIn("20.09.2026", text)
+        self.assertIn("Срок подачи:", text)
+        self.assertIn("15.09.2026", text)
 
     def test_notification_keeps_russian_recommendation(self) -> None:
         analysis = TenderAnalysis(relevance_score=90, summary="Подходит", recommendation="participate")

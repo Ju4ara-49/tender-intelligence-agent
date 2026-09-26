@@ -25,6 +25,9 @@ _PROFILE_FIELD_LABELS = {
     "min_contract_security_percent": "Обеспечение контракта от",
     "max_contract_security_percent": "Обеспечение контракта до",
     "min_submission_days": "Срок до подачи от", "min_ai_score": "Минимальный AI балл",
+    "customer": "Заказчик", "customer_inn": "ИНН заказчика", "law_type": "Закон",
+    "okpd2_codes": "ОКПД2", "procurement_types": "Режим процедуры",
+    "document_search": "Поиск в документах",
 }
 
 _PROFILE_NUMERIC_FIELDS = {
@@ -34,7 +37,7 @@ _PROFILE_NUMERIC_FIELDS = {
     "min_contract_security_percent": (float, 0, 100), "max_contract_security_percent": (float, 0, 100),
     "min_submission_days": (int, 0, 3650), "min_ai_score": (int, 0, 100),
 }
-_PROFILE_LIST_FIELDS = {"keywords", "exclusions", "platforms", "regions"}
+_PROFILE_LIST_FIELDS = {"keywords", "exclusions", "platforms", "regions", "okpd2_codes", "procurement_types"}
 _CLEAR_VALUES = {"нет", "none", "off", "сброс", "сбросить"}
 
 
@@ -165,7 +168,10 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             ("max_postpayment_days", "Постоплата до"), ("min_application_security_percent", "Заявка от"),
             ("max_application_security_percent", "Заявка до"), ("min_contract_security_percent", "Контракт от"),
             ("max_contract_security_percent", "Контракт до"), ("min_submission_days", "Дней до подачи"),
-            ("min_ai_score", "AI балл"),
+            ("min_ai_score", "AI балл"), ("customer", "Заказчик"),
+            ("customer_inn", "ИНН заказчика"), ("law_type", "Закон"),
+            ("okpd2_codes", "ОКПД2"), ("procurement_types", "Режим процедуры"),
+            ("document_search", "Поиск в документах"),
         ]
         rows = []
         for i in range(0, len(fields), 2):
@@ -197,7 +203,13 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             f"Постоплата до: {self._fmt(profile.max_postpayment_days)} дн.",
             f"Обеспечение заявки: {self._fmt(profile.min_application_security_percent)}–{self._fmt(profile.max_application_security_percent)}%",
             f"Обеспечение контракта: {self._fmt(profile.min_contract_security_percent)}–{self._fmt(profile.max_contract_security_percent)}%",
-            f"Дней до подачи: {profile.min_submission_days}", f"AI балл: {profile.min_ai_score}", "",
+            f"Дней до подачи: {profile.min_submission_days}", f"AI балл: {profile.min_ai_score}",
+            f"Заказчик: {html.escape(profile.customer or 'любой')}",
+            f"ИНН: {html.escape(profile.customer_inn or 'любой')}",
+            f"Закон: {html.escape(profile.law_type or 'любой')}",
+            f"ОКПД2: {html.escape(', '.join(profile.okpd2_codes) or 'любой')}",
+            f"Режим процедуры: {html.escape(', '.join(profile.procurement_types) or 'любой')}",
+            f"Поиск в документах: {'включён' if profile.document_search else 'выключен'}", "",
             f"Запусков: {int(stats.get('runs') or 0)}; найдено: {int(stats.get('found') or 0)}; уведомлений: {int(stats.get('notified') or 0)}",
         ]
         self._send(chat_id, "\n".join(lines), self._profile_edit_keyboard(profile_id))
@@ -262,6 +274,10 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             current_text, hint = ", ".join(str(x) for x in current) if current else "нет", "через запятую; «нет» = очистить"
         elif field == "name":
             current_text, hint = str(current), "название не должно быть пустым"
+        elif field == "document_search":
+            current_text, hint = ("включён" if current else "выключен"), "да/нет"
+        elif field in {"customer", "customer_inn", "law_type"}:
+            current_text, hint = str(current or "нет"), "текст; «нет» = очистить"
         else:
             current_text = self._fmt(current)
             hint = "«нет» = отключить ограничение" if field not in {"min_submission_days", "min_ai_score"} else "целое число"
@@ -283,6 +299,8 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
             max_application_security_percent=criteria.max_application_security_percent,
             min_contract_security_percent=criteria.min_contract_security_percent,
             max_contract_security_percent=criteria.max_contract_security_percent, min_ai_score=criteria.min_ai_score,
+            okpd2_codes=list(criteria.okpd2_codes), procurement_types=list(criteria.procurement_types),
+            document_search=bool(criteria.document_search),
         )
         try:
             created = self.orchestrator.profile_store.create(chat_id, profile)
@@ -342,6 +360,15 @@ class FullCriteriaTelegramBot(CriteriaAwareResponsiveTelegramBot):
                         if key not in normalized:
                             normalized.append(key)
                     value = normalized
+            elif target == "document_search":
+                if raw.casefold() in {"1", "да", "вкл", "включить"}:
+                    value = True
+                elif raw.casefold() in _CLEAR_VALUES or raw.casefold() in {"0", "нет", "выкл", "выключить"}:
+                    value = False
+                else:
+                    raise ValueError("введите да/нет")
+            elif target in {"customer", "customer_inn", "law_type"}:
+                value = "" if raw.casefold() in _CLEAR_VALUES else raw
             else:
                 caster, minimum, maximum = _PROFILE_NUMERIC_FIELDS[target]
                 if raw.casefold() in _CLEAR_VALUES and target not in {"min_submission_days", "min_ai_score"}:

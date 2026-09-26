@@ -18,7 +18,7 @@ TARGETS = {
     "b2b_center": "https://www.b2b-center.ru/market/",
     "fabrikant_223": "https://soap2.fabrikant.ru/223/catalog/procedure/published",
     "fabrikant_44": "https://soap4.fabrikant.ru/44/catalog/procedure",
-    "rts_tender": "https://223.rts-tender.ru/",
+    "rts_tender": "https://www.rts-tender.ru/",
     "tmk": "https://stock.tmk-group.com/auction/",
     "rosatom": "https://zakupki.rosatom.ru/?link=published_procurements",
 }

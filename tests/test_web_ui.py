@@ -2,6 +2,8 @@ from src.models.tender import Tender
 from src.profiles import SearchProfile
 from src.web_ui import profile_from_form, render_form
 
+import pytest
+
 
 def test_web_form_matches_canonical_profile_fields():
     form = {
@@ -16,6 +18,10 @@ def test_web_form_matches_canonical_profile_fields():
         "min_application_security_percent": ["0"], "max_application_security_percent": ["5"],
         "min_contract_security_percent": ["0"], "max_contract_security_percent": ["10"],
         "min_ai_score": ["80"],
+        "customer": ["ООО Ромашка"],
+        "customer_inn": ["7701234567"],
+        "law_type": ["44-ФЗ"],
+        "document_search": ["1"],
     }
     p = profile_from_form(form, "u")
     assert p.user_id == "u"
@@ -32,6 +38,10 @@ def test_web_form_matches_canonical_profile_fields():
     assert p.max_application_security_percent == 5
     assert p.max_contract_security_percent == 10
     assert p.min_ai_score == 80
+    assert p.customer == "ООО Ромашка"
+    assert p.customer_inn == "7701234567"
+    assert p.law_type == "44-ФЗ"
+    assert p.document_search is True
 
 
 def test_web_render_is_russian_and_escapes_user_values():
@@ -45,7 +55,108 @@ def test_web_render_is_russian_and_escapes_user_values():
 
 
 def test_web_form_defaults_match_product_search_defaults():
-    p = profile_from_form({"name": ["Тест"], "keywords": ["подшипники"]})
+    p = profile_from_form({"name": ["Тест"], "keywords": ["подшипники"], "platforms": ["eis"]})
+    assert p.platforms == ["eis"]
     assert p.min_submission_days == 7
     assert p.min_ai_score == 70
     assert p.advance_required is False
+    assert p.document_search is False
+    assert p.customer is None
+    assert p.customer_inn is None
+    assert p.law_type is None
+
+
+def test_web_form_document_search_checkbox_is_not_disabled():
+    profile = SearchProfile(name="Test", document_search=True)
+    page = render_form(profile)
+    assert 'name="document_search"' in page
+    assert 'disabled' not in page.split('document_search')[1][:200]
+
+
+def test_web_form_contains_new_filter_fields():
+    page = render_form(SearchProfile())
+    assert 'name="customer"' in page
+    assert 'name="customer_inn"' in page
+    assert 'name="law_type"' in page
+
+
+def test_web_form_rejects_profile_without_platforms():
+    """Regression: пустой список площадок молча сбрасывал фильтр площадок
+    до «все площадки» в run_cycle_for_user (platforms or None)."""
+    form = {
+        "name": ["Без площадок"],
+        "keywords": ["подшипники"],
+        "platforms": [""],
+    }
+    with pytest.raises(ValueError, match="площадк"):
+        profile_from_form(form, "u")
+
+
+def test_web_form_keeps_selected_platforms():
+    form = {
+        "name": ["С площадками"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis", "b2b_center"],
+    }
+    p = profile_from_form(form, "u")
+    assert p.platforms == ["eis", "b2b_center"]
+
+
+def test_web_form_parses_okpd2_and_procurement_types():
+    form = {
+        "name": ["Экспертный"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis"],
+        "okpd2_codes": [" 01.11.12, 26.30, 26.30 "],
+        "procurement_types": ["plan_schedule", "bankruptcy_property"],
+    }
+    p = profile_from_form(form, "u")
+    assert p.okpd2_codes == ["01.11.12", "26.30"]
+    assert p.procurement_types == ["plan_schedule", "bankruptcy_property"]
+
+
+def test_web_form_rejects_invalid_okpd2():
+    form = {
+        "name": ["Плохой ОКПД2"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis"],
+        "okpd2_codes": ["подшипники"],
+    }
+    with pytest.raises(ValueError, match="ОКПД2"):
+        profile_from_form(form, "u")
+
+
+def test_web_form_rejects_unknown_procurement_type():
+    form = {
+        "name": ["Плохой режим"],
+        "keywords": ["подшипники"],
+        "platforms": ["eis"],
+        "procurement_types": ["lunar_mining"],
+    }
+    with pytest.raises(ValueError, match="режим"):
+        profile_from_form(form, "u")
+
+
+def test_web_form_contract_filters_default_to_empty():
+    """Экспертный режим: поля опциональны, пустые не ограничивают поиск."""
+    p = profile_from_form({"name": ["Простой"], "keywords": ["подшипники"], "platforms": ["eis"]})
+    assert p.okpd2_codes == []
+    assert p.procurement_types == []
+
+
+def test_web_render_contains_keyword_operators_help():
+    page = render_form(SearchProfile(platforms=["eis"]))
+    assert "Операторы ключевых слов" in page
+    assert "(слово1 слово2)~5" in page
+
+
+def test_web_render_contains_expert_mode_with_honest_capability_notes():
+    page = render_form(SearchProfile(platforms=["eis"]))
+    assert 'name="okpd2_codes"' in page
+    assert 'name="procurement_types"' in page
+    assert "Экспертный режим" in page
+    # Никаких fake capabilities: контрактные фильтры честно помечены как
+    # «сохраняются, но пока не ограничивают выдачу».
+    assert "пока не ограничивают выдачу" in page
+    # А реально применяемые фильтры перечислены отдельно.
+    assert "Уже применяются площадками" in page

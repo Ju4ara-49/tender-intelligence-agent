@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
+
+from src.tenderplan import TenderLifecycleStore, TenderTaskStore
+
+# База хранит все даты в UTC (канонический контракт Tender), но пользователь
+# отчёта оперирует московским временем: дедлайны закупок РФ публикуются в МСК.
+MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
 
 
 def export_tenders_to_excel(
@@ -16,6 +22,7 @@ def export_tenders_to_excel(
     output_path: Path | str,
     tender_ids: list[int] | None = None,
     search_number: int | None = None,
+    user_id: str | int | None = None,
 ) -> Path:
     """Экспортирует результаты текущего прогона в отдельный Excel."""
 
@@ -30,7 +37,8 @@ def export_tenders_to_excel(
                 SELECT
                     t.id, t.platform, t.external_id, t.title, t.url, t.description,
                     t.price, t.currency, t.deadline, t.published_at, t.region,
-                    t.customer, t.law_type, t.raw_data, a.relevance_score,
+                    t.customer, t.law_type, t.okpd2_codes, t.procurement_type,
+                    t.raw_data, a.relevance_score,
                     a.summary, a.recommendation, a.risks, a.deadline_note,
                     a.is_stub, a.analyzed_at
                 FROM tenders t
@@ -45,15 +53,20 @@ def export_tenders_to_excel(
         else:
             rows = []
 
+    task_store = TenderTaskStore(db.db_path)
+    lifecycle_store = TenderLifecycleStore(db.db_path)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Тендеры"
 
     headers = [
         "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
-        "Начальная цена", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
+        "Начальная цена", "Валюта", "Дата публикации (МСК)", "Дата окончания подачи заявок (МСК)",
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
         "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
+        "Задача", "Статус задачи", "Приоритет задачи", "Ответственный", "Заметки задачи",
+        "Risk", "Risk factors", "Lifecycle", "ОКПД2", "Режим процедуры",
     ]
     ws.append(headers)
 
@@ -62,7 +75,7 @@ def export_tenders_to_excel(
         cell.fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(MOSCOW_TZ)
 
     for row in rows:
         raw_data = {}
@@ -73,6 +86,11 @@ def export_tenders_to_excel(
             raw_data = {}
 
         procurement_method = raw_data.get("procurement_method", "")
+        try:
+            okpd2_codes = "; ".join(json.loads(row["okpd2_codes"] or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            okpd2_codes = str(row["okpd2_codes"] or "")
+        procurement_type = str(row["procurement_type"] or "")
         platform_names = {
             "eis": "ЕИС", "b2b_center": "B2B-Center", "fabrikant": "Фабрикант",
             "fabricant": "Фабрикант", "rts_tender": "РТС-тендер", "tmk": "ТМК", "rosatom": "Росатом",
@@ -84,7 +102,11 @@ def export_tenders_to_excel(
         recommendation = recommendation_names.get(row["recommendation"] or "", row["recommendation"] or "")
         deadline = _parse_datetime(row["deadline"])
         published_at = _parse_datetime(row["published_at"])
-        days_left = "" if deadline is None else max(0, (deadline.date() - now.date()).days)
+        days_left = (
+            ""
+            if deadline is None
+            else max(0, (deadline.astimezone(MOSCOW_TZ).date() - now.date()).days)
+        )
 
         risks = ""
         if row["risks"]:
@@ -97,12 +119,32 @@ def export_tenders_to_excel(
             except (TypeError, ValueError, json.JSONDecodeError):
                 risks = str(row["risks"])
 
+        tasks = task_store.list_for_tender(
+            f"{row['platform']}:{row['external_id']}",
+            user_id=None if user_id is None else str(user_id).strip(),
+        )
+        task = tasks[0] if tasks else None
+        risk = raw_data.get("risk_assessment") if isinstance(raw_data.get("risk_assessment"), dict) else {}
+        risk_level = str(risk.get("level") or "")
+        lifecycle = lifecycle_store.get(f"{row['platform']}:{row['external_id']}")
+        lifecycle_value = lifecycle.value if lifecycle is not None else ""
+        risk_factors = "; ".join(
+            str(item.get("code") or "").strip()
+            for item in risk.get("factors", [])
+            if isinstance(item, dict) and str(item.get("code") or "").strip()
+        )
         ws.append([
             platform, row["external_id"] or "", row["title"] or "", row["customer"] or "",
             row["region"] or "", row["price"], row["currency"] or "RUB",
             _excel_datetime(published_at), _excel_datetime(deadline), days_left,
             row["law_type"] or "", procurement_method, row["relevance_score"],
             recommendation, row["summary"] or "", risks, row["url"] or "",
+            task.title if task else "",
+            task.status.value if task else "",
+            task.priority.value if task else "",
+            task.responsible if task else "",
+            task.notes if task else "", risk_level, risk_factors, lifecycle_value,
+            okpd2_codes, procurement_type,
         ])
 
     # Q = Ссылка: делаем URL настоящей гиперссылкой Excel.
@@ -118,6 +160,8 @@ def export_tenders_to_excel(
     widths = {
         1: 14, 2: 22, 3: 55, 4: 32, 5: 18, 6: 20, 7: 8, 8: 14, 9: 24,
         10: 20, 11: 8, 12: 30, 13: 10, 14: 18, 15: 45, 16: 35, 17: 55,
+        18: 20, 19: 18, 20: 18, 21: 22, 22: 40, 23: 12, 24: 35, 25: 16,
+        26: 18, 27: 22,
     }
     for column, width in widths.items():
         ws.column_dimensions[get_column_letter(column)].width = width
@@ -156,7 +200,7 @@ def export_tenders_to_excel(
         ("Тендеров в этом прогоне", total), ("Проанализировано AI", analyzed),
         ("AI score >= 70", high_score), ("Рекомендация: участвовать", participate),
         ("Рекомендация: рассмотреть", review), ("Рекомендация: пропустить", skip),
-        ("Дата формирования", datetime.now().strftime("%d.%m.%Y %H:%M")),
+        ("Дата формирования", datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M")),
     ]
     for item in stats_rows:
         stats.append(item)
@@ -185,6 +229,7 @@ def _parse_datetime(value) -> datetime | None:
 
 
 def _excel_datetime(value: datetime | None):
+    """Excel не хранит тайзоны: показываем московское стеночное время."""
     if value is None:
         return None
-    return value.replace(tzinfo=None)
+    return value.astimezone(MOSCOW_TZ).replace(tzinfo=None)
