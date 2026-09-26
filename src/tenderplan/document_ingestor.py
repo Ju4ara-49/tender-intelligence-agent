@@ -155,6 +155,9 @@ class TenderDocumentIngestor:
         if "wordprocessingml" in lowered or path.endswith(".docx"):
             try:
                 with zipfile.ZipFile(BytesIO(content)) as archive:
+                    total_uncompressed = sum(info.file_size for info in archive.infolist())
+                    if total_uncompressed > self.max_archive_uncompressed_bytes:
+                        return "", DocumentExtractionStatus.FAILED, "docx archive exceeds extraction limit"
                     info = archive.getinfo("word/document.xml")
                     if info.file_size > self.max_archive_uncompressed_bytes:
                         return "", DocumentExtractionStatus.FAILED, "docx XML exceeds archive extraction limit"
@@ -165,7 +168,7 @@ class TenderDocumentIngestor:
                     for node in root.iter()
                     if node.tag.endswith("}t") and node.text and node.text.strip()
                 )
-                return text, DocumentExtractionStatus.EXTRACTED, ""
+                return self._bounded_text(text), DocumentExtractionStatus.EXTRACTED, ""
             except Exception as exc:
                 return "", DocumentExtractionStatus.FAILED, f"docx extraction failed: {type(exc).__name__}: {exc}"
         if "msword" in lowered or (path.endswith(".doc") and not path.endswith(".docx")):
@@ -174,9 +177,18 @@ class TenderDocumentIngestor:
             try:
                 workbook = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
                 parts = []
+                total_text_bytes = 0
                 for sheet in workbook.worksheets:
                     for row in sheet.iter_rows(values_only=True):
-                        parts.extend(str(value).strip() for value in row if value is not None and str(value).strip())
+                        for value in row:
+                            if value is None or not str(value).strip():
+                                continue
+                            part = str(value).strip()
+                            total_text_bytes += len(part.encode("utf-8", errors="replace"))
+                            if total_text_bytes > self.max_extracted_text_bytes:
+                                workbook.close()
+                                return self._bounded_text(" ".join(parts)), DocumentExtractionStatus.PARTIAL, "extracted XLSX text truncated by limit"
+                            parts.append(part)
                 workbook.close()
                 return " ".join(parts), DocumentExtractionStatus.EXTRACTED, ""
             except Exception as exc:
