@@ -1176,70 +1176,6 @@ class EisZakupkiCollector(BaseCollector):
     # ==================================================================
 
     @staticmethod
-    def _extract_customer_from_soup(
-        soup: BeautifulSoup,
-    ) -> str:
-
-        # В карточке ЕИС фактический заказчик находится
-        # в td.tableBlock__col_header.
-        #
-        # Пример:
-        # ГОСУДАРСТВЕННОЕ БЮДЖЕТНОЕ УЧРЕЖДЕНИЕ РЕСПУБЛИКИ МАРИЙ ЭЛ
-        # "РЕСПУБЛИКАНСКАЯ КЛИНИЧЕСКАЯ БОЛЬНИЦА"
-        #
-        # Не используем regex по всей странице:
-        # в шапке ЕИС встречается много служебных организаций.
-
-        legal_prefixes = (
-            "ГОСУДАРСТВЕННОЕ ",
-            "МУНИЦИПАЛЬНОЕ ",
-            "ФЕДЕРАЛЬНОЕ ",
-            "БЮДЖЕТНОЕ ",
-            "КАЗЕННОЕ ",
-            "АВТОНОМНОЕ ",
-            "ОБЛАСТНОЕ ",
-            "КРАЕВОЕ ",
-            "РЕСПУБЛИКАНСКОЕ ",
-            "МУНИЦИПАЛЬНОЕ ",
-        )
-
-        seen = set()
-
-        selectors = [
-            "td.tableBlock__col_header",
-            ".tableBlock__col_header",
-        ]
-
-        for selector in selectors:
-            for element in soup.select(selector):
-                value = EisZakupkiCollector._clean_text(
-                    element.get_text(
-                        " ",
-                        strip=True,
-                    )
-                )
-
-                if not value:
-                    continue
-
-                if value in seen:
-                    continue
-
-                seen.add(value)
-
-                if len(value) < 10 or len(value) > 1000:
-                    continue
-
-                upper = value.upper()
-
-                if any(
-                    upper.startswith(prefix)
-                    for prefix in legal_prefixes
-                ):
-                    return value[:1000]
-
-        return ""
-    @staticmethod
     def _extract_region_from_soup(
         soup: BeautifulSoup,
     ) -> str:
@@ -1380,6 +1316,7 @@ class EisZakupkiCollector(BaseCollector):
                     return value[:1000]
 
         return ""
+
     @staticmethod
     def _extract_customer(
         block: Any,
