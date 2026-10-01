@@ -43,6 +43,16 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
                 continue
         if rss_results:
             unique: dict[str, Tender] = {item.unique_key: item for item in rss_results}
+            if rss_errors:
+                # Some keywords failed while others succeeded. Returning the
+                # found rows is correct, but the platform must not look
+                # healthy: the result set is incomplete and the reason has to
+                # stay visible through `_last_search_error`.
+                self._last_search_error = (
+                    "eis: degraded partial RSS search; some keywords failed and "
+                    f"the result set is incomplete: {type(rss_errors[-1]).__name__}: "
+                    f"{rss_errors[-1]}"
+                )
             return list(unique.values())
 
         # GitHub-hosted runners can be unable to route to zakupki.gov.ru. The
@@ -58,6 +68,15 @@ class ReliableEisZakupkiCollector(EisZakupkiCollector):
                     self._last_search_error = (
                         "eis: degraded public fallback used; primary search unavailable: "
                         f"{type(rss_errors[-1]).__name__}: {rss_errors[-1]}"
+                    )
+                else:
+                    # The first-party surface answered but produced no first
+                    # party rows. Substituting public-index rows still has to
+                    # be reported as a degraded search instead of an ordinary
+                    # EIS result set.
+                    self._last_search_error = (
+                        "eis: degraded public fallback used; primary search "
+                        "returned no first-party results"
                     )
                 return fallback
         if primary_unavailable:
