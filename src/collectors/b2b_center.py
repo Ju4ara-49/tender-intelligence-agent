@@ -462,7 +462,7 @@ class B2BCenterCollector(BaseCollector):
                 },
             )
 
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "B2B-Center: ошибка получения деталей %s",
                 external_id,
@@ -479,6 +479,18 @@ class B2BCenterCollector(BaseCollector):
                     external_id,
                     fallback_title,
                 )
+
+                # The detail page was never parsed, so this tender has no
+                # verified commercial data. The state must be reported as an
+                # explicit FAILED detail load: both the shared detail contract
+                # and the orchestrator merge recompute ``details_loaded`` from
+                # ``detail_status``, and a defaulted "success"/"partial" status
+                # would silently upgrade an unloaded detail into a loaded one
+                # and let the B2B quality gate pass on discovery-row data.
+                diagnostics = (
+                    f"Не удалось загрузить страницу деталей: "
+                    f"{type(exc).__name__}: {exc}"
+                )[:4000]
 
                 return Tender(
                     platform=self.platform,
@@ -498,9 +510,13 @@ class B2BCenterCollector(BaseCollector):
                     postpayment_days=None,
                     application_security_percent=None,
                     contract_security_percent=None,
+                    detail_status="failed",
+                    detail_diagnostics=diagnostics,
                     raw_data={
                         "details_loaded": False,
                         "details_error": True,
+                        "detail_status": "failed",
+                        "detail_diagnostics": diagnostics,
                         "source_url": url,
                         "search_title": fallback_title,
                     },
