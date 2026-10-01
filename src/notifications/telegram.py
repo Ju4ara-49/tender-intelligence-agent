@@ -12,6 +12,8 @@ from src.models.tender import Tender, TenderAnalysis
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_MAX_MESSAGE = 4096
+DESCRIPTION_PREVIEW_CHARS = 350
 
 
 class TelegramNotifier:
@@ -126,13 +128,35 @@ class TelegramNotifier:
         rec_map = {"participate": "Участвовать", "skip": "Пропустить", "review": "На проверку"}
         rec = html.escape(str(rec_map.get(analysis.recommendation, analysis.recommendation or "")))
         platform = html.escape(cls.platform_name(tender.platform))
-        return (
+        description_text = " ".join(str(tender.description or "").split())
+        if len(description_text) > DESCRIPTION_PREVIEW_CHARS:
+            description_text = description_text[: DESCRIPTION_PREVIEW_CHARS - 1].rstrip() + "…"
+        description_line = f"📄 <b>Описание:</b> {html.escape(description_text)}\n" if description_text else ""
+        message = (
             f"{emoji} <b>Новый тендер ({score}/100)</b>\n\n"
             f"🏷️ <b>Площадка:</b> {platform}\n"
             f"📋 {title}\n"
+            f"{description_line}"
             f"💰 {price_str} | ⏰ до {deadline_str}\n"
             f"🏢 {customer}\n\n"
             f"📝 {summary}\n{risks}\n"
             f"💡 <b>Рекомендация:</b> {rec}{stub_note}\n\n"
             f"🔗 <a href=\"{url}\">Открыть тендер</a>"
         )
+        return cls._fit_limit(message, url)
+
+    @staticmethod
+    def _fit_limit(message: str, url: str) -> str:
+        """Telegram отклоняет сообщения длиннее 4096 символов: сокращаем резюме/риски, но не теги."""
+        if len(message) <= TELEGRAM_MAX_MESSAGE:
+            return message
+        link = f"\n\n🔗 <a href=\"{url}\">Открыть тендер</a>"
+        head = message[: message.rfind("\n\n🔗")] if "\n\n🔗" in message else message
+        room = TELEGRAM_MAX_MESSAGE - len(link) - 1
+        cut = head[:room]
+        # не оставляем незакрытый HTML-тег или сущность в конце обрезка
+        if cut.rfind("<") > cut.rfind(">"):
+            cut = cut[: cut.rfind("<")]
+        if cut.rfind("&") > cut.rfind(";"):
+            cut = cut[: cut.rfind("&")]
+        return cut.rstrip() + "…" + link

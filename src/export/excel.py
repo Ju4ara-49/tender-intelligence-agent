@@ -53,7 +53,7 @@ def export_tenders_to_excel(
         "Площадка", "Номер закупки", "Наименование", "Заказчик", "Регион",
         "Начальная цена", "Валюта", "Дата публикации", "Дата окончания подачи заявок",
         "Осталось дней до подачи", "Закон", "Способ закупки", "AI score",
-        "Рекомендация", "Краткое резюме", "Риски", "Ссылка",
+        "Рекомендация", "Краткое резюме", "Риски", "Ссылка", "Описание",
     ]
     ws.append(headers)
 
@@ -103,6 +103,7 @@ def export_tenders_to_excel(
             _excel_datetime(published_at), _excel_datetime(deadline), days_left,
             row["law_type"] or "", procurement_method, row["relevance_score"],
             recommendation, row["summary"] or "", risks, row["url"] or "",
+            _excel_text(row["description"]),
         ])
 
     # Q = Ссылка: делаем URL настоящей гиперссылкой Excel.
@@ -117,7 +118,7 @@ def export_tenders_to_excel(
 
     widths = {
         1: 14, 2: 22, 3: 55, 4: 32, 5: 18, 6: 20, 7: 8, 8: 14, 9: 24,
-        10: 20, 11: 8, 12: 30, 13: 10, 14: 18, 15: 45, 16: 35, 17: 55,
+        10: 20, 11: 8, 12: 30, 13: 10, 14: 18, 15: 45, 16: 35, 17: 55, 18: 60,
     }
     for column, width in widths.items():
         ws.column_dimensions[get_column_letter(column)].width = width
@@ -182,6 +183,12 @@ def _parse_datetime(value) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _excel_text(value, limit: int = 2000) -> str:
+    """Текст описания для ячейки: реальное значение без выдумок, с ограничением длины."""
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _excel_datetime(value: datetime | None):
