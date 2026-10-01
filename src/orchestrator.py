@@ -64,6 +64,8 @@ class Orchestrator:
         self._stop_requested = False
         self.last_run_results: list[Tender] = []
         self.last_platform_errors: dict[str, str] = {}
+        # Воронка по площадкам: на каком шаге пайплайна теряются тендеры.
+        self.last_platform_funnel: dict[str, dict[str, int]] = {}
 
     @property
     def stop_requested(self) -> bool:
@@ -210,6 +212,10 @@ class Orchestrator:
             logger.exception("Discovery: площадка %s завершилась ошибкой", platform)
             return platform, []
 
+    def _funnel(self, platform: str, stage: str, amount: int = 1) -> None:
+        row = self.last_platform_funnel.setdefault(str(platform), {})
+        row[stage] = row.get(stage, 0) + amount
+
     @staticmethod
     def _deduplicate_pairs(pairs: list[tuple[object, Tender]]) -> list[tuple[object, Tender]]:
         seen: set[str] = set()
@@ -333,6 +339,7 @@ class Orchestrator:
         self.clear_stop_request()
         self.last_run_results = []
         self.last_platform_errors = {}
+        self.last_platform_funnel = {}
         criteria = criteria if criteria is not None else self.criteria_store.get(user_id)
         min_text = int(self.settings.config.get("filters", {}).get("min_text_length", 10))
         search_keywords = keywords if keywords is not None else (
@@ -369,6 +376,7 @@ class Orchestrator:
                 collector = next((c for c in collectors if c.platform == platform), None)
                 if collector is not None:
                     all_pairs.extend((collector, tender) for tender in found)
+                self._funnel(platform, "raw", len(found))
 
         self.last_platform_errors = {
             collector.platform: str(getattr(collector, "_last_search_error", "")).strip()
@@ -380,8 +388,12 @@ class Orchestrator:
             for platform, error in self.last_platform_errors.items():
                 logger.error("Discovery failed: platform=%s error=%s", platform, error)
 
+        for collector in collectors:
+            self.last_platform_funnel.setdefault(collector.platform, {}).setdefault("raw", 0)
         stats["found"] = len(all_pairs)
         unique_pairs = self._deduplicate_pairs(all_pairs)
+        for collector, _tender in unique_pairs:
+            self._funnel(collector.platform, "unique")
         now = datetime.now(timezone.utc)
         soft_pairs = []
         for collector, tender in unique_pairs:
@@ -391,10 +403,14 @@ class Orchestrator:
             since = now - timedelta(days=int(config.get("lookback_days", 3)))
             published = self._normalize_datetime(tender.published_at)
             if published is not None and published < since:
+                self._funnel(collector.platform, "too_old")
                 continue
             tender = self._normalize_tender_datetimes(tender)
             if self.keyword_filter.matches_soft(tender):
                 soft_pairs.append((collector, tender))
+                self._funnel(collector.platform, "soft_ok")
+            else:
+                self._funnel(collector.platform, "soft_rejected")
         stats["soft_filtered"] = len(soft_pairs)
 
         enriched_pairs = []
@@ -407,6 +423,7 @@ class Orchestrator:
             stats["details_partial"] += int(detail_status == "partial")
             stats["details_failed"] += int(detail_status == "failed")
             enriched_pairs.append((collector, enriched))
+            self._funnel(collector.platform, f"details_{detail_status}")
             existing = self.db.exists(enriched.unique_key)
             self.db.save_tender(enriched)
             stats["saved"] += 1
@@ -419,8 +436,10 @@ class Orchestrator:
                 continue
             if self.keyword_filter.matches_strict(tender):
                 strict_pairs.append((collector, tender))
+                self._funnel(collector.platform, "strict_ok")
             else:
                 stats["keyword_excluded"] += 1
+                self._funnel(collector.platform, "strict_rejected")
         stats["filtered"] = len(strict_pairs)
 
         export_tender_ids: list[int] = []
@@ -429,13 +448,16 @@ class Orchestrator:
                 break
             if not self._passes_regions(tender, selected_regions):
                 stats["excluded_by_region"] += 1
+                self._funnel(collector.platform, "region_rejected")
                 continue
             passed, reason = self._passes_criteria(tender, criteria)
             if not passed:
                 stats["excluded_by_criteria"] += 1
+                self._funnel(collector.platform, "criteria_rejected")
                 logger.debug("Критерии: исключён %s:%s (%s)", tender.platform, tender.external_id, reason)
                 continue
             self.last_run_results.append(tender)
+            self._funnel(collector.platform, "final")
             tender_id = self.db.get_tender_id(tender.unique_key)
             if tender_id is None:
                 logger.error("Tender disappeared after save: %s", tender.unique_key)
@@ -461,6 +483,8 @@ class Orchestrator:
                 self.notification_state.mark_notified(tender, recipient_key=recipient_key)
                 stats["notified"] += 1
 
+        for platform, row in sorted(self.last_platform_funnel.items()):
+            logger.info("Funnel: platform=%s %s", platform, " ".join(f"{k}={v}" for k, v in row.items()))
         try:
             output_dir = Path(self.settings.config.get("export", {}).get("output_dir", "output"))
             output_dir.mkdir(parents=True, exist_ok=True)
