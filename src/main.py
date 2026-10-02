@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler
 
 from src.orchestrator import Orchestrator
 from src.scheduler import run_scheduled
+from src.security_redaction import SecretRedactionFilter, SecretRedactionFormatter, get_known_telegram_tokens
 from src.settings import PROJECT_ROOT, load_settings
 
 
@@ -20,10 +21,22 @@ def setup_logging(settings) -> None:
     max_bytes = int(settings.config.get("logging", {}).get("max_bytes", 5_242_880))
     backup_count = int(settings.config.get("logging", {}).get("backup_count", 3))
 
+    # P0: центральная redaction Telegram-токенов на всех handler'ах
+    # (включая traceback из logger.exception — через Formatter).
+    known_tokens = get_known_telegram_tokens(settings)
+    redaction_filter = SecretRedactionFilter(known_tokens)
+    redaction_formatter = SecretRedactionFormatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        known_tokens=known_tokens,
+    )
     handlers: list[logging.Handler] = [
         logging.StreamHandler(sys.stdout),
         RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"),
     ]
+    for handler in handlers:
+        handler.addFilter(redaction_filter)
+        handler.setFormatter(redaction_formatter)
+
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

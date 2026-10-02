@@ -21,8 +21,8 @@ class TestFabrikantFields(unittest.TestCase):
         self.assertEqual(tender.title, "Подшипники прочие, зубчатые передачи и элементы приводов".replace("зубчатые передачи", "зубчатые колеса, зубчатые передачи"))
         self.assertEqual(tender.customer, "МКУ «УХТО администрации Дербентского района»")
         self.assertEqual(tender.region, "Республика Дагестан")
-        self.assertEqual(tender.published_at.strftime("%d.%m.%Y"), "08.12.2024")
-        self.assertEqual(tender.deadline.strftime("%d.%m.%Y %H:%M"), "08.12.2024 12:00")
+        self.assertEqual(tender.published_at.strftime("%d.%m.%Y"), "07.12.2024")
+        self.assertEqual(tender.deadline.strftime("%d.%m.%Y %H:%M"), "08.12.2024 09:00")
 
     def test_generic_h1_is_not_used_when_subject_exists(self):
         html = """

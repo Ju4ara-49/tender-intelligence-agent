@@ -57,3 +57,32 @@ def test_search_rss_resolves_relative_link_without_nameerror():
         "https://zakupki.gov.ru/epz/order/notice/rgk/view/common-info.html"
         "?regNumber=0123456789012345"
     )
+
+
+def test_eis_detail_preserves_customer_inn_and_document_links():
+    from bs4 import BeautifulSoup
+    from src.collectors.eis_zakupki import EisZakupkiCollector
+
+    html = """
+    <html><body>
+      <div>Объект закупки: Поставка подшипников</div>
+      <div>Заказчик: АО Тест ИНН 7701234567</div>
+      <div>Начальная цена 100 000,00 руб.</div>
+      <div>Размещено 18.09.2026</div>
+      <div>Регион Москва</div>
+      <a href="/files/spec.pdf">Файл документации</a>
+    </body></html>
+    """
+    collector = EisZakupkiCollector({})
+    result = collector._parse_details_page(
+        BeautifulSoup(html, "lxml"),
+        "0123456789012345",
+        "https://zakupki.gov.ru/epz/order/notice/ea44/view/common-info.html?regNumber=0123456789012345",
+    )
+
+    assert result is not None
+    assert result.customer_inn == "7701234567"
+    assert result.documents == [{
+        "url": "https://zakupki.gov.ru/files/spec.pdf",
+        "filename": "Файл документации",
+    }]

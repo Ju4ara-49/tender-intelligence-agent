@@ -2,6 +2,8 @@ from src.profiles import SearchProfile, SearchProfileStore
 from src.storage.database import TenderDatabase
 from src.telegram_settings import CriteriaStore
 
+import pytest
+
 
 def test_profile_crud_and_user_isolation(tmp_path):
     db = TenderDatabase(tmp_path / "profiles.sqlite3")
@@ -42,6 +44,40 @@ def test_default_profile_migrates_real_criteria(tmp_path):
     assert profile.min_price == 100000
     assert profile.max_price == 2000000
     assert profile.min_ai_score == 85
+
+
+def test_default_profile_copies_contract_criteria(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract_default.sqlite3")
+    criteria = CriteriaStore(db)
+    criteria.update(
+        "user-a",
+        okpd2_codes=["01.11"],
+        procurement_types=["bankruptcy_property"],
+        document_search=True,
+    )
+
+    profile = SearchProfileStore(db).ensure_default_profile("user-a", criteria)
+
+    assert profile.okpd2_codes == ["01.11"]
+    assert profile.procurement_types == ["bankruptcy_property"]
+    assert profile.document_search is True
+
+
+def test_legacy_criteria_controls_sync_existing_default_profile(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_legacy_sync.sqlite3")
+    criteria = CriteriaStore(db)
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(name="Основной", keywords=["старое"]))
+
+    criteria.set_keywords("user-a", ["новое"])
+    criteria.update("user-a", min_price=100000, min_submission_days=9)
+    criteria.set_regions("user-a", ["Москва"])
+
+    loaded = store.get("user-a", profile.id)
+    assert loaded.keywords == ["новое"]
+    assert loaded.min_price == 100000
+    assert loaded.min_submission_days == 9
+    assert loaded.regions == ["Москва"]
 
 
 def test_profile_stats_are_derived_from_recorded_runs(tmp_path):
@@ -124,3 +160,97 @@ def test_profile_store_rejects_negative_and_nonfinite_numeric_values(tmp_path):
             assert False, "expected invalid numeric profile value to be rejected"
         except ValueError:
             pass
+
+
+def test_profile_store_persists_new_filter_fields(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_newfields.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Новый", customer="ООО Ромашка", customer_inn="7701234567",
+        law_type="44-ФЗ", document_search=True,
+    ))
+    loaded = store.get("user-a", profile.id)
+    assert loaded.customer == "ООО Ромашка"
+    assert loaded.customer_inn == "7701234567"
+    assert loaded.law_type == "44-ФЗ"
+    assert loaded.document_search is True
+
+
+def test_profile_criteria_passes_new_filter_fields(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_criteria.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Фильтры", customer="ООО Ромашка", customer_inn="7701234567",
+        law_type="44-ФЗ",
+    ))
+    criteria = profile.criteria()
+    assert criteria.customer == "ООО Ромашка"
+    assert criteria.customer_inn == "7701234567"
+    assert criteria.law_type == "44-ФЗ"
+
+
+def test_profile_store_persists_contract_filters_okpd2_and_procurement_types(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Контрактные фильтры",
+        okpd2_codes=["01.11.12", "26.30"],
+        procurement_types=["plan_schedule", "bankruptcy_property"],
+    ))
+    loaded = store.get("user-a", profile.id)
+    assert loaded.okpd2_codes == ["01.11.12", "26.30"]
+    assert loaded.procurement_types == ["plan_schedule", "bankruptcy_property"]
+
+    updated = store.update("user-a", profile.id, procurement_types=["commercial"], okpd2_codes=[" 01 "])
+    assert updated.procurement_types == ["commercial"]
+    assert updated.okpd2_codes == ["01"]
+
+
+def test_profile_criteria_passes_contract_filters_to_canonical_criteria(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract_criteria.sqlite3")
+    store = SearchProfileStore(db)
+    profile = store.create("user-a", SearchProfile(
+        name="Контракт", okpd2_codes=["01.11"], procurement_types=["plan_schedule"],
+    ))
+    criteria = profile.criteria()
+    assert criteria.okpd2_codes == ["01.11"]
+    assert criteria.procurement_types == ["plan_schedule"]
+
+
+def test_profile_store_rejects_invalid_contract_filter_values(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_contract_bad.sqlite3")
+    store = SearchProfileStore(db)
+    with pytest.raises(ValueError, match="ОКПД2"):
+        store.create("user-a", name="bad-okpd2", okpd2_codes=["мусор"])
+    with pytest.raises(ValueError, match="режим"):
+        store.create("user-a", name="bad-procurement", procurement_types=["lunar"])
+
+
+def test_profile_store_backward_compatible_with_old_db(tmp_path):
+    db = TenderDatabase(tmp_path / "profiles_old.sqlite3")
+    store = SearchProfileStore(db)
+    # Simulate old DB without new columns by creating a minimal table
+    with db._connect() as conn:
+        conn.execute("DROP TABLE IF EXISTS search_profiles")
+        conn.execute("""
+            CREATE TABLE search_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL, name TEXT NOT NULL, keywords TEXT NOT NULL DEFAULT '[]',
+                exclusions TEXT NOT NULL DEFAULT '[]', platforms TEXT NOT NULL DEFAULT '[]',
+                regions TEXT NOT NULL DEFAULT '[]', min_price REAL, max_price REAL,
+                advance_required INTEGER NOT NULL DEFAULT 0, min_advance_percent REAL NOT NULL DEFAULT 0,
+                max_postpayment_days INTEGER, min_submission_days INTEGER NOT NULL DEFAULT 7,
+                min_application_security_percent REAL NOT NULL DEFAULT 0,
+                max_application_security_percent REAL, min_contract_security_percent REAL NOT NULL DEFAULT 0,
+                max_contract_security_percent REAL, min_ai_score INTEGER NOT NULL DEFAULT 70,
+                enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                UNIQUE(user_id, name)
+            )
+        """)
+        # Should auto-migrate new columns
+    store2 = SearchProfileStore(db)
+    profile = store2.create("user-a", name="Test", keywords=["тест"])
+    assert profile.id is not None
+    loaded = store2.get("user-a", profile.id)
+    assert loaded.document_search is False
+    assert loaded.customer is None

@@ -18,7 +18,7 @@ TARGETS = {
     "b2b_center": "https://www.b2b-center.ru/market/",
     "fabrikant_223": "https://soap2.fabrikant.ru/223/catalog/procedure/published",
     "fabrikant_44": "https://soap4.fabrikant.ru/44/catalog/procedure",
-    "rts_tender": "https://223.rts-tender.ru/",
+    "rts_tender": "https://www.rts-tender.ru/",
     "tmk": "https://stock.tmk-group.com/auction/",
     "rosatom": "https://zakupki.rosatom.ru/?link=published_procurements",
 }
@@ -172,6 +172,17 @@ def wait_for_initial_dom(page) -> None:
         pass
 
 
+def extract_rss_result_evidence(text: str) -> dict[str, object]:
+    normalized = str(text or "")
+    count = len(re.findall(r"<item(?:\s[^>]*)?>", normalized, re.I))
+    if count:
+        return {
+            "result_count": count,
+            "result_count_evidence": f"RSS <item> entries: {count}",
+        }
+    return {"result_count": None, "result_count_evidence": None}
+
+
 def extract_result_evidence(text: str) -> dict[str, object]:
     normalized = " ".join(text.split())
     patterns = (
@@ -281,6 +292,14 @@ def main() -> int:
                             pass
                         result_text = page.locator("body").inner_text(timeout=3000)
                         evidence = extract_result_evidence(result_text)
+                        if name == "eis" and "searchstring=" in page.url.casefold():
+                            rss_evidence = extract_rss_result_evidence(result_text)
+                            if rss_evidence.get("result_count") is not None:
+                                evidence.update(rss_evidence)
+                                search_evidence["control_found"] = True
+                                search_evidence["selector"] = "rss"
+                                search_evidence["frame_url"] = page.url
+                                control_found = True
                         links = page.locator("a[href]").evaluate_all("els => els.map(e => ({text:(e.innerText||'').trim().slice(0,300),href:e.href})).filter(x => x.text || x.href).slice(0,200)")
                         all_links.extend(links)
                         query_results.append({
@@ -291,7 +310,10 @@ def main() -> int:
                         })
                     entry["search_results"] = query_results
                     entry["search"] = query_results[0]["search"] if query_results else {"control_found": False}
-                    entry.update(extract_result_evidence(result_text))
+                    final_evidence = extract_result_evidence(result_text)
+                    if name == "eis" and "searchstring=" in page.url.casefold():
+                        final_evidence.update(extract_rss_result_evidence(result_text))
+                    entry.update(final_evidence)
                     # Preserve positive result evidence from any query. A
                     # multi-keyword probe may have one matching query and one
                     # zero-result query; the latter must not erase the former.

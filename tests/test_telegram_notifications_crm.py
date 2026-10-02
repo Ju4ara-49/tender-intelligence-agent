@@ -12,9 +12,14 @@ from src.notifications.telegram import TelegramNotifier
 class _FakeBoard:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, bool]] = []
+        self._status = "new"
+
+    def get_status(self, tender_id: int) -> str:
+        return self._status
 
     def set_status(self, tender_id: int, status: str, *, force: bool = False):
         self.calls.append((tender_id, status, force))
+        self._status = status
         return status
 
 
@@ -77,7 +82,7 @@ class TelegramNotificationCrmTests(unittest.TestCase):
         bot = _FakeBot()
         handled = handle_callback(bot, "777", "crm:participate:eis:12345")
         self.assertTrue(handled)
-        self.assertEqual(bot.crm_board.calls, [(42, "participating", True)])
+        self.assertEqual(bot.crm_board.calls, [(42, "participating", False)])
         self.assertIn("Статус тендера #42 изменён", bot.sent[-1][1])
 
     def test_notification_keeps_russian_recommendation(self) -> None:

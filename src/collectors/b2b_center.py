@@ -211,14 +211,6 @@ class B2BCenterCollector(BaseCollector):
                 )
                 return None
 
-            title = self._extract_detail_title(
-                soup,
-                external_id,
-            )
-
-            if not title:
-                title = f"Тендер № {external_id}"
-
             # B2B-Center: detail-page values are stored in
             # dedicated table rows. Prefer structured HTML
             # over regex extraction from the whole page text.
@@ -430,6 +422,7 @@ class B2BCenterCollector(BaseCollector):
             procurement_method = (
                 self._extract_procurement_method(text)
             )
+            documents = self._extract_documents(soup, url)
 
             if not region:
                 region = self._extract_region(text)
@@ -458,6 +451,7 @@ class B2BCenterCollector(BaseCollector):
                 contract_security_percent=commercial[
                     "contract_security_percent"
                 ],
+                documents=documents,
                 raw_data={
                     "details_loaded": True,
                     "source_url": url,
@@ -468,7 +462,7 @@ class B2BCenterCollector(BaseCollector):
                 },
             )
 
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "B2B-Center: ошибка получения деталей %s",
                 external_id,
@@ -485,6 +479,18 @@ class B2BCenterCollector(BaseCollector):
                     external_id,
                     fallback_title,
                 )
+
+                # The detail page was never parsed, so this tender has no
+                # verified commercial data. The state must be reported as an
+                # explicit FAILED detail load: both the shared detail contract
+                # and the orchestrator merge recompute ``details_loaded`` from
+                # ``detail_status``, and a defaulted "success"/"partial" status
+                # would silently upgrade an unloaded detail into a loaded one
+                # and let the B2B quality gate pass on discovery-row data.
+                diagnostics = (
+                    f"Не удалось загрузить страницу деталей: "
+                    f"{type(exc).__name__}: {exc}"
+                )[:4000]
 
                 return Tender(
                     platform=self.platform,
@@ -504,15 +510,41 @@ class B2BCenterCollector(BaseCollector):
                     postpayment_days=None,
                     application_security_percent=None,
                     contract_security_percent=None,
+                    detail_status="failed",
+                    detail_diagnostics=diagnostics,
                     raw_data={
                         "details_loaded": False,
                         "details_error": True,
+                        "detail_status": "failed",
+                        "detail_diagnostics": diagnostics,
                         "source_url": url,
                         "search_title": fallback_title,
                     },
                 )
 
             return None
+
+    @staticmethod
+    def _extract_documents(soup: BeautifulSoup, page_url: str) -> list[dict[str, str]]:
+        """Extract document/attachment links from B2B-Center details."""
+        documents: list[dict[str, str]] = []
+        seen: set[str] = set()
+        extensions = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".rar")
+        hints = ("документ", "вложен", "приложен", "скачать", "download", "attachment", "file")
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
+            absolute = urljoin(page_url, href)
+            label = B2BCenterCollector._clean_text(anchor.get_text(" ", strip=True))
+            haystack = f"{absolute} {label}".lower()
+            if not absolute.lower().endswith(extensions) and not any(h in haystack for h in hints):
+                continue
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            documents.append({"url": absolute, "filename": label or absolute.rsplit("/", 1)[-1]})
+        return documents
 
     # ==============================================================
     # FIND TENDER URL

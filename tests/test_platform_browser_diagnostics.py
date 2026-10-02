@@ -6,7 +6,7 @@ from pathlib import Path
 
 import tests.platform_browser_diagnostics as diagnostics
 
-from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence, has_published_listing_evidence, is_external_challenge
+from tests.platform_browser_diagnostics import classify_http_access, extract_result_evidence, extract_rss_result_evidence, has_published_listing_evidence, is_external_challenge
 
 
 class PlatformBrowserDiagnosticsTests(unittest.TestCase):
@@ -18,6 +18,11 @@ class PlatformBrowserDiagnosticsTests(unittest.TestCase):
     def test_explicit_positive_result_count_is_detected(self) -> None:
         evidence = extract_result_evidence("Параметры поиска. Всего: 13 процедур")
         self.assertEqual(evidence["result_count"], 13)
+
+    def test_eis_rss_result_evidence_is_detected(self) -> None:
+        evidence = extract_rss_result_evidence("<rss><item>one</item><item>two</item><item>three</item></rss>")
+        self.assertEqual(evidence["result_count"], 3)
+        self.assertEqual(evidence["result_count_evidence"], "RSS <item> entries: 3")
 
     def test_active_lots_count_is_detected(self) -> None:
         evidence = extract_result_evidence("Актуальных лотов: 8 181")

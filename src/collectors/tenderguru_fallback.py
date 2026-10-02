@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Callable
 from urllib.parse import urljoin
 
 import requests
@@ -68,17 +69,26 @@ def search(
     timeout: int = 15,
     max_pages: int = 3,
     max_results: int = 100,
+    http_get: Callable | None = None,
 ) -> list[Tender]:
     canonical = _resolve_canonical(_norm(keyword))
     topic = TOPIC_URLS.get(canonical) if canonical else None
     if not topic:
         return []
+    getter = http_get or _SESSION.get
+
+    def _fetch(url: str) -> requests.Response:
+        try:
+            return getter(url, timeout=timeout)
+        except TypeError:
+            return getter(url)
+
     results: dict[str, Tender] = {}
     for page_no in range(1, max_pages + 1):
         url = urljoin(BASE, topic)
         if page_no > 1:
             url += f"?page={page_no}"
-        response = _SESSION.get(url, timeout=timeout)
+        response = _fetch(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         for link in soup.select("a[href*='/tender/']"):

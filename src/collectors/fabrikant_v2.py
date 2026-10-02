@@ -35,7 +35,6 @@ class FabrikantV2Collector(_BrowserTenderCollector):
             "https://soap4.fabrikant.ru/44/catalog/procedure",
         ):
             self.BASE_URL = base_url
-            self._urls = {}
             for term in terms:
                 for tender in self._search_one(term):
                     if since is not None and tender.published_at is not None:
@@ -88,7 +87,11 @@ class FabrikantV2Collector(_BrowserTenderCollector):
             cells = row.find_all(["th", "td"], recursive=False)
             headers = [cls._norm(" ".join(c.stripped_strings)) for c in cells]
             lowered = {x.lower() for x in headers}
-            if "№ извещения" in lowered and "наименование" in lowered and "заказчик" in lowered:
+            if (
+                any("извещения" in header for header in lowered)
+                and any("наименование" in header for header in lowered)
+                and "заказчик" in lowered
+            ):
                 return headers, row
         return None
 
@@ -128,11 +131,16 @@ class FabrikantV2Collector(_BrowserTenderCollector):
                     continue
                 href = urljoin(self.BASE_URL, str(anchor.get("href", "")).strip())
                 anchor_title = self._norm(" ".join(anchor.stripped_strings))
-                external_id = self._extract_id(href, anchor_title)
+                values = [self._norm(" ".join(c.stripped_strings)) for c in cells]
+                # 223-FZ procedure links carry a 4-digit etp-ets id while the real
+                # notice number lives only in the title cell; fall back to it when
+                # neither the href nor the anchor text yields a parseable id.
+                external_id = self._extract_id(href, anchor_title) or self._extract_id(
+                    href, self._cell(values, idx_title)
+                )
                 if not external_id or external_id in seen:
                     continue
 
-                values = [self._norm(" ".join(c.stripped_strings)) for c in cells]
                 title = self._clean_registry_title(self._cell(values, idx_title) or anchor_title)
                 organizer = self._cell(values, idx_organizer)
                 customer = self._cell(values, idx_customer) or self._row_value_by_label(values, ("Заказчик", "Наименование заказчика"))
@@ -199,7 +207,7 @@ class FabrikantV2Collector(_BrowserTenderCollector):
     def _procedure_anchor(row, base_host):
         for anchor in row.find_all("a", href=True):
             href = str(anchor.get("href", "")).strip()
-            full = urljoin("https://soap4.fabrikant.ru", href)
+            full = urljoin(f"https://{base_host}/", href)
             if urlparse(full).netloc.lower() == base_host and "/procedure/" in full.lower():
                 return anchor
         return None

@@ -31,8 +31,9 @@ class ReliableBrowserSearchMixin:
 
     def _goto(self, page, url: str) -> None:
         """Navigate without waiting for long-lived XHR/WebSocket requests."""
-        page.goto(url, wait_until="commit", timeout=self.timeout_ms)
+        response=page.goto(url, wait_until="commit", timeout=self.timeout_ms)
         self._wait_for_initial_dom(page)
+        return response
 
     def _search_one(self, query: str):
         logger.info("%s: поиск по ключевому слову: %s", self.platform, query)
@@ -53,7 +54,13 @@ class ReliableBrowserSearchMixin:
                     ),
                 )
                 page = context.new_page()
-                self._goto(page, self.BASE_URL)
+                response = self._goto(page, self.BASE_URL)
+                if self.platform == "rts_tender":
+                    status = response.status if response is not None else None
+                    body = page.locator("body").inner_text(timeout=3000) if page.locator("body").count() else ""
+                    if (status is not None and status >= 500) or "anti-ddos" in body.casefold():
+                        browser.close()
+                        return self._tenderguru_fallback(query, CollectorUnavailableError(f"RTS-Tender access gate: HTTP {status}"))
                 page.wait_for_timeout(6500)
                 self._dismiss_consent(page)
 
@@ -95,6 +102,24 @@ class ReliableBrowserSearchMixin:
             raise CollectorUnavailableError(
                 f"{self.platform}: browser search failed for {query!r}: {type(exc).__name__}: {exc}"
             ) from exc
+
+        if not html:
+            if search_control_found:
+                raise CollectorUnavailableError(
+                    f"{self.platform}: portal returned empty page after search for {query!r}"
+                )
+            raise CollectorUnavailableError(
+                f"{self.platform}: portal returned empty page for {query!r}"
+            )
+
+        soup_text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings).lower()
+        if any(x in soup_text for x in (
+            "web application firewall", "временно заблокирован", "пожалуйста подождите",
+            "для работы с сайтом необходимы включенные javascript и cookies",
+        )):
+            raise CollectorUnavailableError(
+                f"{self.platform}: portal returned access/challenge page for {query!r}"
+            )
 
         parsed_results = self._parse_results(html)
         results = [tender for tender in parsed_results if self._tender_matches_query(tender, query)]

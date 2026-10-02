@@ -30,6 +30,8 @@ class Tender:
     customer: str = ""
     customer_inn: str = ""
     law_type: str = ""
+    okpd2_codes: list[str] = field(default_factory=list)
+    procurement_type: str = ""
 
     advance_required: bool = False
     advance_percent: float | None = None
@@ -67,6 +69,12 @@ class Tender:
     def _restore_detail_metadata(self) -> None:
         """Restore persisted detail documents/provenance from raw_data."""
         raw = self.raw_data if isinstance(self.raw_data, dict) else {}
+        if not self.okpd2_codes:
+            raw_codes = raw.get("okpd2_codes")
+            if isinstance(raw_codes, (list, tuple, set)):
+                self.okpd2_codes = list(dict.fromkeys(str(code).strip() for code in raw_codes if str(code).strip()))
+        if not self.procurement_type:
+            self.procurement_type = str(raw.get("procurement_type") or "").strip()
         if not self.documents:
             documents = raw.get("documents")
             if isinstance(documents, list):
@@ -120,6 +128,10 @@ class Tender:
             self.raw_data["documents"] = [dict(item) for item in self.documents]
         if self.field_sources:
             self.raw_data["field_sources"] = dict(self.field_sources)
+        if self.okpd2_codes:
+            self.raw_data["okpd2_codes"] = list(self.okpd2_codes)
+        if self.procurement_type:
+            self.raw_data["procurement_type"] = self.procurement_type
         self.raw_data["_normalized"] = {
             "advance_required": bool(self.advance_required),
             "advance_percent": self.advance_percent,
@@ -127,12 +139,14 @@ class Tender:
             "application_security_percent": self.application_security_percent,
             "contract_security_percent": self.contract_security_percent,
             "customer_inn": self.customer_inn,
+            "okpd2_codes": list(self.okpd2_codes),
+            "procurement_type": self.procurement_type,
         }
 
     @staticmethod
     def _extract_percent(text: str, labels: tuple[str, ...]) -> float | None:
         label = "|".join(re.escape(item) for item in labels)
-        pattern = rf"(?:{label})[^%\d]{{0,100}}(\d{{1,3}}(?:[.,]\d+)?)\s*%"
+        pattern = rf"(?:{label})[^%\d]{{0,100}}(\d{{1,3}}(?:[.,]\d+)?)\s*(?:%|процент\w*)"
         match = re.search(pattern, text, re.I)
         if not match:
             return None
@@ -194,6 +208,16 @@ class Tender:
                 parts.extend(self._text_from_value(raw.get(key)))
         if self.documents:
             parts.extend(self._text_from_value(self.documents))
+        return " ".join(str(part).strip() for part in parts if part is not None and str(part).strip()).strip()
+
+    @property
+    def search_text(self) -> str:
+        """Search text excluding document bodies — used when document_search is off."""
+        parts = [self.title, self.description, self.customer, self.region, self.customer_inn]
+        raw = self.raw_data or {}
+        for key in ("details", "lots", "lot", "specification", "specifications", "items", "products"):
+            if key in raw:
+                parts.extend(self._text_from_value(raw.get(key)))
         return " ".join(str(part).strip() for part in parts if part is not None and str(part).strip()).strip()
 
 

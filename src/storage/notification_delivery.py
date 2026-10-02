@@ -30,6 +30,18 @@ class NotificationDeliveryState:
     @classmethod
     def event_key(cls, tender: Tender) -> str:
         normalized = cls._normalized_fields(tender)
+        documents = tender.documents if tender.documents else normalized.get("documents", [])
+        if isinstance(documents, (list, tuple)):
+            documents = sorted(
+                documents,
+                key=lambda item: json.dumps(
+                    item,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            )
         state = {
             "title": tender.title,
             "description": tender.description,
@@ -44,11 +56,14 @@ class NotificationDeliveryState:
             "customer": tender.customer,
             "customer_inn": tender.customer_inn or normalized.get("customer_inn", ""),
             "law_type": tender.law_type,
+            "okpd2_codes": list(tender.okpd2_codes),
+            "procurement_type": tender.procurement_type,
             "advance_required": tender.advance_required,
             "advance_percent": tender.advance_percent,
             "postpayment_days": tender.postpayment_days,
             "application_security_percent": tender.application_security_percent,
             "contract_security_percent": tender.contract_security_percent,
+            "documents": documents,
         }
         encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

@@ -7,6 +7,7 @@ import time
 
 import httpx
 
+from src.security_redaction import redact_secrets
 from src.telegram_bot import HELP_TEXT
 from src.telegram_multiuser import MultiUserTelegramBot
 
@@ -52,7 +53,10 @@ class ResponsiveMultiUserTelegramBot(MultiUserTelegramBot):
                 logger.warning("Telegram-бот: timeout getUpdates; повторяем polling")
                 time.sleep(1)
             except httpx.HTTPError as exc:
-                logger.warning("Telegram-бот: временная HTTP-ошибка polling: %s", exc)
+                logger.warning(
+                    "Telegram-бот: временная HTTP-ошибка polling: %s",
+                    redact_secrets(str(exc), (self.bot_token,) if self.bot_token else None),
+                )
                 time.sleep(2)
             except Exception:
                 logger.exception("Telegram-бот: ошибка polling, продолжаем через 2 сек")

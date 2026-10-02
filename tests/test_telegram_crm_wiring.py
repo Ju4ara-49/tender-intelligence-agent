@@ -9,19 +9,39 @@ from unittest.mock import patch
 from src.crm.telegram import handle_callback
 from src.models.tender import Tender, TenderAnalysis
 from src.notifications.telegram import TelegramNotifier
+from src.storage.database import TenderDatabase
 from src.telegram_multiuser import MultiUserTelegramBot
 
 
 class _FakeBoard:
     def __init__(self) -> None:
         self.calls = []
+        self._status = "new"
+
+    def get_status(self, tender_id: int) -> str:
+        return self._status
 
     def set_status(self, tender_id: int, status: str, *, force: bool = False) -> str:
         self.calls.append((tender_id, status, force))
+        self._status = status
         return status
 
     def entry(self, tender_id: int):
         return SimpleNamespace(tender_id=tender_id, status="new", assignee="", labels=[], updated_at="")
+
+
+class _DbWithBoard:
+    """Реальный TenderDatabase + TenderBoard, чтобы callback менял фактический статус."""
+
+    def __init__(self, db) -> None:
+        self._db = db
+
+    def get_tender_id(self, unique_key: str):
+        return self._db.get_tender_id(unique_key)
+
+    @property
+    def crm_board(self):
+        return TenderBoard(self._db)
 
 
 class _FakeBot:
@@ -38,10 +58,41 @@ class _FakeBot:
 
 
 class TelegramCrmWiringTests(unittest.TestCase):
+    def test_participate_callback_does_not_resurrect_terminal_status(self) -> None:
+        """Regression: кнопка УЧАСТВОВАТЬ не должна воскрешать won/lost/skipped.
+
+        Единый контракт P1: participate идёт только по ALLOWED_TRANSITIONS
+        (без force=True), поэтому терминальный статус вызывает
+        InvalidStatusTransition и остаётся неизменным.
+        """
+        db = TenderDatabase(Path(tempfile.mkdtemp()) / "terminal_crm.db")
+        tender_id = db.save_tender(Tender(platform="eis", external_id="TERM-1", title="Terminal", url="https://example.test/t"))
+        from src.storage import STATUS_LOST, STATUS_SKIPPED, STATUS_WON, TenderBoard
+
+        for status in (STATUS_WON, STATUS_LOST, STATUS_SKIPPED):
+            with self.subTest(status=status):
+                board = TenderBoard(db)
+                board.set_status(tender_id, status, force=True)
+                bot = _FakeBot()
+                bot.crm_board = TenderBoard(db)
+                bot.orchestrator.db = _DbWithBoard(db)
+                self.assertTrue(handle_callback(bot, "100", "crm:participate:eis:TERM-1"))
+                self.assertEqual(TenderBoard(db).get_status(tender_id), status)
+                refusal = bot.messages[-1][1]
+                # The callback reports the refusal through html.escape, so
+                # single quotes arrive as &#x27;.
+                self.assertIn("Cannot move tender", refusal)
+                self.assertIn(
+                    f"from &#x27;{status}&#x27; to &#x27;participating&#x27;",
+                    refusal,
+                )
+
     def test_participate_callback_changes_crm_status(self) -> None:
         bot = _FakeBot()
         self.assertTrue(handle_callback(bot, "100", "crm:participate:eis:1234567890"))
-        self.assertEqual(bot.crm_board.calls, [(42, "participating", True)])
+        # No force bypass: the callback must move the board only through the
+        # ALLOWED_TRANSITIONS state machine (force is never requested).
+        self.assertEqual(bot.crm_board.calls, [(42, "participating", False)])
         self.assertIn("Участвуем", bot.messages[-1][1])
 
     def test_notifier_emits_participation_callback_without_db_id(self) -> None:
@@ -136,6 +187,20 @@ class TelegramCrmWiringTests(unittest.TestCase):
     def test_whitelist_file_is_resolved_from_project_root(self) -> None:
         source = __import__("pathlib").Path(__import__("src.telegram_multiuser", fromlist=["MultiUserTelegramBot"]).__file__).read_text(encoding="utf-8")
         self.assertIn("WHITELIST_FILE = PROJECT_ROOT / \"data\" / \"telegram_allowed_users.json\"", source)
+
+
+    def test_notifier_does_not_create_tenderplan_tasks(self) -> None:
+        from pathlib import Path
+        from src.tenderplan import TenderTaskStore
+
+        store = TenderTaskStore(Path(tempfile.mkdtemp()) / "tasks.db")
+        notifier = TelegramNotifier(task_store=store)
+        tender = Tender(platform="eis", external_id="task-guard", title="Test", url="https://example.test/tender")
+        analysis = TenderAnalysis(relevance_score=80, recommendation="participate", summary="ok")
+
+        notifier.send_tender_alert(tender, analysis)
+
+        self.assertEqual(store.list_for_tender(tender.unique_key), [])
 
 
 if __name__ == "__main__":

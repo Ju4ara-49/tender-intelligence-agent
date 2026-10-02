@@ -10,7 +10,9 @@ from src.storage import (
     BoardEntry,
     InvalidStatusTransition,
     TenderBoard,
+    STATUS_ARCHIVED,
     STATUS_DOCS,
+    STATUS_EXPIRED,
     STATUS_LOST,
     STATUS_NEW,
     STATUS_PARTICIPATING,
@@ -25,5 +27,6 @@ __all__ = [
     "TenderBoard", "BoardEntry", "InvalidStatusTransition",
     "ALL_STATUSES", "ACTIVE_STATUSES", "ALLOWED_TRANSITIONS",
     "STATUS_NEW", "STATUS_REVIEWING", "STATUS_PARTICIPATING", "STATUS_DOCS",
-    "STATUS_SUBMITTED", "STATUS_WAITING", "STATUS_WON", "STATUS_LOST", "STATUS_SKIPPED",
+    "STATUS_SUBMITTED", "STATUS_WAITING", "STATUS_WON", "STATUS_LOST",
+    "STATUS_SKIPPED", "STATUS_EXPIRED", "STATUS_ARCHIVED",
 ]

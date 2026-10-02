@@ -51,7 +51,7 @@ class TenderAnalyzer:
     def is_configured(self) -> bool:
         return bool(self.model) and bool(self.ollama_url)
 
-    def _build_tender_text(self, tender: Tender) -> str:
+    def _build_tender_text(self, tender: Tender, *, search_documents: bool = True) -> str:
         lines = [
             f"Площадка: {tender.platform}",
             f"Название: {tender.title}",
@@ -81,7 +81,7 @@ class TenderAnalyzer:
             lines.append(f"Обеспечение контракта: {tender.contract_security_percent}%")
         if tender.detail_status == "partial":
             lines.append("ВНИМАНИЕ: детали загружены частично; отсутствующие поля считать неизвестными, а не подтверждёнными.")
-        description = tender.full_text or tender.description
+        description = (tender.full_text if search_documents else tender.search_text) or tender.description
         if description:
             lines.append(f"Описание/предмет закупки: {description}")
         return "\n".join(lines)
@@ -200,8 +200,11 @@ class TenderAnalyzer:
             is_stub=True,
         )
 
-    def analyze(self, tender: Tender) -> TenderAnalysis:
-        user_prompt = build_user_prompt(self._build_tender_text(tender), self.ai_context)
+    def analyze(self, tender: Tender, *, search_documents: bool = True) -> TenderAnalysis:
+        user_prompt = build_user_prompt(
+            self._build_tender_text(tender, search_documents=search_documents),
+            self.ai_context,
+        )
         last_error: Exception | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:

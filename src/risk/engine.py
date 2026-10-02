@@ -70,6 +70,10 @@ class RiskEngine:
 
     def assess(self, tender: Tender, *, now: datetime | None = None) -> RiskAssessment:
         moment = now or datetime.now(timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        else:
+            moment = moment.astimezone(timezone.utc)
         factors: list[RiskFactor] = []
         missing_critical = self._missing_critical_fields(tender)
         factors.extend(self._missing_data_factor(missing_critical))
@@ -101,6 +105,8 @@ class RiskEngine:
         deadline = tender.deadline
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=timezone.utc)
+        else:
+            deadline = deadline.astimezone(timezone.utc)
         remaining_days = (deadline - now).total_seconds() / 86400.0
         if remaining_days < 0:
             return [RiskFactor("deadline_passed", "high", deadline.isoformat(), "deadline", "Срок подачи заявки уже истёк")]

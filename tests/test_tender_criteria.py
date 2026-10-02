@@ -93,6 +93,26 @@ def test_region_filter_matches_one_value_in_multi_region_tender():
 def test_empty_region_filter_values_do_not_reject_tender():
     assert Orchestrator._passes_regions(_tender(region="Москва"), ["", "  "]) is True
 
+def test_okpd2_filter_matches_requested_parent_code():
+    criteria = TenderCriteria(okpd2_codes=["01.11"])
+    assert Orchestrator._passes_criteria(
+        _tender(okpd2_codes=["01.11.12.110"]), criteria
+    ) == (True, "")
+
+def test_okpd2_and_procurement_filters_reject_missing_values():
+    criteria = TenderCriteria(okpd2_codes=["01.11"], procurement_types=["commercial"])
+    ok, reason = Orchestrator._passes_criteria(
+        _tender(okpd2_codes=[], procurement_type="commercial"), criteria
+    )
+    assert ok is False
+    assert reason == "okpd2_codes"
+
+    ok, reason = Orchestrator._passes_criteria(
+        _tender(okpd2_codes=["01.11.12"], procurement_type="plan_schedule"), criteria
+    )
+    assert ok is False
+    assert reason == "procurement_type"
+
 
 
 def test_criteria_rejects_contradictory_price_range():
@@ -173,3 +193,97 @@ def test_criteria_store_context_isolated_by_async_context(tmp_path):
         return await asyncio.gather(first, second)
 
     assert asyncio.run(scenario()) == [100, 200]
+
+
+def test_customer_filter_matches_by_name():
+    criteria = TenderCriteria(customer="ООО Ромашка")
+    ok, reason = Orchestrator._passes_criteria(_tender(customer="Заказчик ООО Ромашка"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(customer="ООО Солнечко"), criteria)
+    assert ok is False
+    assert reason == "customer"
+
+
+def test_customer_filter_empty_string_is_normalized_to_none():
+    criteria = TenderCriteria(customer="  ")
+    assert criteria.customer is None
+
+
+def test_customer_inn_filter_matches_exact():
+    criteria = TenderCriteria(customer_inn="7701234567")
+    ok, reason = Orchestrator._passes_criteria(_tender(customer_inn="7701234567"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(customer_inn="7709999999"), criteria)
+    assert ok is False
+    assert reason == "customer_inn"
+
+
+def test_customer_inn_filter_normalizes_spaces():
+    criteria = TenderCriteria(customer_inn="770 123 4567")
+    ok, _ = Orchestrator._passes_criteria(_tender(customer_inn="7701234567"), criteria)
+    assert ok is True
+
+
+def test_customer_inn_filter_rejects_missing_inn():
+    criteria = TenderCriteria(customer_inn="7701234567")
+    ok, reason = Orchestrator._passes_criteria(_tender(customer_inn=""), criteria)
+    assert ok is False
+    assert reason == "customer_inn"
+
+
+def test_law_type_filter_matches_by_shorthand():
+    criteria = TenderCriteria(law_type="44")
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type="44-ФЗ"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type="223-ФЗ"), criteria)
+    assert ok is False
+    assert reason == "law_type"
+
+
+def test_law_type_filter_matches_full_name():
+    criteria = TenderCriteria(law_type="44-ФЗ")
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type="44-ФЗ"), criteria)
+    assert ok is True
+    ok, reason = Orchestrator._passes_criteria(_tender(law_type=""), criteria)
+    assert ok is False
+    assert reason == "law_type"
+
+
+def test_law_type_filter_empty_string_is_normalized_to_none():
+    criteria = TenderCriteria(law_type="  ")
+    assert criteria.law_type is None
+
+
+# --- Канонический контракт: ОКПД2 и режимы процедуры (P0 исследования) ---
+
+
+def test_okpd2_codes_normalize_strip_and_deduplicate():
+    criteria = TenderCriteria(okpd2_codes=[" 01.11 ", "01.11", "26.30.1"])
+    assert criteria.okpd2_codes == ["01.11", "26.30.1"]
+
+
+def test_okpd2_codes_reject_invalid_format():
+    with pytest.raises(ValueError, match="ОКПД2"):
+        TenderCriteria(okpd2_codes=["подшипники"])
+
+
+def test_okpd2_codes_accept_full_and_prefix_codes():
+    criteria = TenderCriteria(okpd2_codes=["01", "01.11", "01.11.12", "01.11.12.110"])
+    assert criteria.okpd2_codes == ["01", "01.11", "01.11.12", "01.11.12.110"]
+
+
+def test_procurement_types_accept_known_values_and_deduplicate():
+    criteria = TenderCriteria(procurement_types=["plan_schedule", "bankruptcy_property", "plan_schedule"])
+    assert criteria.procurement_types == ["plan_schedule", "bankruptcy_property"]
+
+
+def test_procurement_types_reject_unknown_values():
+    with pytest.raises(ValueError, match="режим"):
+        TenderCriteria(procurement_types=["lunar_mining"])
+
+
+def test_empty_contract_filters_are_safe_and_constrain_nothing():
+    """UX-принцип исследования: пустой фильтр ничего не ограничивает."""
+    criteria = TenderCriteria()
+    assert criteria.okpd2_codes == []
+    assert criteria.procurement_types == []
